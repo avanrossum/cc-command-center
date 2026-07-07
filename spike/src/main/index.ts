@@ -33,7 +33,7 @@ function startPty(cols: number, rows: number): void {
     name: 'xterm-256color',
     cols: cols || 80,
     rows: rows || 24,
-    cwd: process.env.HOME,
+    cwd: process.env.CCC_CWD || process.env.HOME,
     env: buildEnv(),
   })
   console.log(`[main] spawned ${cmd} ${cols}x${rows} pid=${term.pid}`)
@@ -71,17 +71,42 @@ function createWindow(): void {
     // verify the TUI renders. Harmless when CCC_CAPTURE_DIR is unset.
     const dir = process.env.CCC_CAPTURE_DIR
     if (!dir) return
-    for (const [at, name] of [[3500, 'spike-frame1.png'], [6500, 'spike-frame2.png']] as const) {
-      setTimeout(async () => {
-        try {
-          const img = await win!.webContents.capturePage()
-          const { writeFileSync } = await import('node:fs')
-          writeFileSync(`${dir}/${name}`, img.toPNG())
-          console.log(`[main] captured ${name}`)
-        } catch (e) {
-          console.error('[main] capture failed', e)
-        }
-      }, at)
+    const cap = async (name: string) => {
+      try {
+        const img = await win!.webContents.capturePage()
+        const { writeFileSync } = await import('node:fs')
+        writeFileSync(`${dir}/${name}`, img.toPNG())
+        console.log(`[main] captured ${name}`)
+      } catch (e) {
+        console.error('[main] capture failed', e)
+      }
+    }
+    if (process.env.CCC_AUTODRIVE) {
+      // Accept the trust prompt (option 1 is preselected), start a turn, then
+      // burst-capture during the working state to check the spinner animates in
+      // place, then resize the window to check the alt-screen reflows.
+      const PASTE_START = '\x1b[200~'
+      const PASTE_END = '\x1b[201~'
+      const prompt = 'List five benefits of terminal multiplexers, one short line each.'
+      setTimeout(() => term?.write('\r'), 1500) // accept trust prompt
+      // Bracketed-paste the text, then send Enter as a separate keypress so Ink
+      // treats it as submit rather than a newline (research Fact 3).
+      setTimeout(() => term?.write(PASTE_START + prompt + PASTE_END), 3000)
+      setTimeout(() => term?.write('\r'), 3500)
+      let t = 4000
+      for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) {
+        const nm = `spike-work${n}.png`
+        setTimeout(() => cap(nm), t)
+        t += 350
+      }
+      setTimeout(() => {
+        win?.setSize(820, 560)
+        console.log('[main] resized window to 820x560')
+      }, 7600)
+      setTimeout(() => cap('spike-resize.png'), 8800)
+    } else {
+      setTimeout(() => cap('spike-frame1.png'), 3500)
+      setTimeout(() => cap('spike-frame2.png'), 6500)
     }
   })
 
