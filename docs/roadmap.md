@@ -1,0 +1,234 @@
+# Claude Command Center — Roadmap
+
+Riskiest-first. The two biggest unknowns (does the Claude TUI render cleanly through our terminal host, and does the state engine produce correct coarse status on real sessions without a daemon) are proven before any app scaffolding is built. Each phase lists a goal, concrete deliverables, and a definition of done. A detailed v0 task checklist follows the phase list.
+
+---
+
+## Phase 0 — Terminal-host spike (riskiest unknown first)
+
+**Goal.** Prove one live `claude` session renders cleanly in `@xterm/xterm` 6.0.0 (WebGL) over `node-pty`, with the resize→`SIGWINCH` contract, before building anything else. If this fails, the whole architecture assumption is wrong, and it should fail on day one, not in week six.
+
+**Deliverables.**
+- A throwaway single-window Electron 42.x app.
+- `@xterm/xterm` 6.0.0 + `@xterm/addon-webgl` 0.19.0 + `@xterm/addon-fit` 0.11.0 in the renderer.
+- `node-pty` 1.1.0 in the main process spawning a real `claude` with `TERM=xterm-256color`.
+- On every `FitAddon` fit, compute cols/rows and call `pty.resize()` (raises `SIGWINCH`).
+- `node-pty` rebuilt via `@electron/rebuild` against Electron 42.x.
+- In the same spike: spawn one `claude` with our `@modelcontextprotocol/sdk` 1.29.0 channel server + `--dangerously-load-development-channels`, and prove an inbound notification lands in-session and `cc_ack` round-trips (this directly tests bug #71792).
+
+**Definition of done.**
+- The Claude Code TUI renders with no scroll or garble: spinner animates correctly, alt-screen works, and a window resize reflows cleanly (cols/rows recomputed, `SIGWINCH` delivered).
+- `@electron/rebuild` produces a loadable `node-pty` for Electron 42.x, and the app launches without an ABI error.
+- Channels verdict recorded: either an inbound notification demonstrably lands in-session and `cc_ack` round-trips, or #71792 blocks it and v1 ships on send-keys. This decision is written down before Phase 5.
+
+---
+
+## Phase 1 — State-engine truth on live data
+
+**Goal.** Prove coarse WORKING / WAITING / IDLE / STUCK is correct on the ~19 real sessions on this machine, for both a tool-launched session (hooks fire) and an adopted session (transcript-only). This validates that adoption works without a daemon — the core bet.
+
+**Deliverables.**
+- The transcript-tail watcher: `chokidar` v4, `~/.claude/projects`, `depth:2`, 150 ms per-file debounce, read last 64 KB, per-line try/catch, backward-scan to the last real conversation record, skip `isSidechain:true`, mtime staleness clock.
+- The unix-socket hook endpoint (`~/.claude/ccc/engine.sock`) and the fail-open disk-spool shim `ccc-emit.sh` (200 ms budget, `exit 0` fast, spool to `~/.claude/ccc/events/<sid>.ndjson`, drain on start).
+- The fusion core (hooks own the WORKING rising edge with an 8000 ms hold; transcript owns the falling edge; precedence WAITING_PERMISSION > WAITING_INPUT > WORKING > IDLE) and the STUCK watchdog (1 s tick, `STUCK_MS=30000`, mtime-stale + no Stop).
+- The cache scanner with the `ps -p <pid> -o comm=` PID-reuse guard and the args-regex claude matcher.
+
+**Definition of done.**
+- Run against the live ~19 sessions: the reported coarse state matches ground truth for a spot-checked sample spanning tool-launched and adopted sessions.
+- A working-edge from a tool-launched session appears in < 100 ms; a transcript falling edge appears within ~0.5 s; a synthetically stalled session reads STUCK within `STUCK_MS` + 1 s.
+- Killing the engine and firing a hook loses no event: the spool file holds it and the engine drains it on next start.
+- No transcript-parser exception takes the board dark; a forced parse failure degrades one node to UNKNOWN (mtime-only) and the rest stay live.
+
+---
+
+## Phase 2 — Registry foundation
+
+**Goal.** Persist everything through one schema. Everything downstream depends on it.
+
+**Deliverables.**
+- `better-sqlite3` 12.x WAL database in `userData` with the PRAGMAs.
+- Tables: `session`, `edge`, `category`, `handoff_note`, `scrollback_snapshot`, `status_event`, with the indexes.
+- The node-id vs `claude_session_id` split.
+- `PRAGMA user_version` migration runner (ordered steps).
+- Single-writer rule enforced (main process only).
+- `better-sqlite3` added to the `@electron/rebuild` step.
+
+**Definition of done.**
+- Schema creates from empty, and a migration step bumps `user_version` and runs exactly once.
+- A round-trip test writes and reads back a node, a typed edge, a category, and a scrollback blob.
+- The partial unique index on `edge.child_id` rejects a second parent for a child.
+- The status-board query (`WHERE category_id = ? AND last_status = ?`) uses the index.
+
+---
+
+## Phase 3 — Adoption pipeline
+
+**Goal.** Make the ~19 appear. Highest user-visible value, and it exercises the no-daemon adoption path end to end.
+
+**Deliverables.**
+- `ps` discovery with the args regex, Electron-helper exclusion, and the `procStart`/`lstart` PID-reuse guard.
+- `sessions/<pid>.json` reconciliation into cache∩process / process-only / stale-cache buckets.
+- Transcript self-identification (`sessionId`, `cwd`, `version` from inline records) when the cache is missing.
+- Degraded-mode adopted nodes created parentless/category-less in a holding zone.
+- A periodic rescan while the app is open (catches sessions started in iTerm meanwhile).
+- Category assignment (required) and optional parent/edge assignment after the fact.
+
+**Definition of done.**
+- On launch, the ~19 live sessions appear as adopted nodes with correct `cwd`, `claude_session_id`, and coarse status.
+- A session started in iTerm while the app is open appears on the next rescan without a restart.
+- A stale `<pid>.json` for a dead PID does not create a phantom node (PID-reuse guard rejects it).
+- Each adopted node is marked `origin='adopted'`, `send_capability='external-degraded'`, and sits in the holding zone until categorized.
+
+---
+
+## Phase 4 — Resume, scrollback snapshot, and reconnect
+
+**Goal.** Prove requirement 5 and the spool-drain path: close the app and reopen to the same layout, tree, and repainted panes.
+
+**Deliverables.**
+- Scrollback capture via `@xterm/addon-serialize` (1000-line cap), captured on idle-debounce and on quit, stored in `scrollback_snapshot`.
+- Reconcile-then-relaunch: attach if the PID is still alive after a mere app-restart; otherwise `claude --resume <claude_session_id>`.
+- Layout/tree/category rebuild from the registry; xterm + PTY instantiated only for visible panes (WebGL cap).
+- Static snapshot painted into each visible pane before the resumed claude repaints its alt-screen.
+- Deleted/corrupt-transcript recovery: `stat` pre-check, keep node + snapshot, null `claude_session_id`, one-click "start fresh here."
+
+**Definition of done.**
+- Quit and relaunch: the tree, categories, layout, and per-pane scrollback snapshot are restored, and each node resumes via `claude --resume` (or attaches if the PID survived an app-only restart).
+- A node whose transcript was deleted keeps its snapshot and layout and offers "start fresh here," binding a new claude session to the same node id.
+- The spool drains on this launch and no hook events are lost across the close/open cycle.
+
+---
+
+## Phase 5 — Managed-launch and cross-session send
+
+**Goal.** Spawn under management, wire the channel path, and ship a verified send with a fallback.
+
+**Deliverables.**
+- The managed-launch path shared by spawn / resume / adopt-restart: the additive `settings.json` hook merge (backup + atomic rename + `ccc-emit.sh` idempotency tag), plus a per-session Channels server on a token-gated unix socket (`CC_CHANNEL_SOCKET`, `CC_CHANNEL_TOKEN`, `0600`).
+- The tiered `send()` dispatcher on `send_capability`: Channels primary with `cc_ack` round-trip, send-keys inject-then-verify fallback.
+- BROADCAST across many targets (queues per Channels contract; "queued" vs "delivered" surfaced).
+- COPY (read out via xterm buffer / `capture-pane`) and SHARE (handoff file + delivered reference).
+- The one-way tier gate surfaced in the UI (Tier C/B → A needs relaunch); one-click "restart under management."
+- In-tool spawn captures the typed edge exactly (`source='inferred'`, `type` by which button) and optionally pre-seeds a `handoff_note` delivered at child launch, marked `delivered` only after confirmation.
+
+**Definition of done.**
+- A tool-spawned session receives an injected prompt over Channels and `cc_ack` confirms receipt; a broadcast reaches multiple targets and each is marked queued/delivered.
+- A `pty-sendkeys` target receives an injected prompt and inject-then-verify confirms the text landed; a failed verify surfaces plainly and does not silently no-op.
+- The hook merge leaves the user's existing `dirty-tree-guard`, `usage-governor`, statusline, and `mcpServers` intact; re-install replaces only our tagged groups.
+- A `restart-under-management` on an adopted node upgrades it from `external-degraded` to `channel` with history preserved.
+
+---
+
+## Phase 6 — UI shell and navigation
+
+**Goal.** The full four-region interface with keyboard-first navigation.
+
+**Deliverables.**
+- The React 19 / Zustand shell.
+- The beacon bar: global cross-category board (counts + a live list of every waiting/stuck node anywhere), always visible, never scrolls away.
+- The category rail: hard-separated collections, one icon each, per-category waiting pip; selecting one swaps the tree + terminal below without changing the beacon bar.
+- The indented task tree with typed-edge rendering (solid amber `├─●` blocking, dotted slate `└╌○` tangential), the blocked-parent banner ("⛔ sf-sync blocked, waiting on → schema-fix"), collapse/expand with worst-descendant status roll-up, persisted collapse state.
+- Keyboard-first navigation (jump to next waiting, focus pane, palette), then drag-to-reparent (drop onto body → blocking child; drop between → tangential).
+- The WebGL visible-only render budget enforced in the UI (instantiate visible panes only).
+
+**Definition of done.**
+- A waiting session in a non-focused category is visible in the beacon bar without switching categories.
+- Categories never bleed: switching the rail swaps tree + terminal but not the beacon bar.
+- Blocking vs tangential edges are visually distinct; a blocked parent shows the banner and its status reads `blocked`, not `idle`.
+- Keyboard nav reaches every node and the "jump next waiting" affordance works; drag-to-reparent sets the correct edge type by drop position and updates the registry.
+- With 19+ nodes, only visible panes hold WebGL contexts and the app stays within the ~16-context cap.
+
+---
+
+## Phase 7 — Precision status add-ons (M2)
+
+**Goal.** Split `WAITING_PERMISSION` out of `WAITING`, and add confirm-only out-of-tool parent inference. Additive, no state-machine rewrite.
+
+**Deliverables.**
+- `WAITING_PERMISSION` split from `WAITING` via `Notification:permission_prompt` fast edges plus an on-demand PTY-scrape tie-breaker.
+- A versioned config for the M2 PTY-scrape pattern table (permission-dialog / elicitation glyphs), captured from real dialogs across the 2.1.x spread.
+- Out-of-tool ppid-chain parent inference surfaced as confirm-only suggestions (never auto-applied).
+
+**Definition of done.**
+- A session blocked on a permission dialog reads `WAITING_PERMISSION`, distinct from `WAITING_INPUT` and `IDLE`.
+- The PTY-scrape pattern table is version-gated and degrades to coarse `WAITING` when a glyph is unrecognized.
+- A child launched from within another session outside the tool produces a confirm-only parent suggestion the user can accept or dismiss.
+
+---
+
+## Phase 8 — Polish and hardening
+
+**Goal.** Make it a daily driver.
+
+**Deliverables.**
+- Login-item registration via `SMAppService`.
+- Startup ABI self-check with a clear remediation message.
+- Broadcast/handoff audit surfaces (delivered/undelivered), COPY/SHARE ergonomics.
+- Performance pass at 19+ nodes: memory, WebGL context churn, DB write cadence.
+- Error surfaces for degraded sessions, unreachable send targets, and format-drift UNKNOWN nodes.
+
+**Definition of done.**
+- The app registers as a Login Item and relaunches cleanly to the restored layout after a reboot.
+- A native-module ABI mismatch produces a readable remediation message rather than a silent crash.
+- At 19+ nodes the app stays responsive and within the WebGL context cap, and no send silently no-ops.
+
+---
+
+## v0 task breakdown (Phase 0 + first usable milestone)
+
+v0 = Phase 0 spike proven, then the smallest usable app: adopted sessions visible with correct coarse status, resumable on restart. This spans Phase 0 through Phase 4 with a minimal read-only UI.
+
+### Phase 0 — terminal-host + Channels spike
+
+- [ ] Scaffold a throwaway Electron 42.x app (main + renderer, TypeScript).
+- [ ] Add `@xterm/xterm` 6.0.0, `@xterm/addon-webgl` 0.19.0, `@xterm/addon-fit` 0.11.0 in the renderer; activate the WebGL renderer.
+- [ ] Add `node-pty` 1.1.0 in the main process; wire `@electron/rebuild` and rebuild against Electron 42.x.
+- [ ] Stream PTY bytes main→renderer and keystrokes renderer→main over IPC.
+- [ ] Spawn a real `claude` with `TERM=xterm-256color`.
+- [ ] On every `FitAddon` fit, compute cols/rows and call `pty.resize()`; confirm `SIGWINCH` reaches the child.
+- [ ] Verify the TUI renders with no scroll/garble: spinner, alt-screen, resize reflow.
+- [ ] Build `cc-channel.mjs` with `@modelcontextprotocol/sdk` 1.29.0, `capabilities.experimental['claude/channel']` and a `cc_ack` tool.
+- [ ] Spawn one `claude` with the channel server + `--dangerously-load-development-channels`; POST a notification and confirm it lands in-session and `cc_ack` round-trips.
+- [ ] Record the Channels verdict (works / blocked by #71792 → v1 on send-keys).
+
+### Phase 1 — state engine on live data
+
+- [ ] Implement the transcript-tail watcher (chokidar v4, depth:2, 150 ms debounce, last 64 KB, per-line try/catch, backward-scan to last real record, skip `isSidechain`).
+- [ ] Implement the derived-state parse (`stop_reason` → working/waiting/done; `AskUserQuestion` tool_use → waiting).
+- [ ] Stand up the unix-socket hook endpoint at `~/.claude/ccc/engine.sock`.
+- [ ] Write `ccc-emit.sh` (fail-open, 200 ms budget, `exit 0` fast, spool to `~/.claude/ccc/events/<sid>.ndjson`); drain + truncate spool on start.
+- [ ] Implement the fusion core (WORKING rising edge from hooks, 8000 ms hold; transcript falling edge; precedence order).
+- [ ] Implement the STUCK watchdog (1 s tick, `STUCK_MS=30000`, mtime-stale + no Stop).
+- [ ] Implement the cache scanner (2 s poll) with the `ps -p <pid> -o comm=` PID-reuse guard and the args-regex matcher.
+- [ ] Validate coarse states against the live ~19 (tool-launched + adopted spot-check).
+
+### Phase 2 — registry
+
+- [ ] Create the WAL DB in `userData` with PRAGMAs.
+- [ ] Create `session`, `edge`, `category`, `handoff_note`, `scrollback_snapshot`, `status_event` + indexes.
+- [ ] Implement the `PRAGMA user_version` migration runner.
+- [ ] Enforce the single-writer rule and the partial unique index on `edge.child_id`.
+- [ ] Add `better-sqlite3` to the `@electron/rebuild` step.
+- [ ] Round-trip test: node, typed edge, category, scrollback blob.
+
+### Phase 3 — adoption
+
+- [ ] Implement `ps` discovery with the args regex, Electron-helper exclusion, and `procStart`/`lstart` guard.
+- [ ] Reconcile against `sessions/<pid>.json` into the three buckets.
+- [ ] Resolve identity from the self-identifying transcript when the cache is missing.
+- [ ] Create adopted nodes parentless/category-less in the holding zone (`origin='adopted'`, `send_capability='external-degraded'`).
+- [ ] Add the periodic rescan while open.
+- [ ] Wire category assignment (required) and optional parent/edge assignment.
+- [ ] Verify the ~19 appear on launch; verify an iTerm-started session appears on rescan; verify a stale-PID phantom is rejected.
+
+### Phase 4 — resume + minimal UI
+
+- [ ] Capture scrollback via `@xterm/addon-serialize` (1000-line cap) on idle-debounce and on quit into `scrollback_snapshot`.
+- [ ] Implement reconcile-then-relaunch (attach if PID alive after app-only restart; else `claude --resume`).
+- [ ] Rebuild layout/tree/category from the registry; instantiate xterm + PTY for visible panes only.
+- [ ] Paint the static snapshot before the resumed claude repaints its alt-screen.
+- [ ] Implement deleted/corrupt-transcript recovery (`stat` pre-check, keep node + snapshot, null `claude_session_id`, "start fresh here").
+- [ ] Build the minimal read-only UI: category rail + indented tree + coarse status badges + one focused terminal pane.
+- [ ] Verify quit/relaunch restores tree, categories, layout, snapshots, and resumes each node; verify the spool drains with no lost events.
+
+**v0 definition of done.** The app launches, adopts the ~19 live sessions with correct coarse status (no daemon), shows them in a category rail + indented tree with a focused terminal pane, and on quit/relaunch restores the layout and resumes each node via `claude --resume` (or attaches a surviving PID), losing no hook events across the cycle. The Phase 0 Channels verdict is recorded and the send transport for v1 is chosen accordingly.
