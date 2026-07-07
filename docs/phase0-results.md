@@ -32,6 +32,8 @@ The symptom (server connects and its tools register, but channel messages don't 
 1. **Bug #71792** — dev-flag channel notifications silently dropped.
 2. **Org policy** — `channelsEnabled` disabled. The account's banner shows a Team/Enterprise Organization. When the policy is off, the MCP server still connects and its tools work, but channel messages don't arrive. An Owner enables it at claude.ai → Admin settings → Claude Code → Channels.
 
+The user later confirmed they are not really an enterprise org, so cause 2 is unlikely — bug #71792 is the probable cause. The org re-test was not pursued.
+
 **Verdict:** v1 cross-session send (inject / broadcast) ships on the **send-keys fallback** (bracketed-paste + separate Enter, verified above). Revisit Channels once the cause is resolved — the bug is fixed, or, if the account owns the org, channels are enabled for it.
 
 A clean re-test requires launching `claude` with `--dangerously-load-development-channels`. The agent's auto-mode blocks that flag for review, so re-testing needs a manually approved run.
