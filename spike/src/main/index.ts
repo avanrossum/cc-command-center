@@ -29,7 +29,10 @@ function resolveClaude(): string {
 function startPty(cols: number, rows: number): void {
   if (term) return
   const cmd = resolveClaude()
-  term = pty.spawn(cmd, [], {
+  const args = process.env.CCC_CHANNEL_TEST
+    ? ['--dangerously-load-development-channels', 'server:ccc', '--allowedTools', 'mcp__ccc__cc_ack']
+    : []
+  term = pty.spawn(cmd, args, {
     name: 'xterm-256color',
     cols: cols || 80,
     rows: rows || 24,
@@ -81,7 +84,15 @@ function createWindow(): void {
         console.error('[main] capture failed', e)
       }
     }
-    if (process.env.CCC_AUTODRIVE) {
+    if (process.env.CCC_CHANNEL_TEST) {
+      // Clear the startup prompts (trust folder, MCP-server consent, dev-channel
+      // confirmation) by pressing Enter a few times, then signal readiness so the
+      // external harness can POST to the channel. Capture early + late.
+      for (const at of [1500, 2800, 4100, 5400]) setTimeout(() => term?.write('\r'), at)
+      setTimeout(() => console.log('[main] CHANNEL_TEST_READY'), 6000)
+      setTimeout(() => cap('spike-channel-early.png'), 7500)
+      setTimeout(() => cap('spike-channel-late.png'), 16000)
+    } else if (process.env.CCC_AUTODRIVE) {
       // Accept the trust prompt (option 1 is preselected), start a turn, then
       // burst-capture during the working state to check the spinner animates in
       // place, then resize the window to check the alt-screen reflows.
