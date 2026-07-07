@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { TerminalView } from './Terminal'
 
 type CoarseState = 'working' | 'waiting' | 'idle' | 'unknown'
 
@@ -21,6 +22,14 @@ interface Snapshot {
   sessions: Session[]
 }
 
+interface Selected {
+  pid: number
+  sessionId?: string
+  cwd: string
+  name: string
+  resume: boolean
+}
+
 const STATE: Record<CoarseState, { label: string; color: string; order: number }> = {
   working: { label: 'Working', color: '#34d399', order: 0 },
   waiting: { label: 'Waiting on you', color: '#60a5fa', order: 1 },
@@ -41,10 +50,18 @@ function fmtAge(ms: number | undefined, now: number): string {
 
 export function App() {
   const [snap, setSnap] = useState<Snapshot>({ home: '', scannedAt: 0, sessions: [] })
+  const [selected, setSelected] = useState<Selected | null>(null)
 
   useEffect(() => {
     window.cc.getSessions().then((s) => setSnap(s as Snapshot))
-    return window.cc.onSessions((s) => setSnap(s as Snapshot))
+    const offSessions = window.cc.onSessions((s) => setSnap(s as Snapshot))
+    const offShow = window.cc.onTermShow((p) =>
+      setSelected({ pid: p.pid, cwd: p.cwd, name: p.name, resume: false }),
+    )
+    return () => {
+      offSessions()
+      offShow()
+    }
   }, [])
 
   const live = useMemo(() => snap.sessions.filter((s) => !s.isSpare), [snap])
@@ -76,6 +93,20 @@ export function App() {
       .sort((a, b) => Number(b.active) - Number(a.active) || a.short.localeCompare(b.short))
   }, [live, snap.home])
 
+  const openSession = (s: Session) =>
+    setSelected({
+      pid: s.pid,
+      sessionId: s.sessionId,
+      cwd: s.cwd,
+      name: s.name ?? `pid ${s.pid}`,
+      resume: true,
+    })
+
+  const closeTerminal = () => {
+    if (selected) window.cc.termClose(selected.pid)
+    setSelected(null)
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -91,36 +122,71 @@ export function App() {
         </div>
       </header>
 
-      <main className="board">
-        {groups.length === 0 && <div className="empty">No live Claude Code sessions found.</div>}
-        {groups.map((g) => (
-          <section key={g.cwd} className={`group${g.active ? ' active' : ''}`}>
-            <div className="grouphead">
-              <span className="path" title={g.cwd}>
-                {g.short}
-              </span>
-              <span className="gcount">{g.sessions.length}</span>
+      <div className="body">
+        <aside className="sidebar">
+          {groups.length === 0 && <div className="empty">No live sessions.</div>}
+          {groups.map((g) => (
+            <section key={g.cwd} className={`group${g.active ? ' active' : ''}`}>
+              <div className="grouphead">
+                <span className="path" title={g.cwd}>
+                  {g.short}
+                </span>
+                <span className="gcount">{g.sessions.length}</span>
+              </div>
+              <ul className="rows">
+                {g.sessions.map((s) => (
+                  <li
+                    key={s.pid}
+                    className={`row state-${s.state}${selected?.pid === s.pid ? ' sel' : ''}`}
+                    title={s.stateReason}
+                    onClick={() => openSession(s)}
+                  >
+                    <span className="dot" style={{ background: STATE[s.state].color }} />
+                    <span className="name">{s.name ?? <em>pid {s.pid}</em>}</span>
+                    <span className="grow" />
+                    <span className="meta">{fmtAge(s.transcriptMtimeMs, snap.scannedAt)}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </aside>
+
+        <main className="terminalarea">
+          {selected ? (
+            <>
+              <div className="termbar">
+                <span className="tname">{selected.name}</span>
+                <span className="tcwd" title={selected.cwd}>
+                  {snap.home ? selected.cwd.replace(snap.home, '~') : selected.cwd}
+                </span>
+                {selected.resume && (
+                  <span className="tnote">resumed copy — original keeps running</span>
+                )}
+                <span className="grow" />
+                <button className="tclose" onClick={closeTerminal} title="Close terminal">
+                  ✕
+                </button>
+              </div>
+              <TerminalView
+                key={selected.pid}
+                pid={selected.pid}
+                sessionId={selected.sessionId}
+                cwd={selected.cwd}
+                resume={selected.resume}
+              />
+            </>
+          ) : (
+            <div className="placeholder">
+              <p>Select a session to open its terminal.</p>
+              <p className="sub">
+                Opening a session running in iTerm resumes a managed copy here — the original keeps
+                running until you close it.
+              </p>
             </div>
-            <ul className="rows">
-              {g.sessions.map((s) => (
-                <li key={s.pid} className={`row state-${s.state}`} title={s.stateReason}>
-                  <span className="dot" style={{ background: STATE[s.state].color }} />
-                  <span className="name">
-                    {s.name ?? <em>pid {s.pid}</em>}
-                    {s.version && <span className="ver">{s.version}</span>}
-                  </span>
-                  <span className="grow" />
-                  <span className="statelabel" style={{ color: STATE[s.state].color }}>
-                    {STATE[s.state].label}
-                  </span>
-                  <span className="meta">{fmtAge(s.transcriptMtimeMs, snap.scannedAt)}</span>
-                  <span className="meta pid">#{s.pid}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))}
-      </main>
+          )}
+        </main>
+      </div>
     </div>
   )
 }
