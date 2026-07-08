@@ -56,6 +56,7 @@ interface Snapshot {
   categories: Category[]
   edges: Edge[]
   messages: MsgLogEntry[]
+  awarenessPaused: boolean
 }
 
 // Sessions the user explicitly removed. A ghost that is still "alive" but has no
@@ -180,6 +181,7 @@ function snapshot(): Snapshot {
     categories: listCategories(),
     edges,
     messages: messageLog.slice(-40),
+    awarenessPaused,
   }
 }
 
@@ -379,11 +381,14 @@ const MAIL_DIR = join(os.homedir(), '.claude', 'ccc', 'mail')
 const HOP_MAX = 6
 const RATE_WINDOW_MS = 60_000
 const RATE_MAX = 6
+const HELD_TTL_MS = 30 * 60_000 // a message that never becomes routable expires
 let outboxCounter = 0
+let awarenessPaused = false // global kill switch — hold all routing + delivery
 const outboxOwner = new Map<string, number>() // outbox token -> child pid
 
 interface Delivery {
   to: string
+  childSessionId: string // stable id — used to re-check trust + key the rate guard
   fromName: string
   text: string
   hops: number
@@ -399,6 +404,10 @@ export interface MsgLogEntry {
 const deliveryQueue: Delivery[] = []
 const messageLog: MsgLogEntry[] = []
 const linkRate = new Map<string, number[]>()
+// Messages drained from a child outbox but not yet routable (link unblessed, or
+// child not yet adopted). Buffered here — NOT dropped on read — so they survive
+// until the link is trusted / the child is adopted, then flush. Keyed by token.
+const heldMessages = new Map<string, { text: string; at: number; logged: boolean }>()
 
 function awarenessPreamble(outbox: string): string {
   return (
@@ -413,8 +422,14 @@ function logMsg(from: string, to: string, text: string, status: string): void {
   if (messageLog.length > 60) messageLog.shift()
 }
 
-// Read child outboxes, route each message to its parent by the edge graph.
-function processMailbox(sessions: LiveSession[]): void {
+export function setAwarenessPaused(paused: boolean): void {
+  awarenessPaused = paused
+}
+
+// Drain each child outbox into the held buffer. Reading empties the file (a child
+// writes fresh each time), but the content is preserved in memory — never lost on
+// read, so an un-blessed link's message waits for the bless instead of vanishing.
+function drainOutboxes(): void {
   let files: string[] = []
   try {
     files = readdirSync(MAIL_DIR).filter((f) => f.endsWith('.msg'))
@@ -431,52 +446,100 @@ function processMailbox(sessions: LiveSession[]): void {
     }
     if (!content) continue
     try {
-      writeFileSync(fp, '') // consume
+      writeFileSync(fp, '')
     } catch {
       /* ignore */
     }
-    const childPid = outboxOwner.get(f.replace(/\.msg$/, ''))
-    const child = childPid ? sessions.find((s) => s.pid === childPid && s.sessionId) : undefined
-    if (!child) {
-      logMsg(`pid ${childPid ?? '?'}`, '?', content, 'dropped: unknown sender')
-      continue
-    }
-    const edge = getEdges().find((e) => e.child_id === child.sessionId)
-    if (!edge) {
-      logMsg(child.name ?? child.sessionId, '?', content, 'held: no parent link')
-      continue
-    }
-    if (!edge.trusted) {
-      logMsg(child.name ?? child.sessionId, 'parent', content, 'held: link not trusted')
-      continue
-    }
-    deliveryQueue.push({
-      to: edge.parent_id,
-      fromName: child.name ?? `pid ${child.pid}`,
-      text: content,
-      hops: 1,
+    const token = f.replace(/\.msg$/, '')
+    const prev = heldMessages.get(token)
+    heldMessages.set(token, {
+      text: ((prev ? `${prev.text}\n` : '') + content).slice(-4000),
       at: Date.now(),
+      logged: false,
     })
   }
 }
 
-// Deliver queued messages to targets that are free (idle/waiting), rate-limited.
-function tryDeliveries(sessions: LiveSession[]): void {
-  if (deliveryQueue.length === 0) return
+// Route held messages whose link is now known + trusted onto the delivery queue;
+// leave the rest held (retried next scan, flushed the moment the link is blessed).
+function routeHeld(sessions: LiveSession[]): void {
   const now = Date.now()
-  for (let i = deliveryQueue.length - 1; i >= 0; i--) {
+  for (const [token, held] of heldMessages) {
+    if (now - held.at > HELD_TTL_MS) {
+      heldMessages.delete(token)
+      logMsg('?', '?', held.text, 'expired: never routable')
+      continue
+    }
+    const childPid = outboxOwner.get(token)
+    const child = childPid ? sessions.find((s) => s.pid === childPid && s.sessionId) : undefined
+    if (!child) continue // sender not adopted yet — keep held
+    const edge = getEdges().find((e) => e.child_id === child.sessionId)
+    if (!edge || !edge.trusted) {
+      if (!held.logged) {
+        logMsg(
+          child.name ?? child.sessionId,
+          edge ? 'parent' : '?',
+          held.text,
+          edge ? 'held: link not trusted' : 'held: no parent link',
+        )
+        held.logged = true
+      }
+      continue // keep held until blessed
+    }
+    deliveryQueue.push({
+      to: edge.parent_id,
+      childSessionId: child.sessionId,
+      fromName: child.name ?? `pid ${child.pid}`,
+      text: held.text,
+      hops: 1,
+      at: now,
+    })
+    heldMessages.delete(token)
+  }
+}
+
+function processMailbox(sessions: LiveSession[]): void {
+  drainOutboxes()
+  if (!awarenessPaused) routeHeld(sessions)
+}
+
+// Deliver queued messages to free targets. One message per target per pass so
+// distinct messages land as distinct turns (not merged by deferred paste-CRs);
+// trust re-checked at delivery so an untrust stops in-flight; rate guard keyed on
+// the stable session id; delivered only when the target is affirmatively free.
+function tryDeliveries(sessions: LiveSession[]): void {
+  if (awarenessPaused || deliveryQueue.length === 0) return
+  const now = Date.now()
+  const deliveredTo = new Set<string>()
+  let i = 0
+  while (i < deliveryQueue.length) {
     const d = deliveryQueue[i]
+    if (deliveredTo.has(d.to)) {
+      i++ // already delivered to this target this pass — next one waits a scan
+      continue
+    }
     const target = sessions.find((s) => s.sessionId === d.to)
     const term = findManagedTerm(d.to)
     if (!target || !term) {
       if (now - d.at > 120_000) {
         deliveryQueue.splice(i, 1)
         logMsg(d.fromName, d.to, d.text, 'expired: target not open')
-      }
+      } else i++
       continue
     }
-    if (target.state === 'working') continue // hold for a good moment
-    const key = `${d.fromName}->${d.to}`
+    // re-check trust at delivery: an untrust (or re-parent) drops in-flight
+    const edge = getEdges().find((e) => e.child_id === d.childSessionId)
+    if (!edge || edge.parent_id !== d.to || !edge.trusted) {
+      deliveryQueue.splice(i, 1)
+      logMsg(d.fromName, target.name ?? d.to, d.text, 'dropped: link no longer trusted')
+      continue
+    }
+    // only deliver when the target is affirmatively free (fail-safe on unknown)
+    if (target.state !== 'idle' && target.state !== 'waiting') {
+      i++
+      continue
+    }
+    const key = `${d.childSessionId}->${d.to}`
     const stamps = (linkRate.get(key) ?? []).filter((t) => now - t < RATE_WINDOW_MS)
     if (d.hops > HOP_MAX || stamps.length >= RATE_MAX) {
       deliveryQueue.splice(i, 1)
@@ -486,6 +549,7 @@ function tryDeliveries(sessions: LiveSession[]): void {
     injectPrompt(term, `[message from ${d.fromName}]\n${d.text}`)
     stamps.push(now)
     linkRate.set(key, stamps)
+    deliveredTo.add(d.to)
     deliveryQueue.splice(i, 1)
     logMsg(d.fromName, target.name ?? d.to, d.text, 'delivered')
   }
@@ -771,6 +835,14 @@ ipcMain.handle('edge:trust', (_e, childId: string, trusted: boolean) => {
   setEdgeTrust(childId, trusted)
   pushSessions()
   return true
+})
+// Global kill switch for autonomous messaging. When paused, outboxes are still
+// drained into the held buffer (nothing is lost) but nothing is routed or
+// delivered until the operator resumes.
+ipcMain.handle('awareness:pause', (_e, paused: boolean) => {
+  setAwarenessPaused(!!paused)
+  pushSessions()
+  return awarenessPaused
 })
 ipcMain.handle('theme:set', (_e, sessionId: string, theme: string | null) => {
   if (!sessionId) return false

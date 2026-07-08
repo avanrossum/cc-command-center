@@ -200,7 +200,8 @@ export function setParent(
   }
   d.prepare(
     `INSERT INTO edge (child_id, parent_id, type, source, created_at) VALUES (?,?,?, 'manual', ?)
-     ON CONFLICT(child_id) DO UPDATE SET parent_id=excluded.parent_id, type=excluded.type`,
+     ON CONFLICT(child_id) DO UPDATE SET parent_id=excluded.parent_id, type=excluded.type,
+       trusted=CASE WHEN parent_id=excluded.parent_id THEN trusted ELSE 0 END`,
   ).run(childId, parentId, type, Date.now())
   return true
 }

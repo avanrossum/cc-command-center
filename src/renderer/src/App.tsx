@@ -51,6 +51,7 @@ interface Snapshot {
   categories: Category[]
   edges: Edge[]
   messages?: MsgLogEntry[]
+  awarenessPaused?: boolean
 }
 interface Selected {
   key: string
@@ -441,9 +442,17 @@ export function App() {
             </div>
           )}
         </div>
-        {snap.messages && snap.messages.length > 0 && (
-          <button className="msgbtn" onClick={() => setLogOpen(true)} title="Cross-session message log">
-            ✉ {snap.messages.length}
+        {((snap.messages && snap.messages.length > 0) || snap.awarenessPaused) && (
+          <button
+            className={`msgbtn${snap.awarenessPaused ? ' paused' : ''}`}
+            onClick={() => setLogOpen(true)}
+            title={
+              snap.awarenessPaused
+                ? 'Autonomous messaging PAUSED — open message log'
+                : 'Cross-session message log'
+            }
+          >
+            {snap.awarenessPaused ? '⏸' : '✉'} {snap.messages?.length ?? 0}
           </button>
         )}
         <div className="cmdk" title="Command palette — coming soon">
@@ -674,7 +683,13 @@ export function App() {
         />
       )}
       {catEdit && <CategoryEditor edit={catEdit} setEdit={setCatEdit} />}
-      {logOpen && <MessageLog messages={snap.messages ?? []} close={() => setLogOpen(false)} />}
+      {logOpen && (
+        <MessageLog
+          messages={snap.messages ?? []}
+          paused={!!snap.awarenessPaused}
+          close={() => setLogOpen(false)}
+        />
+      )}
       {flash && <div className="flash">{flash}</div>}
     </div>
   )
@@ -1004,16 +1019,44 @@ function NewSessionComposer({
   )
 }
 
-function MessageLog({ messages, close }: { messages: MsgLogEntry[]; close: () => void }) {
+function MessageLog({
+  messages,
+  paused,
+  close,
+}: {
+  messages: MsgLogEntry[]
+  paused: boolean
+  close: () => void
+}) {
   const cls = (status: string) =>
     status.startsWith('delivered') ? 'ok' : status.startsWith('held') ? 'held' : 'drop'
   return (
     <div className="spawnscrim" onClick={close}>
       <div className="spawnmodal msglog" onClick={(e) => e.stopPropagation()}>
-        <div className="spawntitle">Cross-session messages</div>
-        <div className="spawnsub">
-          every message the awareness bus routed — delivered, held (untrusted link), or dropped.
+        <div className="msgloghead">
+          <div>
+            <div className="spawntitle">Cross-session messages</div>
+            <div className="spawnsub">
+              every message the awareness bus routed — delivered, held (untrusted link), or dropped.
+            </div>
+          </div>
+          <button
+            className={`killswitch${paused ? ' on' : ''}`}
+            onClick={() => window.cc.awarenessPause(!paused)}
+            title={
+              paused
+                ? 'Autonomous messaging is paused — click to resume'
+                : 'Pause all autonomous messaging (messages are buffered, not lost)'
+            }
+          >
+            {paused ? '▶ Resume messaging' : '⏸ Pause messaging'}
+          </button>
         </div>
+        {paused && (
+          <div className="pausednote">
+            Paused — new messages are buffered and held; nothing is delivered until you resume.
+          </div>
+        )}
         <div className="msglist">
           {messages.length === 0 && <div className="emptycat">no messages yet</div>}
           {[...messages].reverse().map((m, i) => (

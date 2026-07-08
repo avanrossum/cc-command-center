@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('cc', {
   edgeClear: (childId: string) => ipcRenderer.invoke('edge:clear', childId),
   edgeTrust: (childId: string, trusted: boolean) =>
     ipcRenderer.invoke('edge:trust', childId, trusted),
+  awarenessPause: (paused: boolean) => ipcRenderer.invoke('awareness:pause', paused),
 
   // per-terminal theme
   themeSet: (sessionId: string, theme: string | null) =>

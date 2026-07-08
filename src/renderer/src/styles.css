@@ -328,10 +328,48 @@ body {
   color: var(--cc-text);
   border-color: var(--cc-dim2);
 }
+.msgbtn.paused {
+  color: #f0c05a;
+  border-color: #f0c05a;
+}
 
 /* ---- message log ---- */
 .msglog {
   width: 520px;
+}
+.msgloghead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.killswitch {
+  flex: none;
+  font: 11px var(--cc-font-mono);
+  color: var(--cc-dim);
+  background: transparent;
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-r-sm);
+  padding: 5px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.killswitch:hover {
+  color: var(--cc-text);
+  border-color: var(--cc-dim2);
+}
+.killswitch.on {
+  color: #f0c05a;
+  border-color: #f0c05a;
+}
+.pausednote {
+  margin-top: 8px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: #f0c05a;
+  background: rgba(240, 192, 90, 0.08);
+  border: 1px solid rgba(240, 192, 90, 0.3);
+  border-radius: var(--cc-r-sm);
 }
 .msglist {
   max-height: 320px;
