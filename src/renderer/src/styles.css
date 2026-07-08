@@ -152,33 +152,35 @@ body {
   height: 100%;
 }
 
-/* ---- top bar ---- */
-.topbar {
+/* ---- beacon bar (global status board — always visible, never scrolls) ---- */
+.beacon {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 18px;
-  padding-top: 28px;
-  border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, var(--cc-surface), var(--cc-bg));
+  align-items: stretch;
+  height: var(--cc-beacon-h);
+  padding-left: 82px; /* clears the macOS traffic lights */
+  border-bottom: 1px solid var(--cc-border);
+  background: var(--cc-surface);
   -webkit-app-region: drag;
   flex: none;
 }
-.brand {
+.beacon-brand {
   display: flex;
   align-items: center;
   gap: 9px;
+  padding: 0 16px;
+  border-right: 1px solid var(--cc-hairline);
 }
-.title {
-  font-weight: 600;
-  letter-spacing: 0.2px;
+.wordmark {
+  font: 600 13px var(--cc-font-mono);
+  letter-spacing: 0.3px;
+  color: var(--cc-text);
 }
 .ver {
-  font-family: ui-monospace, monospace;
+  font-family: var(--cc-font-mono);
   font-size: 10px;
-  color: var(--dim2);
+  color: var(--cc-meta);
   background: var(--cc-surface-2);
-  border: 1px solid var(--border);
+  border: 1px solid var(--cc-border);
   border-radius: 20px;
   padding: 1px 8px;
   -webkit-app-region: no-drag;
@@ -188,48 +190,128 @@ body {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #34d399;
+  background: var(--cc-working);
   animation: pulse 2s infinite;
+  flex: none;
 }
 @keyframes pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5);
-  }
-  70% {
-    box-shadow: 0 0 0 7px rgba(52, 211, 153, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0);
-  }
+  0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5); }
+  70% { box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
 }
-.summary {
+.tally {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 18px;
+  padding: 0 18px;
+  border-right: 1px solid var(--cc-hairline);
   -webkit-app-region: no-drag;
 }
-.spill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--dim2);
+.tally-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.tally-n {
+  font: 700 17px var(--cc-font-mono);
+  line-height: 1;
   font-variant-numeric: tabular-nums;
 }
-.spill.on {
-  color: var(--text);
+.tally-l {
+  margin-top: 2px;
+  font: 8.5px var(--cc-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--cc-meta);
 }
-.pdot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  opacity: 0.45;
+.tally-item.zero .tally-n {
+  color: var(--cc-faint) !important;
 }
-.spill.on .pdot {
-  opacity: 1;
+.tally-item.zero .tally-l {
+  color: var(--cc-faint);
 }
-.total {
-  color: var(--dim);
-  margin-left: 4px;
+.beacon-grow {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  -webkit-app-region: no-drag;
+}
+.allclear {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--cc-dim);
+  font-size: 12px;
+}
+.needsyou {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+.needs-label {
+  flex: none;
+  font: 8.5px var(--cc-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--cc-meta);
+}
+.needs-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  max-width: 220px;
+  background: transparent;
+  border: 0;
+  border-left: 2px solid var(--cc-waiting);
+  border-radius: 0 var(--cc-r-sm) var(--cc-r-sm) 0;
+  padding: 5px 9px;
+  cursor: pointer;
+  color: var(--cc-text);
+  font-size: 11px;
+}
+.needs-item.ns-waiting {
+  border-left-color: var(--cc-waiting);
+  background: rgba(96, 165, 250, 0.07);
+}
+.needs-item.ns-blocked {
+  border-left-color: var(--cc-blocked);
+  background: rgba(224, 112, 200, 0.07);
+}
+.needs-item:hover {
+  filter: brightness(1.25);
+}
+.ns-idx {
+  font: 10px var(--cc-font-mono);
+  color: var(--cc-faint);
+}
+.ns-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ns-age {
+  font: 10px var(--cc-font-mono);
+  color: var(--cc-meta);
+}
+.needs-more {
+  flex: none;
+  font-size: 11px;
+  color: var(--cc-dim);
+}
+.cmdk {
+  align-self: center;
+  margin-left: auto;
+  font: 11px var(--cc-font-mono);
+  color: var(--cc-meta);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-r-sm);
+  padding: 4px 8px;
+  -webkit-app-region: no-drag;
 }
 
 /* ---- body: sidebar + terminal ---- */

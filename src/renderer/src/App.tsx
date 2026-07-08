@@ -175,6 +175,14 @@ export function App() {
   }, [live, blockedSet])
   const liveCount = useMemo(() => live.filter((s) => !s.dormant).length, [live])
   const dormantCount = useMemo(() => live.filter((s) => s.dormant).length, [live])
+  // The "NEEDS YOU" ledger: every waiting or blocked session, most-urgent first.
+  const needsYou = useMemo(
+    () =>
+      live
+        .filter((s) => !s.dormant && (blockedSet.has(s.sessionId) || s.state === 'waiting'))
+        .sort((a, b) => STATE[dstate(a)].order - STATE[dstate(b)].order),
+    [live, blockedSet], // eslint-disable-line react-hooks/exhaustive-deps
+  )
   const short = (cwd: string) => (snap.home ? cwd.replace(snap.home, '~') : cwd)
 
   const edgeByChild = useMemo(() => {
@@ -312,21 +320,55 @@ export function App() {
 
   return (
     <div className="app">
-      <header className="topbar">
-        <div className="brand">
+      <header className="beacon">
+        <div className="beacon-brand">
           <span className="pulse" />
-          <span className="title">CC Command Center</span>
+          <span className="wordmark">command-center</span>
           {version && <span className="ver" title="version · build">{version}</span>}
         </div>
-        <div className="summary">
-          <Pill n={counts.working} label="working" color={STATE.working.color} />
-          <Pill n={counts.waiting} label="your turn" color={STATE.waiting.color} />
-          {counts.blocked > 0 && (
-            <Pill n={counts.blocked} label="blocked" color={STATE.blocked.color} />
+        <div className="tally">
+          <TallyItem n={counts.working} label="working" color={STATE.working.color} />
+          <TallyItem n={counts.waiting} label="your turn" color={STATE.waiting.color} />
+          <TallyItem n={counts.blocked} label="blocked" color={STATE.blocked.color} />
+          <TallyItem n={counts.idle} label="idle" color={STATE.idle.color} />
+          <TallyItem n={liveCount} label="total" color="var(--cc-dim)" />
+        </div>
+        <div className="beacon-grow">
+          {needsYou.length === 0 ? (
+            <div className="allclear">
+              <span className="pulse" /> all clear — nothing needs you
+            </div>
+          ) : (
+            <div className="needsyou">
+              <span className="needs-label">needs you</span>
+              {needsYou.slice(0, 3).map((s, i) => {
+                const cat = snap.categories.find((c) => c.id === s.categoryId)
+                return (
+                  <button
+                    key={s.sessionId}
+                    className={`needs-item ns-${dstate(s)}`}
+                    onClick={() => openSession(s)}
+                    title={s.stateReason}
+                  >
+                    <span className="ns-idx">{String(i + 1).padStart(2, '0')}</span>
+                    <span className={`cc-dot cc-dot--${dstate(s)}`} />
+                    <span className="ns-name">{s.name ?? `pid ${s.pid}`}</span>
+                    <span
+                      className="cdot"
+                      style={{ background: cat?.color ?? 'var(--cc-cat-none)' }}
+                    />
+                    <span className="ns-age">{fmtAge(s.transcriptMtimeMs, snap.scannedAt)}</span>
+                  </button>
+                )
+              })}
+              {needsYou.length > 3 && (
+                <span className="needs-more">+{needsYou.length - 3} more</span>
+              )}
+            </div>
           )}
-          <Pill n={counts.idle} label="idle" color={STATE.idle.color} />
-          <span className="total">{liveCount} sessions</span>
-          {dormantCount > 0 && <span className="total dorm">· {dormantCount} dormant</span>}
+        </div>
+        <div className="cmdk" title="Command palette — coming soon">
+          ⌘K
         </div>
       </header>
 
@@ -706,12 +748,14 @@ function SpawnComposer({
   )
 }
 
-function Pill({ n, label, color }: { n: number; label: string; color: string }) {
+function TallyItem({ n, label, color }: { n: number; label: string; color: string }) {
   return (
-    <span className={`spill${n > 0 ? ' on' : ''}`}>
-      <span className="pdot" style={{ background: color }} />
-      {n} {label}
-    </span>
+    <div className={`tally-item${n > 0 ? '' : ' zero'}`}>
+      <span className="tally-n" style={{ color }}>
+        {n}
+      </span>
+      <span className="tally-l">{label}</span>
+    </div>
   )
 }
 
