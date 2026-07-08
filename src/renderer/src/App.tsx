@@ -514,6 +514,7 @@ function ContextMenu({
 }) {
   const s = menu.session
   const hasParent = edgeByChild.has(s.sessionId)
+  const isBlockingChild = edgeByChild.get(s.sessionId)?.type === 'blocking'
   const candidates = live.filter((x) => x.categoryId === s.categoryId && x.sessionId !== s.sessionId)
   return (
     <>
@@ -528,19 +529,25 @@ function ContextMenu({
       <div className="menu" style={{ left: menu.x, top: menu.y }}>
         {menu.mode === 'root' ? (
           <>
-            <div className="menuhead">Move “{s.name ?? `pid ${s.pid}`}” to</div>
-            {snap.categories.map((c) => (
-              <button key={c.id} className="menuitem" onClick={() => assign(s, c.id)}>
-                <span className="cdot" style={{ background: c.color }} />
-                <span className="grow">{c.name}</span>
-                {s.categoryId === c.id && <span className="check">✓</span>}
-              </button>
-            ))}
-            <button className="menuitem" onClick={() => assign(s, null)}>
-              <span className="cdot" style={{ background: '#5b6474' }} />
-              <span className="grow">Uncategorized</span>
-              {s.categoryId == null && <span className="check">✓</span>}
-            </button>
+            {isBlockingChild ? (
+              <div className="menuhint">Category follows its parent (blocking child)</div>
+            ) : (
+              <>
+                <div className="menuhead">Move “{s.name ?? `pid ${s.pid}`}” to</div>
+                {snap.categories.map((c) => (
+                  <button key={c.id} className="menuitem" onClick={() => assign(s, c.id)}>
+                    <span className="cdot" style={{ background: c.color }} />
+                    <span className="grow">{c.name}</span>
+                    {s.categoryId === c.id && <span className="check">✓</span>}
+                  </button>
+                ))}
+                <button className="menuitem" onClick={() => assign(s, null)}>
+                  <span className="cdot" style={{ background: '#5b6474' }} />
+                  <span className="grow">Uncategorized</span>
+                  {s.categoryId == null && <span className="check">✓</span>}
+                </button>
+              </>
+            )}
             <div className="menusep" />
             <button className="menuitem" onClick={() => onSpawn(s, 'blocking')}>
               Spawn blocking child…

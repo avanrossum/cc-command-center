@@ -74,9 +74,29 @@ function snapshot(): Snapshot {
   }
   reconcilePendingChildren(sessions)
   const nodes = getNodeMap()
+  const edges = getEdges()
+  const now = Date.now()
+
+  // Effective category: a BLOCKING child inherits its parent's category (walk up
+  // the blocking chain to the root), so categorizing a parent brings its whole
+  // blocking subtree, and a blocking child can't drift into another category.
+  // Tangential offshoots and unlinked sessions keep their own.
+  const edgeByChild = new Map(edges.map((e) => [e.child_id, e]))
+  const catCache = new Map<string, number | null>()
+  const categoryOf = (sid: string): number | null => {
+    const cached = catCache.get(sid)
+    if (cached !== undefined) return cached
+    const own = nodes.get(sid)?.category_id ?? null
+    catCache.set(sid, own) // pre-seed so an accidental cycle resolves to own
+    const e = edgeByChild.get(sid)
+    const val = e && e.type === 'blocking' && nodes.has(e.parent_id) ? categoryOf(e.parent_id) : own
+    catCache.set(sid, val)
+    return val
+  }
+
   const enriched: EnrichedSession[] = sessions.map((s) => ({
     ...s,
-    categoryId: nodes.get(s.sessionId)?.category_id ?? null,
+    categoryId: categoryOf(s.sessionId),
     theme: nodes.get(s.sessionId)?.theme ?? null,
   }))
 
@@ -84,8 +104,6 @@ function snapshot(): Snapshot {
   // task tree) that aren't currently running. Keep them in the list so they
   // survive a quit/restart and can be resumed. Uncategorized, edge-less dead
   // sessions are dropped to avoid clutter.
-  const edges = getEdges()
-  const now = Date.now()
   const liveIds = new Set(sessions.map((s) => s.sessionId))
   const edgeIds = new Set<string>()
   for (const e of edges) {
@@ -107,7 +125,7 @@ function snapshot(): Snapshot {
       isSpare: false,
       state: 'idle',
       stateReason: 'not running — click to resume',
-      categoryId: node.category_id,
+      categoryId: categoryOf(sid),
       theme: node.theme ?? null,
       dormant: true,
     })

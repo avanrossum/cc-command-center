@@ -625,6 +625,13 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.menuhint {
+  color: var(--dim2);
+  font-size: 11px;
+  font-style: italic;
+  padding: 6px 8px;
+  line-height: 1.4;
+}
 .menuitem {
   display: flex;
   align-items: center;
