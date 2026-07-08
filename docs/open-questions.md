@@ -74,3 +74,29 @@ So **blue means only: "the assistant's most recent turn ended recently, so struc
 **Two directions for a fix.**
 - **Cheap + honest (do soon):** rename the blue state from "Waiting on you" to **"Your turn"** / "Ready for you." That's exactly what the signal means and stops implying the app detected a real question. Low effort, removes the false precision.
 - **Real precision (roadmap Phase 7):** split `WAITING_PERMISSION` / `WAITING_INPUT` out of `WAITING`, driven by Claude Code **hook events** (`Notification: permission_prompt`, `Stop`, etc.) and/or an on-demand PTY/screen scrape — not transcript tailing, which is inherently coarse. This is already scoped in `docs/roadmap.md` Phase 7. Heuristics on the final assistant message (does it end with a question / an `AskUserQuestion` tool_use) could be an interim signal but are unreliable on their own.
+
+---
+
+## Q4 — Terminated sessions linger in the list, and resuming a gone session fails ungracefully
+
+**Reported:** 2026-07-07 (screenshot). **Status:** open; the fix is mostly roadmap **Phase 4** (deleted/corrupt-transcript recovery) plus a small list-hygiene piece. **Deferred to after the core phases** per the user.
+
+**Symptom.** A session the user terminated (`scratchpad-87`) stays in the sidebar. Clicking it paints a raw `No conversation found with session ID: 91dc40b2-…` followed by `[session exited: 1]`, and the term bar still shows the "resumed copy — original keeps running" tag.
+
+**Root cause** (traced through `src/main/engine/sessions.ts` + `src/renderer/src/App.tsx`):
+1. **The registry files persist.** `~/.claude/sessions/<pid>.json` is written by Claude Code and is **not** removed when a session ends. `readRegistry()` reads all of them.
+2. **`scanLiveSessions()` returns dead entries too.** Despite the name, it pushes an entry for *every* registry file, annotated `alive: true|false` — it does not drop the dead ones. A terminated session becomes an entry with `alive:false`.
+3. **The renderer doesn't filter them.** `App.tsx` computes `live = snap.sessions.filter(s => !s.isSpare)` — it filters spares only, not `alive===false` (and the renderer's `Session` type doesn't even carry `alive`). So terminated sessions stay listed. Two display sub-cases:
+   - process truly dead → `state:'unknown'` (purple);
+   - process still alive but its transcript is gone (e.g. a scratchpad temp dir cleaned, or the conversation pruned) → falls back to the stale `registryStatus`, usually **idle**. `scratchpad-87` is this second case (or a PID-reuse edge) — which is why it reads "idle" and sits in the list.
+4. **Resume is attempted blindly.** Clicking runs `claude --resume <sessionId>`; with the transcript gone it errors, and the terminal shows the raw stderr + exit code.
+5. **The "original keeps running" tag is unconditional** on resume-opens, even when no original is alive — misleading here.
+
+This is the inverse of the earlier "what causes a session to drop from the list?" question: today **nothing drops a dead session**, because the `sessions/*.json` files outlive the process and nothing garbage-collects them.
+
+**Fix path (mostly Phase 4).**
+1. **List hygiene:** carry `alive` into the renderer; hide non-alive sessions, or show them in a distinct "ended" style with a one-click **Remove from list** (delete the registry node, optionally the stale `sessions/<pid>.json`).
+2. **Pre-flight resume:** `stat` the transcript before running `--resume`; if it's missing, don't launch a doomed resume — offer **"start fresh here"** (bind a new claude to the same node, exactly the Phase 4 recovery deliverable) or just open a fresh session in that cwd.
+3. **Graceful failure:** if a resume does fail, paint a friendly in-pane message + a "start fresh" button instead of raw stderr + `[session exited: 1]`.
+4. **Honest tag:** only show "original keeps running" when the original PID is actually alive.
+5. **General GC:** a way to remove any node from the list, and consider sweeping stale `sessions/*.json` for dead pids.
