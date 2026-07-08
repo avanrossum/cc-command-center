@@ -176,6 +176,24 @@ Riskiest-first. The two biggest unknowns (does the Claude TUI render cleanly thr
 
 ---
 
+## Phase 9 — Agent-to-agent messaging (the no-skills message bus)
+
+**Goal.** Let a parent and child session *talk* to each other autonomously, without installing any skill, MCP server, or Channels dependency into the sessions. The command center is the bus: it already reads every session (transcript tail) and can write to any managed session (send-keys), and the typed edge graph is the address book. Sessions use only their native capabilities (produce text, write files, receive input) plus a convention delivered as text.
+
+**Deliverables.**
+- A transport for a session to express send-intent, chosen skill-free: a **filesystem mailbox** (managed launch sets `CC_OUTBOX`/`CC_INBOX`/`CC_PEER`; the session writes with its normal Write/Bash; the app watches the file) — with a lightweight transcript-marker convention (`@parent:` / `@child:`) as a fallback/interim.
+- A router that resolves `parent`/`child`/named targets via the edge graph and moves the payload.
+- **State-aware delivery**: hold a message and inject it as a new turn only when the target is at `WAITING`/`IDLE` (uses the existing state engine), never mid-work.
+- The convention taught via the spawn preamble / handoff note (not a skill) — one-time instruction text.
+- Safety: a **human-approve-before-send gate** by default (surfaced as queued/delivered/failed), a **hop-count loop guard**, and an opt-in fully-autonomous mode once trusted.
+
+**Definition of done.**
+- A child writes to its outbox; the parent receives it as an injected turn when the parent is next idle/waiting, with no skill or MCP installed in either session.
+- A parent→child→parent exchange terminates (loop guard) and every hop shows queued/delivered/failed.
+- Messaging is confined to sessions the app manages the PTY for; an unmanaged (raw iTerm) session is read-only until resumed under management, and that limitation is surfaced.
+
+---
+
 ## v0 task breakdown (Phase 0 + first usable milestone)
 
 v0 = Phase 0 spike proven, then the smallest usable app: adopted sessions visible with correct coarse status, resumable on restart. This spans Phase 0 through Phase 4 with a minimal read-only UI.
