@@ -27,6 +27,7 @@ interface Category {
   name: string
   color: string
   sort: number
+  label: string | null
 }
 interface Edge {
   child_id: string
@@ -87,6 +88,23 @@ function fmtAge(ms: number | undefined, now: number): string {
 const bySort = (a: Session, b: Session) =>
   STATE[a.state].order - STATE[b.state].order || (a.name ?? '').localeCompare(b.name ?? '')
 
+// Rail tag: initials from the name — one word → first 2 letters, multi-word →
+// first letters of the first two words. "Test"→TE, "Test 2"→T2, "A · B"→AB.
+function autoTag(name: string): string {
+  const words = name
+    .split(/[\s·/|,_-]+/)
+    .map((w) => w.replace(/[^a-zA-Z0-9]/g, ''))
+    .filter(Boolean)
+  if (words.length === 0) return '?'
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase()
+  return (words[0][0] + words[1][0]).toUpperCase()
+}
+
+const CAT_PALETTE = [
+  '#e2b34a', '#4ac0e2', '#e2724a', '#9b6ff0', '#d14a9b',
+  '#2fb8a0', '#e0625f', '#9bbf4a', '#6d7cf0',
+]
+
 export function App() {
   const [snap, setSnap] = useState<Snapshot>({
     home: '',
@@ -103,6 +121,15 @@ export function App() {
   // The category rail selects ONE collection; its tree shows in the pane below.
   const [selectedCat, setSelectedCat] = useState<number | null>(null)
   const initCatRef = useRef(false)
+  // Right-click a rail cell → edit its name / tag / color / delete.
+  const [catEdit, setCatEdit] = useState<{
+    id: number
+    name: string
+    color: string
+    label: string | null
+    x: number
+    y: number
+  } | null>(null)
   // Instant theme feedback for the current terminal before the persisted value
   // round-trips back through the next snapshot. Cleared when the selection changes.
   const [themeOverride, setThemeOverride] = useState<{ key: string; name: string } | null>(null)
@@ -231,12 +258,14 @@ export function App() {
       id: c.id as number | null,
       name: c.name,
       color: c.color,
+      label: c.label,
       rows: buildTree(byCat.get(c.id) ?? []),
     }))
     const uncat = {
       id: null as number | null,
       name: 'Uncategorized',
-      color: '#5b6474',
+      color: '#6a6355',
+      label: null as string | null,
       rows: buildTree(byCat.get(null) ?? []),
     }
     return [...cats, uncat].filter((g) => g.id !== null || g.rows.length > 0)
@@ -398,7 +427,7 @@ export function App() {
       <div className="body">
         <nav className="rail">
           {groups.map((g) => {
-            const letter = g.id === null ? '·' : (g.name.trim()[0] ?? '?').toUpperCase()
+            const tag = g.id === null ? '·' : g.label || autoTag(g.name)
             const hasWaiting = g.rows.some(
               ({ s }) => !s.dormant && (blockedSet.has(s.sessionId) || s.state === 'waiting'),
             )
@@ -408,9 +437,14 @@ export function App() {
                 className={`rail-cell${selectedCat === g.id ? ' active' : ''}${hasWaiting ? ' waiting' : ''}`}
                 style={{ '--cat-color': g.color } as CSSProperties}
                 onClick={() => setSelectedCat(g.id)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  if (g.id !== null)
+                    setCatEdit({ id: g.id, name: g.name, color: g.color, label: g.label, x: e.clientX, y: e.clientY })
+                }}
                 title={`${g.name} · ${g.rows.length}`}
               >
-                {letter}
+                {tag}
               </button>
             )
           })}
@@ -587,6 +621,7 @@ export function App() {
         />
       )}
       {spawn && <SpawnComposer spawn={spawn} setSpawn={setSpawn} />}
+      {catEdit && <CategoryEditor edit={catEdit} setEdit={setCatEdit} />}
     </div>
   )
 }
@@ -781,6 +816,89 @@ function SpawnComposer({
         </div>
       </div>
     </div>
+  )
+}
+
+function CategoryEditor({
+  edit,
+  setEdit,
+}: {
+  edit: { id: number; name: string; color: string; label: string | null; x: number; y: number }
+  setEdit: (v: null) => void
+}) {
+  const [name, setName] = useState(edit.name)
+  const [tag, setTag] = useState(edit.label ?? '')
+  const [color, setColor] = useState(edit.color)
+  const close = () => setEdit(null)
+  const save = () => {
+    const nm = name.trim()
+    if (nm && nm !== edit.name) window.cc.catRename(edit.id, nm)
+    window.cc.catSetLabel(edit.id, tag.trim().slice(0, 3).toUpperCase() || null)
+    close()
+  }
+  return (
+    <>
+      <div
+        className="menuscrim"
+        onClick={close}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          close()
+        }}
+      />
+      <div className="menu cateditor" style={{ left: edit.x, top: edit.y }}>
+        <div className="menuhead">Category</div>
+        <input
+          className="cat-in"
+          autoFocus
+          value={name}
+          placeholder="Name"
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save()
+            if (e.key === 'Escape') close()
+          }}
+        />
+        <input
+          className="cat-in"
+          value={tag}
+          maxLength={3}
+          placeholder={`Rail tag (default ${autoTag(edit.name)})`}
+          onChange={(e) => setTag(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save()
+            if (e.key === 'Escape') close()
+          }}
+        />
+        <div className="cat-colors">
+          {CAT_PALETTE.map((col) => (
+            <button
+              key={col}
+              className={`cat-sw${col === color ? ' on' : ''}`}
+              style={{ background: col }}
+              title={col}
+              onClick={() => {
+                setColor(col)
+                window.cc.catSetColor(edit.id, col)
+              }}
+            />
+          ))}
+        </div>
+        <div className="menusep" />
+        <button className="menuitem" onClick={save}>
+          Save
+        </button>
+        <button
+          className="menuitem danger"
+          onClick={() => {
+            window.cc.catDelete(edit.id)
+            close()
+          }}
+        >
+          Delete category
+        </button>
+      </div>
+    </>
   )
 }
 

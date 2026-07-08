@@ -338,7 +338,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font: 700 13px var(--cc-font-ui);
+  font: 700 12px var(--cc-font-mono);
+  letter-spacing: 0.3px;
   color: var(--cat-color, var(--cc-cat-none));
   background: transparent;
   border: 0;
@@ -940,6 +941,43 @@ body {
 }
 .menuitem.danger:hover {
   background: rgba(240, 133, 125, 0.14);
+}
+
+/* ---- category editor popover ---- */
+.cateditor {
+  min-width: 216px;
+}
+.cat-in {
+  width: 100%;
+  background: var(--cc-surface-2);
+  border: 1px solid var(--cc-border);
+  color: var(--cc-text);
+  border-radius: var(--cc-r-sm);
+  padding: 6px 8px;
+  font-size: 12.5px;
+  outline: none;
+  margin: 3px 0;
+}
+.cat-in:focus {
+  border-color: var(--cc-waiting);
+}
+.cat-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 2px 4px;
+}
+.cat-sw {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+}
+.cat-sw.on {
+  box-shadow: 0 0 0 2px var(--cc-surface), 0 0 0 4px #fff;
 }
 .check {
   color: #34d399;

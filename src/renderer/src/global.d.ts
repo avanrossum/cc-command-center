@@ -18,6 +18,8 @@ declare global {
       catCreate: (name: string) => Promise<{ id: number; name: string; color: string }>
       catRename: (id: number, name: string) => Promise<boolean>
       catDelete: (id: number) => Promise<boolean>
+      catSetLabel: (id: number, label: string | null) => Promise<boolean>
+      catSetColor: (id: number, color: string) => Promise<boolean>
       catAssign: (sessionId: string, categoryId: number | null) => Promise<boolean>
       edgeSet: (
         childId: string,

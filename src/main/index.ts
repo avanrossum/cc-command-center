@@ -13,6 +13,8 @@ import {
   createCategory,
   renameCategory,
   deleteCategory,
+  setCategoryLabel,
+  setCategoryColor,
   ensureNode,
   assignCategory,
   getNodeMap,
@@ -504,6 +506,16 @@ ipcMain.handle('cat:rename', (_e, id: number, name: string) => {
 })
 ipcMain.handle('cat:delete', (_e, id: number) => {
   deleteCategory(id)
+  pushSessions()
+  return true
+})
+ipcMain.handle('cat:setLabel', (_e, id: number, label: string | null) => {
+  setCategoryLabel(id, label)
+  pushSessions()
+  return true
+})
+ipcMain.handle('cat:setColor', (_e, id: number, color: string) => {
+  setCategoryColor(id, color)
   pushSessions()
   return true
 })

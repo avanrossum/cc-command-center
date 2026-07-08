@@ -12,6 +12,7 @@ export interface Category {
   name: string
   color: string
   sort: number
+  label: string | null // short rail tag; null → auto-initials from the name
 }
 
 export interface NodeRow {
@@ -29,15 +30,18 @@ export interface NodeRow {
   scrollback_at?: number | null
 }
 
+// Distinct 10-hue category palette (Claude Design kit) — deliberately spread so
+// two categories never read as the same color; never a status hue.
 const PALETTE = [
-  '#60a5fa',
-  '#a78bfa',
-  '#34d399',
-  '#f59e0b',
-  '#f472b6',
-  '#22d3ee',
-  '#fb7185',
-  '#a3e635',
+  '#e2b34a', // gold
+  '#4ac0e2', // sky
+  '#e2724a', // terracotta
+  '#9b6ff0', // violet
+  '#d14a9b', // raspberry
+  '#2fb8a0', // teal
+  '#e0625f', // coral
+  '#9bbf4a', // lime
+  '#6d7cf0', // indigo
 ]
 
 function must(): Database.Database {
@@ -105,6 +109,23 @@ export function initRegistry(dbPath: string): void {
     `)
     db.pragma('user_version = 4')
   }
+  if (v < 5) {
+    // Short rail tag per category, plus recolor existing categories onto the
+    // distinct palette (their old auto-colors could sit close together).
+    db.exec(`ALTER TABLE category ADD COLUMN label TEXT;`)
+    const cats = db.prepare('SELECT id FROM category ORDER BY sort, id').all() as { id: number }[]
+    const upd = db.prepare('UPDATE category SET color=? WHERE id=?')
+    cats.forEach((c, i) => upd.run(PALETTE[i % PALETTE.length], c.id))
+    db.pragma('user_version = 5')
+  }
+}
+
+export function setCategoryLabel(id: number, label: string | null): void {
+  must().prepare('UPDATE category SET label=? WHERE id=?').run(label, id)
+}
+
+export function setCategoryColor(id: number, color: string): void {
+  must().prepare('UPDATE category SET color=? WHERE id=?').run(color, id)
 }
 
 // Set (or clear, with null) a session's terminal theme by name.
@@ -183,7 +204,7 @@ export function getEdges(): Edge[] {
 
 export function listCategories(): Category[] {
   return must()
-    .prepare('SELECT id, name, color, sort FROM category ORDER BY sort, id')
+    .prepare('SELECT id, name, color, sort, label FROM category ORDER BY sort, id')
     .all() as Category[]
 }
 
@@ -194,7 +215,7 @@ export function createCategory(name: string, color?: string): Category {
   const info = d
     .prepare('INSERT INTO category (name, color, sort, created_at) VALUES (?,?,?,?)')
     .run(name, col, count, Date.now())
-  return { id: Number(info.lastInsertRowid), name, color: col, sort: count }
+  return { id: Number(info.lastInsertRowid), name, color: col, sort: count, label: null }
 }
 
 export function renameCategory(id: number, name: string): void {
