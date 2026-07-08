@@ -1,5 +1,13 @@
 # Backlog — next features (specs)
 
+## Right-click "New session from here" variants (user, 2026-07-08)
+
+1. **New session in this folder (+ optional context).** Right-click a session → "New session here" spawns an INDEPENDENT new session in the *same cwd* (no typed edge — unlike Spawn child), pre-filling the New-session modal's folder from the source and letting the user type initial context/instructions. Small: reuses the New-session modal + `session:create`; just seed the folder from the right-clicked session.
+
+2. **New session with summarized context.** Right-click → "Spawn new session with context": the **control agent** (fleet conductor — see roadmap Future direction) reads the source session's transcript, SUMMARIZES the relevant working context, and uses that summary as the new session's initial prompt. This is Phase 10's "context without the whole transcript" realized through the control agent — the same bounded-brief mechanism as tangent spawning + handoff notes. **Depends on the control agent existing.**
+
+
+
 ## Upgrade xterm.js to 6.1+ (kitty keyboard protocol → Shift+Enter newline) — ✅ DONE (on beta)
 
 **Done 2026-07-08 (v0.6.7):** bumped `@xterm/xterm` → `6.1.0-beta.288` + addon-webgl `0.20.0-beta.287`, addon-fit `0.12.0-beta.288`, addon-serialize `0.15.0-beta.288`, and set `vtExtensions: { kittyKeyboard: true }` on the terminal. xterm now answers Claude's keyboard-protocol negotiation and reports Shift+Enter as CSI-u (`\x1b[13;2u`) → Claude inserts a newline natively. Custom key handler removed. **On BETA packages** — the user opted in to unblock the reflex-level friction. **Follow-up:** move all four to stable 6.1 when it ships; watch for any beta regressions in WebGL rendering / fit / serialize (scrollback snapshots) / normal input + paste.
