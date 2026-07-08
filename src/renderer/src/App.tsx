@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { TerminalView } from './Terminal'
 import { THEMES, themeByName, DEFAULT_THEME_NAME } from './themes'
 
@@ -100,6 +100,9 @@ export function App() {
   const [newCat, setNewCat] = useState(false)
   const [newCatName, setNewCatName] = useState('')
   const [version, setVersion] = useState('')
+  // The category rail selects ONE collection; its tree shows in the pane below.
+  const [selectedCat, setSelectedCat] = useState<number | null>(null)
+  const initCatRef = useRef(false)
   // Instant theme feedback for the current terminal before the persisted value
   // round-trips back through the next snapshot. Cleared when the selection changes.
   const [themeOverride, setThemeOverride] = useState<{ key: string; name: string } | null>(null)
@@ -239,6 +242,18 @@ export function App() {
     return [...cats, uncat].filter((g) => g.id !== null || g.rows.length > 0)
   }, [live, snap.categories, edgeByChild])
 
+  const selectedGroup =
+    groups.find((g) => g.id === selectedCat) ??
+    groups[0] ?? { id: null as number | null, name: 'Uncategorized', color: '#6a6355', rows: [] as TreeRow[] }
+
+  // First time sessions load, land on the fullest category rather than an empty one.
+  useEffect(() => {
+    if (initCatRef.current || live.length === 0) return
+    initCatRef.current = true
+    const fullest = [...groups].sort((a, b) => b.rows.length - a.rows.length)[0]
+    if (fullest) setSelectedCat(fullest.id)
+  }, [groups, live])
+
   const openSession = (s: Session) => {
     window.cc.stateSet('activeSessionId', s.sessionId) // remember for restore-on-launch
     setSelected({
@@ -313,9 +328,17 @@ export function App() {
   }
   const createCategory = async () => {
     const name = newCatName.trim()
-    if (name) await window.cc.catCreate(name)
+    if (name) {
+      const c = await window.cc.catCreate(name)
+      if (c?.id != null) setSelectedCat(c.id)
+    }
     setNewCatName('')
     setNewCat(false)
+  }
+  // Beacon "needs you" click: switch the rail to that session's category, then open it.
+  const jumpTo = (s: Session) => {
+    setSelectedCat(s.categoryId)
+    openSession(s)
   }
 
   return (
@@ -347,7 +370,7 @@ export function App() {
                   <button
                     key={s.sessionId}
                     className={`needs-item ns-${dstate(s)}`}
-                    onClick={() => openSession(s)}
+                    onClick={() => jumpTo(s)}
                     title={s.stateReason}
                   >
                     <span className="ns-idx">{String(i + 1).padStart(2, '0')}</span>
@@ -373,85 +396,98 @@ export function App() {
       </header>
 
       <div className="body">
-        <aside className="sidebar">
+        <nav className="rail">
+          {groups.map((g) => {
+            const letter = g.id === null ? '·' : (g.name.trim()[0] ?? '?').toUpperCase()
+            const hasWaiting = g.rows.some(
+              ({ s }) => !s.dormant && (blockedSet.has(s.sessionId) || s.state === 'waiting'),
+            )
+            return (
+              <button
+                key={g.id ?? 'uncat'}
+                className={`rail-cell${selectedCat === g.id ? ' active' : ''}${hasWaiting ? ' waiting' : ''}`}
+                style={{ '--cat-color': g.color } as CSSProperties}
+                onClick={() => setSelectedCat(g.id)}
+                title={`${g.name} · ${g.rows.length}`}
+              >
+                {letter}
+              </button>
+            )
+          })}
+          <button className="rail-add" onClick={() => setNewCat(true)} title="New category">
+            ＋
+          </button>
+        </nav>
+
+        <aside className="treepane">
           <button className="newsession" onClick={() => window.cc.sessionNew()}>
             ＋ New session…
           </button>
-          <div className="sidehead">
-            <span className="sidetitle">CATEGORIES</span>
-            {newCat ? (
-              <input
-                className="newcatinput"
-                autoFocus
-                placeholder="Category name…"
-                value={newCatName}
-                onChange={(e) => setNewCatName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') createCategory()
-                  if (e.key === 'Escape') {
-                    setNewCat(false)
-                    setNewCatName('')
-                  }
-                }}
-                onBlur={createCategory}
-              />
-            ) : (
-              <button className="addcat" onClick={() => setNewCat(true)}>
-                + Category
-              </button>
-            )}
+          {newCat && (
+            <input
+              className="newcatinput"
+              autoFocus
+              placeholder="New category name…"
+              value={newCatName}
+              onChange={(e) => setNewCatName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') createCategory()
+                if (e.key === 'Escape') {
+                  setNewCat(false)
+                  setNewCatName('')
+                }
+              }}
+              onBlur={createCategory}
+            />
+          )}
+          <div className="treehead">
+            <span className="cdot" style={{ background: selectedGroup.color }} />
+            <span className="cname">{selectedGroup.name}</span>
+            <span className="gcount">{selectedGroup.rows.length}</span>
           </div>
-
-          {groups.map((g) => (
-            <section key={g.id ?? 'uncat'} className="group">
-              <div className="grouphead">
-                <span className="cdot" style={{ background: g.color }} />
-                <span className="cname">{g.name}</span>
-                <span className="gcount">{g.rows.length}</span>
-              </div>
-              <ul className="rows">
-                {g.rows.length === 0 && <li className="emptycat">right-click a session to move it here</li>}
-                {g.rows.map(({ s, depth, edgeType }) => (
-                  <li
-                    key={s.sessionId}
-                    className={`row state-${dstate(s)}${s.dormant ? ' dormant' : ''}${selected?.key === s.sessionId ? ' sel' : ''}`}
-                    style={{ paddingLeft: 10 + depth * 16 }}
-                    title={s.stateReason}
-                    onClick={() => openSession(s)}
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      setMenu({ x: e.clientX, y: e.clientY, session: s, mode: 'root' })
-                    }}
-                  >
-                    {edgeType && (
-                      <span className={`edge edge-${edgeType}`}>
-                        {edgeType === 'blocking' ? '└─' : '└╌'}
-                      </span>
-                    )}
-                    <span className={`cc-dot cc-dot--${dstate(s)}`} />
-                    {s.theme && s.theme !== DEFAULT_THEME_NAME && (
-                      <span
-                        className="tswatch"
-                        style={{ background: themeByName(s.theme).accent }}
-                        title={`theme: ${s.theme}`}
-                      />
-                    )}
-                    <span className="rowmain">
-                      <span className="name">
-                        {s.name ?? <em>{s.dormant ? s.sessionId.slice(0, 8) : `pid ${s.pid}`}</em>}
-                      </span>
-                      <span className="rowcwd">{short(s.cwd)}</span>
-                    </span>
-                    {s.dormant ? (
-                      <span className="meta resume">resume</span>
-                    ) : (
-                      <span className="meta">{fmtAge(s.transcriptMtimeMs, snap.scannedAt)}</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
+          <ul className="rows">
+            {selectedGroup.rows.length === 0 && (
+              <li className="emptycat">right-click a session to move it here</li>
+            )}
+            {selectedGroup.rows.map(({ s, depth, edgeType }) => (
+              <li
+                key={s.sessionId}
+                className={`row state-${dstate(s)}${s.dormant ? ' dormant' : ''}${selected?.key === s.sessionId ? ' sel' : ''}`}
+                style={{ paddingLeft: 10 + depth * 16 }}
+                title={s.stateReason}
+                onClick={() => openSession(s)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setMenu({ x: e.clientX, y: e.clientY, session: s, mode: 'root' })
+                }}
+              >
+                {edgeType && (
+                  <span className={`edge edge-${edgeType}`}>
+                    {edgeType === 'blocking' ? '└─' : '└╌'}
+                  </span>
+                )}
+                <span className={`cc-dot cc-dot--${dstate(s)}`} />
+                {s.theme && s.theme !== DEFAULT_THEME_NAME && (
+                  <span
+                    className="tswatch"
+                    style={{ background: themeByName(s.theme).accent }}
+                    title={`theme: ${s.theme}`}
+                  />
+                )}
+                <span className="rowmain">
+                  <span className="name">
+                    {s.name ?? <em>{s.dormant ? s.sessionId.slice(0, 8) : `pid ${s.pid}`}</em>}
+                  </span>
+                  <span className="rowcwd">{short(s.cwd)}</span>
+                </span>
+                {s.dormant ? (
+                  <span className="meta resume">resume</span>
+                ) : (
+                  <span className="meta">{fmtAge(s.transcriptMtimeMs, snap.scannedAt)}</span>
+                )}
+              </li>
+            ))}
+          </ul>
         </aside>
 
         <main className="terminalarea">
