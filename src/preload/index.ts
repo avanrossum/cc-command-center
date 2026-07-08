@@ -41,14 +41,14 @@ contextBridge.exposeInMainWorld('cc', {
   // sessions
   sessionNew: () => ipcRenderer.invoke('session:new'),
 
-  // terminals
-  termOpen: (pid: number, opts: OpenOpts) => ipcRenderer.invoke('term:open', pid, opts),
-  termAttach: (pid: number) => ipcRenderer.send('term:attach', pid),
-  termInput: (pid: number, data: string) => ipcRenderer.send('term:input', pid, data),
-  termResize: (pid: number, cols: number, rows: number) =>
-    ipcRenderer.send('term:resize', pid, cols, rows),
-  termClose: (pid: number) => ipcRenderer.send('term:close', pid),
-  onTermData: (cb: (p: { pid: number; data: string }) => void) => sub('term:data', cb),
-  onTermExit: (cb: (p: { pid: number; code: number }) => void) => sub('term:exit', cb),
-  onTermShow: (cb: (p: { pid: number; name: string; cwd: string }) => void) => sub('term:show', cb),
+  // terminals — keyed by a stable string (session id, or `new:<pid>`)
+  termOpen: (key: string, opts: OpenOpts) => ipcRenderer.invoke('term:open', key, opts),
+  termAttach: (key: string) => ipcRenderer.send('term:attach', key),
+  termInput: (key: string, data: string) => ipcRenderer.send('term:input', key, data),
+  termResize: (key: string, cols: number, rows: number) =>
+    ipcRenderer.send('term:resize', key, cols, rows),
+  termClose: (key: string) => ipcRenderer.send('term:close', key),
+  onTermData: (cb: (p: { key: string; data: string }) => void) => sub('term:data', cb),
+  onTermExit: (cb: (p: { key: string; code: number }) => void) => sub('term:exit', cb),
+  onTermShow: (cb: (p: { key: string; name: string; cwd: string }) => void) => sub('term:show', cb),
 })

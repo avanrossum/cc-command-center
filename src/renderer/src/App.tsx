@@ -14,6 +14,7 @@ interface Session {
   stateReason: string
   transcriptMtimeMs?: number
   isSpare: boolean
+  alive: boolean
   categoryId: number | null
   theme: string | null
 }
@@ -37,7 +38,8 @@ interface Snapshot {
   edges: Edge[]
 }
 interface Selected {
-  pid: number
+  key: string
+  pid?: number
   sessionId?: string
   cwd: string
   name: string
@@ -95,14 +97,14 @@ export function App() {
   const [version, setVersion] = useState('')
   // Instant theme feedback for the current terminal before the persisted value
   // round-trips back through the next snapshot. Cleared when the selection changes.
-  const [themeOverride, setThemeOverride] = useState<{ pid: number; name: string } | null>(null)
+  const [themeOverride, setThemeOverride] = useState<{ key: string; name: string } | null>(null)
 
   useEffect(() => {
     window.cc.appVersion().then((v) => setVersion(v.full))
     window.cc.getSessions().then((s) => setSnap(s as Snapshot))
     const offSessions = window.cc.onSessions((s) => setSnap(s as Snapshot))
     const offShow = window.cc.onTermShow((p) =>
-      setSelected({ pid: p.pid, cwd: p.cwd, name: p.name, resume: false }),
+      setSelected({ key: p.key, cwd: p.cwd, name: p.name, resume: false }),
     )
     return () => {
       offSessions()
@@ -112,9 +114,20 @@ export function App() {
 
   // Drop the theme override when the selection changes, so a newly-opened
   // terminal reflects its own persisted theme.
-  useEffect(() => setThemeOverride(null), [selected?.pid])
+  useEffect(() => setThemeOverride(null), [selected?.key])
 
-  const live = useMemo(() => snap.sessions.filter((s) => !s.isSpare), [snap])
+  // Live sessions, deduped by session id: a resumed managed copy registers its
+  // own ~/.claude/sessions/<pid>.json under the SAME session id, which would
+  // otherwise show the one conversation twice. Prefer an alive row.
+  const live = useMemo(() => {
+    const bySession = new Map<string, Session>()
+    for (const s of snap.sessions) {
+      if (s.isSpare) continue
+      const existing = bySession.get(s.sessionId)
+      if (!existing || (!existing.alive && s.alive)) bySession.set(s.sessionId, s)
+    }
+    return [...bySession.values()]
+  }, [snap])
   const counts = useMemo(() => {
     const c: Record<CoarseState, number> = { working: 0, waiting: 0, idle: 0, unknown: 0 }
     for (const s of live) c[s.state]++
@@ -178,6 +191,7 @@ export function App() {
 
   const openSession = (s: Session) =>
     setSelected({
+      key: s.sessionId,
       pid: s.pid,
       sessionId: s.sessionId,
       cwd: s.cwd,
@@ -185,19 +199,19 @@ export function App() {
       resume: true,
     })
   const closeTerminal = () => {
-    if (selected) window.cc.termClose(selected.pid)
+    if (selected) window.cc.termClose(selected.key)
     setSelected(null)
   }
   // The theme shown for the open terminal: the just-picked override (instant),
   // else the session's persisted theme, else Default.
-  const selLive = selected ? live.find((s) => s.pid === selected.pid) : undefined
+  const selLive = selected ? live.find((s) => s.sessionId === selected.key) : undefined
   const selThemeName =
-    themeOverride && selected && themeOverride.pid === selected.pid
+    themeOverride && selected && themeOverride.key === selected.key
       ? themeOverride.name
       : selLive?.theme ?? DEFAULT_THEME_NAME
   const pickTheme = (name: string) => {
     if (!selected) return
-    setThemeOverride({ pid: selected.pid, name })
+    setThemeOverride({ key: selected.key, name })
     // Persist by session id when known; store null for Default to keep it clean.
     if (selected.sessionId) window.cc.themeSet(selected.sessionId, name === DEFAULT_THEME_NAME ? null : name)
   }
@@ -273,8 +287,8 @@ export function App() {
                 {g.rows.length === 0 && <li className="emptycat">right-click a session to move it here</li>}
                 {g.rows.map(({ s, depth, edgeType }) => (
                   <li
-                    key={s.pid}
-                    className={`row state-${s.state}${selected?.pid === s.pid ? ' sel' : ''}`}
+                    key={s.sessionId}
+                    className={`row state-${s.state}${selected?.key === s.sessionId ? ' sel' : ''}`}
                     style={{ paddingLeft: 10 + depth * 16 }}
                     title={s.stateReason}
                     onClick={() => openSession(s)}
@@ -324,8 +338,8 @@ export function App() {
                 </button>
               </div>
               <TerminalView
-                key={selected.pid}
-                pid={selected.pid}
+                key={selected.key}
+                termKey={selected.key}
                 sessionId={selected.sessionId}
                 cwd={selected.cwd}
                 resume={selected.resume}

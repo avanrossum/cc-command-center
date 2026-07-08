@@ -6,7 +6,7 @@ import { themeByName } from './themes'
 import '@xterm/xterm/css/xterm.css'
 
 interface Props {
-  pid: number
+  termKey: string
   sessionId?: string
   cwd: string
   resume: boolean
@@ -16,7 +16,7 @@ interface Props {
 // Hosts one live terminal. The PTY lives in the main process and keeps running
 // when this component unmounts (switching sessions) — main replays its buffered
 // scrollback on reattach, so we just create a fresh xterm and let main feed it.
-export function TerminalView({ pid, sessionId, cwd, resume, themeName }: Props) {
+export function TerminalView({ termKey, sessionId, cwd, resume, themeName }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
 
@@ -46,20 +46,20 @@ export function TerminalView({ pid, sessionId, cwd, resume, themeName }: Props) 
     fit.fit()
 
     const offData = window.cc.onTermData((p) => {
-      if (p.pid === pid) term.write(p.data)
+      if (p.key === termKey) term.write(p.data)
     })
     const offExit = window.cc.onTermExit((p) => {
-      if (p.pid === pid) term.write(`\r\n\x1b[90m[session exited: ${p.code}]\x1b[0m\r\n`)
+      if (p.key === termKey) term.write(`\r\n\x1b[90m[session exited: ${p.code}]\x1b[0m\r\n`)
     })
-    const onData = term.onData((d) => window.cc.termInput(pid, d))
+    const onData = term.onData((d) => window.cc.termInput(termKey, d))
 
-    window.cc.termOpen(pid, { sessionId, cwd, resume, cols: term.cols, rows: term.rows }).then(() => {
-      window.cc.termResize(pid, term.cols, term.rows)
+    window.cc.termOpen(termKey, { sessionId, cwd, resume, cols: term.cols, rows: term.rows }).then(() => {
+      window.cc.termResize(termKey, term.cols, term.rows)
     })
 
     const ro = new ResizeObserver(() => {
       fit.fit()
-      window.cc.termResize(pid, term.cols, term.rows)
+      window.cc.termResize(termKey, term.cols, term.rows)
     })
     ro.observe(host)
     term.focus()
@@ -73,7 +73,7 @@ export function TerminalView({ pid, sessionId, cwd, resume, themeName }: Props) 
       termRef.current = null
       // Intentionally NOT closing the PTY: it keeps running in the background.
     }
-  }, [pid, sessionId, cwd, resume])
+  }, [termKey, sessionId, cwd, resume])
 
   // Apply theme changes live without tearing down the terminal.
   useEffect(() => {

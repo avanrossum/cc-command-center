@@ -104,9 +104,15 @@ interface Term {
   pty: pty.IPty
   buffer: string
   exited: boolean
+  sessionId?: string
+  cwd: string
 }
-const terminals = new Map<number, Term>()
-let attachedPid: number | null = null
+// Managed terminals keyed by a STABLE string key: the Claude session id for a
+// scanned session, or `new:<pid>` for a freshly-launched one not yet adopted.
+// Keying by session id (not pid) makes open idempotent — clicking a session
+// that is already open re-attaches instead of forking a second `claude --resume`.
+const terminals = new Map<string, Term>()
+let attachedKey: string | null = null
 
 function buildEnv(): NodeJS.ProcessEnv {
   const home = os.homedir()
@@ -147,25 +153,29 @@ interface OpenOpts {
   rows: number
 }
 
-function wireTerm(pid: number, p: pty.IPty): Term {
-  const term: Term = { pty: p, buffer: '', exited: false }
-  terminals.set(pid, term)
+function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: string }): Term {
+  const term: Term = { pty: p, buffer: '', exited: false, sessionId: meta.sessionId, cwd: meta.cwd }
+  terminals.set(key, term)
   p.onData((data) => {
-    const t = terminals.get(pid)
+    const t = terminals.get(key)
     if (!t) return
     t.buffer = (t.buffer + data).slice(-BUFFER_CAP)
-    if (attachedPid === pid) win?.webContents.send('term:data', { pid, data })
+    if (attachedKey === key) win?.webContents.send('term:data', { key, data })
   })
   p.onExit(({ exitCode }) => {
-    const t = terminals.get(pid)
+    const t = terminals.get(key)
     if (t) t.exited = true
-    win?.webContents.send('term:exit', { pid, code: exitCode })
+    win?.webContents.send('term:exit', { key, code: exitCode })
   })
   return term
 }
 
-function openTerminal(pid: number, opts: OpenOpts): void {
-  let term = terminals.get(pid)
+function openTerminal(key: string, opts: OpenOpts): void {
+  let term = terminals.get(key)
+  if (term?.exited) {
+    terminals.delete(key) // the process died; re-spawn a fresh one below
+    term = undefined
+  }
   if (!term) {
     const cmd = resolveClaude()
     const args = opts.resume && opts.sessionId ? ['--resume', opts.sessionId] : []
@@ -176,57 +186,57 @@ function openTerminal(pid: number, opts: OpenOpts): void {
       cwd: opts.cwd || os.homedir(),
       env: buildEnv(),
     })
-    console.log(`[main] terminal ${pid}: spawned ${cmd} ${args.join(' ')} in ${opts.cwd}`)
-    term = wireTerm(pid, p)
+    console.log(`[main] terminal ${key}: spawned ${cmd} ${args.join(' ')} in ${opts.cwd}`)
+    term = wireTerm(key, p, { sessionId: opts.sessionId, cwd: opts.cwd })
   }
-  attachedPid = pid
-  if (term.buffer) win?.webContents.send('term:data', { pid, data: term.buffer }) // replay scrollback
+  attachedKey = key
+  if (term.buffer) win?.webContents.send('term:data', { key, data: term.buffer }) // replay scrollback
 }
 
-// Launch a brand-new managed Claude session in a folder. Keyed by the pty's own
-// pid, which equals the pid Claude writes to ~/.claude/sessions/<pid>.json — so
-// the next scan adopts it automatically and the sidebar row reconciles with this
-// same terminal.
+// Launch a brand-new managed Claude session in a folder. Keyed by `new:<pid>`
+// until the next scan adopts it (Claude writes ~/.claude/sessions/<pid>.json,
+// so the sidebar row appears and, once opened, reconciles by session id).
 function launchSession(cwd: string, args: string[] = []): number {
   const cmd = resolveClaude()
   const p = pty.spawn(cmd, args, { name: 'xterm-256color', cols: 120, rows: 30, cwd, env: buildEnv() })
+  const key = `new:${p.pid}`
   console.log(`[main] new session: spawned ${cmd} ${args.join(' ')} in ${cwd} pid=${p.pid}`)
-  wireTerm(p.pid, p)
-  attachedPid = p.pid
-  win?.webContents.send('term:show', { pid: p.pid, name: 'new session', cwd })
+  wireTerm(key, p, { cwd })
+  attachedKey = key
+  win?.webContents.send('term:show', { key, name: 'new session', cwd })
   return p.pid
 }
 
-ipcMain.handle('term:open', (_e, pid: number, opts: OpenOpts) => {
-  openTerminal(pid, opts)
+ipcMain.handle('term:open', (_e, key: string, opts: OpenOpts) => {
+  openTerminal(key, opts)
   return true
 })
-ipcMain.on('term:attach', (_e, pid: number) => {
-  attachedPid = pid
-  const t = terminals.get(pid)
-  if (t?.buffer) win?.webContents.send('term:data', { pid, data: t.buffer })
+ipcMain.on('term:attach', (_e, key: string) => {
+  attachedKey = key
+  const t = terminals.get(key)
+  if (t?.buffer) win?.webContents.send('term:data', { key, data: t.buffer })
 })
-ipcMain.on('term:input', (_e, pid: number, data: string) => {
-  terminals.get(pid)?.pty.write(data)
+ipcMain.on('term:input', (_e, key: string, data: string) => {
+  terminals.get(key)?.pty.write(data)
 })
-ipcMain.on('term:resize', (_e, pid: number, cols: number, rows: number) => {
+ipcMain.on('term:resize', (_e, key: string, cols: number, rows: number) => {
   try {
-    terminals.get(pid)?.pty.resize(cols, rows)
+    terminals.get(key)?.pty.resize(cols, rows)
   } catch {
     /* resize before spawn or after exit */
   }
 })
-ipcMain.on('term:close', (_e, pid: number) => {
-  const t = terminals.get(pid)
+ipcMain.on('term:close', (_e, key: string) => {
+  const t = terminals.get(key)
   if (t) {
     try {
       t.pty.kill()
     } catch {
       /* already gone */
     }
-    terminals.delete(pid)
+    terminals.delete(key)
   }
-  if (attachedPid === pid) attachedPid = null
+  if (attachedKey === key) attachedKey = null
 })
 
 // ---------- window ----------
@@ -258,8 +268,9 @@ function createWindow(): void {
     // cwd, so the split layout can be verified without resuming a real session.
     const demoCwd = process.env.CCC_DEMO_CWD
     if (demoCwd) {
-      openTerminal(0, { cwd: demoCwd, resume: false, cols: 120, rows: 30 })
-      win?.webContents.send('term:show', { pid: 0, name: 'demo (scratchpad)', cwd: demoCwd })
+      const key = 'new:demo'
+      openTerminal(key, { cwd: demoCwd, resume: false, cols: 120, rows: 30 })
+      win?.webContents.send('term:show', { key, name: 'demo (scratchpad)', cwd: demoCwd })
     }
 
     // Dev affordance: capture just this window (not the whole screen) when asked.

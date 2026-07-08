@@ -26,14 +26,14 @@ declare global {
       edgeClear: (childId: string) => Promise<boolean>
       themeSet: (sessionId: string, theme: string | null) => Promise<boolean>
       sessionNew: () => Promise<{ pid: number; cwd: string } | null>
-      termOpen: (pid: number, opts: OpenOpts) => Promise<boolean>
-      termAttach: (pid: number) => void
-      termInput: (pid: number, data: string) => void
-      termResize: (pid: number, cols: number, rows: number) => void
-      termClose: (pid: number) => void
-      onTermData: (cb: (p: { pid: number; data: string }) => void) => () => void
-      onTermExit: (cb: (p: { pid: number; code: number }) => void) => () => void
-      onTermShow: (cb: (p: { pid: number; name: string; cwd: string }) => void) => () => void
+      termOpen: (key: string, opts: OpenOpts) => Promise<boolean>
+      termAttach: (key: string) => void
+      termInput: (key: string, data: string) => void
+      termResize: (key: string, cols: number, rows: number) => void
+      termClose: (key: string) => void
+      onTermData: (cb: (p: { key: string; data: string }) => void) => () => void
+      onTermExit: (cb: (p: { key: string; code: number }) => void) => () => void
+      onTermShow: (cb: (p: { key: string; name: string; cwd: string }) => void) => () => void
     }
   }
 }
