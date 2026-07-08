@@ -79,7 +79,7 @@ So **blue means only: "the assistant's most recent turn ended recently, so struc
 
 ## Q4 — Terminated sessions linger in the list, and resuming a gone session fails ungracefully
 
-**Reported:** 2026-07-07 (screenshot). **Status:** open; the fix is mostly roadmap **Phase 4** (deleted/corrupt-transcript recovery) plus a small list-hygiene piece. **Deferred to after the core phases** per the user.
+**Reported:** 2026-07-07 (screenshot). **Status:** LARGELY RESOLVED in Phase 4 (v0.3.0). `openTerminal` now stat-checks the transcript before `--resume` (missing *or* 0-byte → recovery card, not the raw exit-1 error); "Start fresh here" / "Remove from list" work, and Remove sticks via a persistent removed-set the scan honors. **Remaining edge:** a transcript that exists but is non-empty-yet-corrupt still spawns a doomed `--resume` (rare — no such files on this machine); the robust fix is to catch an early non-zero resume exit and surface the recovery card then. Original analysis kept below.
 
 **Symptom.** A session the user terminated (`scratchpad-87`) stays in the sidebar. Clicking it paints a raw `No conversation found with session ID: 91dc40b2-…` followed by `[session exited: 1]`, and the term bar still shows the "resumed copy — original keeps running" tag.
 
@@ -105,7 +105,7 @@ This is the inverse of the earlier "what causes a session to drop from the list?
 
 ## Q5 — Clicking a session forks a duplicate "tracked" copy (list fills with dupes)
 
-**Reported:** 2026-07-07 (screenshot: `auto-ceo` ×3, all live). **Status:** open; same "session-list truth & hygiene" family as [Q4]. **More active than Q4** — it worsens the list on every click and spawns real duplicate `claude` processes, so it likely deserves priority.
+**Reported:** 2026-07-07 (screenshot: `auto-ceo` ×3, all live). **Status:** RESOLVED in Phase 4 (v0.3.0). Terminals are keyed by session id and the sidebar dedupes by session id; opening an already-open session re-attaches. The new-session path (a terminal launched under `new:<pid>`) is reconciled to its adopted session id on adoption — caught by the adversarial review and fixed — so re-clicking it no longer forks a second `claude --resume`. Original analysis kept below.
 
 **Symptom.** Clicking a session in the nav adds another identical row (three `auto-ceo`, same cwd, all green). Happens even when only viewing — "even if you don't take over."
 
