@@ -205,7 +205,6 @@ body {
   gap: 18px;
   padding: 0 18px;
   border-right: 1px solid var(--cc-hairline);
-  -webkit-app-region: no-drag;
 }
 .tally-item {
   display: flex;
@@ -236,7 +235,6 @@ body {
   display: flex;
   align-items: center;
   padding: 0 16px;
-  -webkit-app-region: no-drag;
 }
 .allclear {
   display: flex;
@@ -273,6 +271,7 @@ body {
   cursor: pointer;
   color: var(--cc-text);
   font-size: 11px;
+  -webkit-app-region: no-drag; /* the only interactive leaf — rest of the bar drags */
 }
 .needs-item.ns-waiting {
   border-left-color: var(--cc-waiting);
