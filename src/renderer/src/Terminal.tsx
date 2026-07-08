@@ -78,6 +78,17 @@ export function TerminalView({ termKey, sessionId, pid, cwd, resume, themeName }
     })
     const onData = term.onData((d) => window.cc.termInput(termKey, d))
 
+    // Shift+Enter → insert a newline instead of submitting. xterm emits a bare
+    // CR for Enter regardless of Shift, which Claude reads as "send"; send LF
+    // (Ctrl-J), Claude's newline byte, and swallow xterm's default handling.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey) {
+        window.cc.termInput(termKey, '\n')
+        return false
+      }
+      return true
+    })
+
     window.cc
       .termOpen(termKey, { sessionId, pid, cwd, resume, cols: term.cols, rows: term.rows })
       .then(() => {
