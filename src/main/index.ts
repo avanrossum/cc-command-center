@@ -33,7 +33,11 @@ let win: BrowserWindow | null = null
 let pollTimer: NodeJS.Timeout | null = null
 
 // ---------- session polling (status board) ----------
-type EnrichedSession = LiveSession & { categoryId: number | null; theme: string | null }
+type EnrichedSession = LiveSession & {
+  categoryId: number | null
+  theme: string | null
+  dormant?: boolean // registry node with no live process — resumable, survives restart
+}
 interface Snapshot {
   home: string
   scannedAt: number
@@ -72,12 +76,42 @@ function snapshot(): Snapshot {
     categoryId: nodes.get(s.sessionId)?.category_id ?? null,
     theme: nodes.get(s.sessionId)?.theme ?? null,
   }))
+
+  // Dormant nodes: sessions the user gave meaning to (categorized or placed in a
+  // task tree) that aren't currently running. Keep them in the list so they
+  // survive a quit/restart and can be resumed. Uncategorized, edge-less dead
+  // sessions are dropped to avoid clutter.
+  const edges = getEdges()
+  const liveIds = new Set(sessions.map((s) => s.sessionId))
+  const edgeIds = new Set<string>()
+  for (const e of edges) {
+    edgeIds.add(e.child_id)
+    edgeIds.add(e.parent_id)
+  }
+  for (const [sid, node] of nodes) {
+    if (liveIds.has(sid) || removed.has(sid)) continue
+    if (node.category_id == null && !edgeIds.has(sid)) continue
+    enriched.push({
+      pid: 0,
+      sessionId: sid,
+      cwd: node.cwd ?? '',
+      name: node.name ?? undefined,
+      alive: false,
+      isSpare: false,
+      state: 'idle',
+      stateReason: 'not running — click to resume',
+      categoryId: node.category_id,
+      theme: node.theme ?? null,
+      dormant: true,
+    })
+  }
+
   return {
     home: os.homedir(),
     scannedAt: Date.now(),
     sessions: enriched,
     categories: listCategories(),
-    edges: getEdges(),
+    edges,
   }
 }
 

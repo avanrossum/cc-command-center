@@ -17,6 +17,7 @@ interface Session {
   alive: boolean
   categoryId: number | null
   theme: string | null
+  dormant?: boolean
 }
 interface Category {
   id: number
@@ -150,9 +151,11 @@ export function App() {
   }, [snap])
   const counts = useMemo(() => {
     const c: Record<CoarseState, number> = { working: 0, waiting: 0, idle: 0, unknown: 0 }
-    for (const s of live) c[s.state]++
+    for (const s of live) if (!s.dormant) c[s.state]++
     return c
   }, [live])
+  const liveCount = useMemo(() => live.filter((s) => !s.dormant).length, [live])
+  const dormantCount = useMemo(() => live.filter((s) => s.dormant).length, [live])
   const short = (cwd: string) => (snap.home ? cwd.replace(snap.home, '~') : cwd)
 
   const edgeByChild = useMemo(() => {
@@ -300,7 +303,8 @@ export function App() {
           <Pill n={counts.working} label="working" color={STATE.working.color} />
           <Pill n={counts.waiting} label="your turn" color={STATE.waiting.color} />
           <Pill n={counts.idle} label="idle" color={STATE.idle.color} />
-          <span className="total">{live.length} sessions</span>
+          <span className="total">{liveCount} sessions</span>
+          {dormantCount > 0 && <span className="total dorm">· {dormantCount} dormant</span>}
         </div>
       </header>
 
@@ -346,7 +350,7 @@ export function App() {
                 {g.rows.map(({ s, depth, edgeType }) => (
                   <li
                     key={s.sessionId}
-                    className={`row state-${s.state}${selected?.key === s.sessionId ? ' sel' : ''}`}
+                    className={`row state-${s.state}${s.dormant ? ' dormant' : ''}${selected?.key === s.sessionId ? ' sel' : ''}`}
                     style={{ paddingLeft: 10 + depth * 16 }}
                     title={s.stateReason}
                     onClick={() => openSession(s)}
@@ -369,10 +373,16 @@ export function App() {
                       />
                     )}
                     <span className="rowmain">
-                      <span className="name">{s.name ?? <em>pid {s.pid}</em>}</span>
+                      <span className="name">
+                        {s.name ?? <em>{s.dormant ? s.sessionId.slice(0, 8) : `pid ${s.pid}`}</em>}
+                      </span>
                       <span className="rowcwd">{short(s.cwd)}</span>
                     </span>
-                    <span className="meta">{fmtAge(s.transcriptMtimeMs, snap.scannedAt)}</span>
+                    {s.dormant ? (
+                      <span className="meta resume">resume</span>
+                    ) : (
+                      <span className="meta">{fmtAge(s.transcriptMtimeMs, snap.scannedAt)}</span>
+                    )}
                   </li>
                 ))}
               </ul>

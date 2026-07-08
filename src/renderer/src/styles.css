@@ -259,6 +259,28 @@ body {
 .row.state-working .dot {
   animation: pulse 2s infinite;
 }
+/* Dormant: a registered session that isn't running — resumable on click. */
+.row.dormant {
+  opacity: 0.6;
+}
+.row.dormant:hover {
+  opacity: 1;
+}
+.row.dormant .dot {
+  background: transparent !important;
+  border: 1.5px solid var(--dim2);
+  width: 7px;
+  height: 7px;
+}
+.meta.resume {
+  color: var(--dim);
+  font-family: -apple-system, system-ui, sans-serif;
+  font-style: italic;
+}
+.total.dorm {
+  color: var(--dim2);
+  margin-left: 0;
+}
 .edge {
   flex: none;
   font-family: ui-monospace, monospace;
