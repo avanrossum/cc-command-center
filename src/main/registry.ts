@@ -118,6 +118,16 @@ export function initRegistry(dbPath: string): void {
     cats.forEach((c, i) => upd.run(PALETTE[i % PALETTE.length], c.id))
     db.pragma('user_version = 5')
   }
+  if (v < 6) {
+    // Per-link messaging trust ("bless a link once"): when 1, the app auto-
+    // delivers awareness messages across this edge without per-message approval.
+    db.exec(`ALTER TABLE edge ADD COLUMN trusted INTEGER NOT NULL DEFAULT 0;`)
+    db.pragma('user_version = 6')
+  }
+}
+
+export function setEdgeTrust(childId: string, trusted: boolean): void {
+  must().prepare('UPDATE edge SET trusted=? WHERE child_id=?').run(trusted ? 1 : 0, childId)
 }
 
 export function setCategoryLabel(id: number, label: string | null): void {
@@ -165,6 +175,7 @@ export interface Edge {
   parent_id: string
   type: string
   source: string
+  trusted: number
 }
 
 // Set (or move) a child's parent. Rejects self-parenting and any cycle (parent
@@ -199,7 +210,9 @@ export function clearParent(childId: string): void {
 }
 
 export function getEdges(): Edge[] {
-  return must().prepare('SELECT child_id, parent_id, type, source FROM edge').all() as Edge[]
+  return must()
+    .prepare('SELECT child_id, parent_id, type, source, trusted FROM edge')
+    .all() as Edge[]
 }
 
 export function listCategories(): Category[] {
