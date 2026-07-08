@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld('cc', {
     ipcRenderer.invoke('edge:set', childId, parentId, type),
   edgeClear: (childId: string) => ipcRenderer.invoke('edge:clear', childId),
 
+  // sessions
+  sessionNew: () => ipcRenderer.invoke('session:new'),
+
   // terminals
   termOpen: (pid: number, opts: OpenOpts) => ipcRenderer.invoke('term:open', pid, opts),
   termAttach: (pid: number) => ipcRenderer.send('term:attach', pid),

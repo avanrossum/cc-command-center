@@ -206,6 +206,9 @@ export function App() {
 
       <div className="body">
         <aside className="sidebar">
+          <button className="newsession" onClick={() => window.cc.sessionNew()}>
+            ＋ New session…
+          </button>
           <div className="sidehead">
             <span className="sidetitle">CATEGORIES</span>
             {newCat ? (

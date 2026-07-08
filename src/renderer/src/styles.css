@@ -115,6 +115,22 @@ body {
   padding: 10px 12px 24px;
   background: var(--bg);
 }
+.newsession {
+  -webkit-app-region: no-drag;
+  width: 100%;
+  background: rgba(52, 211, 153, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.35);
+  color: #7ee7b8;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+.newsession:hover {
+  background: rgba(52, 211, 153, 0.2);
+}
 .sidehead {
   display: flex;
   align-items: center;

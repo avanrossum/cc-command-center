@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'node:path'
 import os from 'node:os'
 import { existsSync } from 'node:fs'
@@ -135,6 +135,23 @@ interface OpenOpts {
   rows: number
 }
 
+function wireTerm(pid: number, p: pty.IPty): Term {
+  const term: Term = { pty: p, buffer: '', exited: false }
+  terminals.set(pid, term)
+  p.onData((data) => {
+    const t = terminals.get(pid)
+    if (!t) return
+    t.buffer = (t.buffer + data).slice(-BUFFER_CAP)
+    if (attachedPid === pid) win?.webContents.send('term:data', { pid, data })
+  })
+  p.onExit(({ exitCode }) => {
+    const t = terminals.get(pid)
+    if (t) t.exited = true
+    win?.webContents.send('term:exit', { pid, code: exitCode })
+  })
+  return term
+}
+
 function openTerminal(pid: number, opts: OpenOpts): void {
   let term = terminals.get(pid)
   if (!term) {
@@ -148,22 +165,24 @@ function openTerminal(pid: number, opts: OpenOpts): void {
       env: buildEnv(),
     })
     console.log(`[main] terminal ${pid}: spawned ${cmd} ${args.join(' ')} in ${opts.cwd}`)
-    term = { pty: p, buffer: '', exited: false }
-    terminals.set(pid, term)
-    p.onData((data) => {
-      const t = terminals.get(pid)
-      if (!t) return
-      t.buffer = (t.buffer + data).slice(-BUFFER_CAP)
-      if (attachedPid === pid) win?.webContents.send('term:data', { pid, data })
-    })
-    p.onExit(({ exitCode }) => {
-      const t = terminals.get(pid)
-      if (t) t.exited = true
-      win?.webContents.send('term:exit', { pid, code: exitCode })
-    })
+    term = wireTerm(pid, p)
   }
   attachedPid = pid
   if (term.buffer) win?.webContents.send('term:data', { pid, data: term.buffer }) // replay scrollback
+}
+
+// Launch a brand-new managed Claude session in a folder. Keyed by the pty's own
+// pid, which equals the pid Claude writes to ~/.claude/sessions/<pid>.json — so
+// the next scan adopts it automatically and the sidebar row reconciles with this
+// same terminal.
+function launchSession(cwd: string, args: string[] = []): number {
+  const cmd = resolveClaude()
+  const p = pty.spawn(cmd, args, { name: 'xterm-256color', cols: 120, rows: 30, cwd, env: buildEnv() })
+  console.log(`[main] new session: spawned ${cmd} ${args.join(' ')} in ${cwd} pid=${p.pid}`)
+  wireTerm(p.pid, p)
+  attachedPid = p.pid
+  win?.webContents.send('term:show', { pid: p.pid, name: 'new session', cwd })
+  return p.pid
 }
 
 ipcMain.handle('term:open', (_e, pid: number, opts: OpenOpts) => {
@@ -275,6 +294,16 @@ ipcMain.handle('edge:clear', (_e, childId: string) => {
   clearParent(childId)
   pushSessions()
   return true
+})
+ipcMain.handle('session:new', async () => {
+  if (!win) return null
+  const r = await dialog.showOpenDialog(win, {
+    properties: ['openDirectory', 'createDirectory'],
+    title: 'Start a Claude session in…',
+  })
+  if (r.canceled || !r.filePaths[0]) return null
+  const cwd = r.filePaths[0]
+  return { pid: launchSession(cwd), cwd }
 })
 
 app.whenReady().then(() => {
