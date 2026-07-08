@@ -1,6 +1,10 @@
 # Backlog — next features (specs)
 
-## Upgrade xterm.js to 6.1+ (kitty keyboard protocol → Shift+Enter newline)
+## Upgrade xterm.js to 6.1+ (kitty keyboard protocol → Shift+Enter newline) — ✅ DONE (on beta)
+
+**Done 2026-07-08 (v0.6.7):** bumped `@xterm/xterm` → `6.1.0-beta.288` + addon-webgl `0.20.0-beta.287`, addon-fit `0.12.0-beta.288`, addon-serialize `0.15.0-beta.288`, and set `vtExtensions: { kittyKeyboard: true }` on the terminal. xterm now answers Claude's keyboard-protocol negotiation and reports Shift+Enter as CSI-u (`\x1b[13;2u`) → Claude inserts a newline natively. Custom key handler removed. **On BETA packages** — the user opted in to unblock the reflex-level friction. **Follow-up:** move all four to stable 6.1 when it ships; watch for any beta regressions in WebGL rendering / fit / serialize (scrollback snapshots) / normal input + paste.
+
+**Original rationale (why 6.0 couldn't):**
 
 **Why.** Shift+Enter can't insert a soft newline on xterm.js 6.0: the terminal can't represent Shift+Enter distinctly from Enter (it drops the modifier and sends bare CR). Modern Claude Code expects the **kitty keyboard protocol** — Shift+Enter encoded as `\x1b[13;2u` (CSI-u: key 13 = Enter, modifier 2 = Shift). Kitty-protocol support landed in **xterm.js 6.1** (PR #5600). Every legacy byte we can inject fails: LF (`\x0a`) and CR submit; ESC+CR (`\x1b\r`, Option/Meta+Enter) inserts when empty but misbehaves with text; bracketed-paste LF sticks when empty but **submits once the buffer has text** (Ink's documented "trailing-newline-in-paste = submit"). Confirmed authoritatively (claude-code-guide research, 2026-07-08).
 

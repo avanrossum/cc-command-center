@@ -33,6 +33,10 @@ export function TerminalView({ termKey, sessionId, pid, cwd, resume, themeName }
       // remounting. themeName is intentionally NOT a dep of this setup effect.
       theme: themeByName(themeName).theme,
       scrollback: 8000,
+      // Kitty keyboard protocol (xterm 6.1+): xterm answers Claude's protocol
+      // negotiation and reports Shift+Enter as CSI-u (\x1b[13;2u), which Claude
+      // inserts as a newline — the correct, native path (no key-injection hack).
+      vtExtensions: { kittyKeyboard: true },
     })
     termRef.current = term
     const fit = new FitAddon()
@@ -78,13 +82,8 @@ export function TerminalView({ termKey, sessionId, pid, cwd, resume, themeName }
     })
     const onData = term.onData((d) => window.cc.termInput(termKey, d))
 
-    // NOTE: Shift+Enter → newline is intentionally NOT handled here. xterm.js 6.0
-    // can't represent Shift+Enter distinctly (it drops the modifier and sends a
-    // bare CR); the correct signal is the kitty keyboard protocol (`\x1b[13;2u`),
-    // which only xterm.js 6.1+ supports. Every legacy byte we can inject (LF,
-    // ESC+CR, bracketed-paste LF) either submits or misbehaves once the buffer
-    // has text. So we leave Shift+Enter as a plain submit until a stable xterm
-    // 6.1 upgrade — see docs/backlog.md. Meanwhile Claude's `\`+Enter works.
+    // Shift+Enter → newline is handled natively by the kitty keyboard protocol
+    // (vtExtensions.kittyKeyboard above), so no custom key handler is needed.
 
     window.cc
       .termOpen(termKey, { sessionId, pid, cwd, resume, cols: term.cols, rows: term.rows })
