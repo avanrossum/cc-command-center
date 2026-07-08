@@ -185,6 +185,7 @@ function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: str
   })
   p.onExit(({ exitCode }) => {
     term.exited = true
+    pendingChildren.delete(p.pid) // a child that died before adoption: drop its intent
     win?.webContents.send('term:exit', { key: term.key, code: exitCode })
   })
   return term
@@ -268,8 +269,17 @@ interface PendingChild {
   parentSessionId: string
   type: 'blocking' | 'tangential'
   note?: string
+  at: number
 }
+// Keyed by the child's pid. Entries expire so a child that dies before adoption
+// can't mislink an unrelated process that later reuses its pid.
 const pendingChildren = new Map<number, PendingChild>()
+const PENDING_TTL_MS = 60_000
+
+function findTermByPid(pid: number): Term | undefined {
+  for (const t of terminals.values()) if (t.pty.pid === pid) return t
+  return undefined
+}
 
 function spawnChild(
   parentSessionId: string,
@@ -278,14 +288,46 @@ function spawnChild(
   note?: string,
 ): number {
   const pid = launchSession(cwd)
-  pendingChildren.set(pid, { parentSessionId, type, note: note?.trim() || undefined })
+  pendingChildren.set(pid, { parentSessionId, type, note: note?.trim() || undefined, at: Date.now() })
   return pid
 }
 
+// Best-effort deliver a handoff note as the child's first message. Waits until
+// the child has actually painted output (its input is up) before pasting — the
+// session-id file is written very early in startup, well before Ink is ready.
+function deliverHandoffNote(childPid: number, note: string): void {
+  const start = Date.now()
+  const tryDeliver = (): void => {
+    const term = findTermByPid(childPid)
+    if (!term || term.exited) return
+    if (term.buffer.length > 200 || Date.now() - start > 6000) {
+      try {
+        term.pty.write(`\x1b[200~${note}\x1b[201~`) // bracketed paste (Ink needs the envelope)
+        setTimeout(() => {
+          try {
+            term.pty.write('\r') // separate CR submits; a raw CR alone does not
+          } catch {
+            /* gone */
+          }
+        }, 400)
+      } catch {
+        /* gone */
+      }
+      return
+    }
+    setTimeout(tryDeliver, 300)
+  }
+  setTimeout(tryDeliver, 400)
+}
+
 // Once a pending child has been adopted (has a session id), wire the typed edge
-// to its parent and best-effort deliver the handoff note as its first message.
+// to its parent and best-effort deliver the handoff note.
 function reconcilePendingChildren(sessions: LiveSession[]): void {
   if (pendingChildren.size === 0) return
+  const now = Date.now()
+  for (const [pid, pend] of pendingChildren) {
+    if (now - pend.at > PENDING_TTL_MS) pendingChildren.delete(pid)
+  }
   for (const s of sessions) {
     if (!s.sessionId) continue
     const pend = pendingChildren.get(s.pid)
@@ -299,23 +341,7 @@ function reconcilePendingChildren(sessions: LiveSession[]): void {
       // unlinked rather than letting the poll throw.
       console.error('[main] link spawned child failed', e)
     }
-    const term = terminals.get(`new:${s.pid}`) || terminals.get(s.sessionId)
-    if (pend.note && term && !term.exited) {
-      // Bracketed paste, then a separate CR to submit (Claude's Ink input needs
-      // the paste envelope; a raw CR alone does not submit).
-      try {
-        term.pty.write(`\x1b[200~${pend.note}\x1b[201~`)
-        setTimeout(() => {
-          try {
-            term.pty.write('\r')
-          } catch {
-            /* terminal gone */
-          }
-        }, 150)
-      } catch {
-        /* terminal gone */
-      }
-    }
+    if (pend.note) deliverHandoffNote(s.pid, pend.note)
   }
 }
 
