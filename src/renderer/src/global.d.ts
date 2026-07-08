@@ -39,6 +39,7 @@ declare global {
         note?: string,
       ) => Promise<{ pid: number; cwd: string } | null>
       pickFolder: () => Promise<string | null>
+      sessionSend: (sessionId: string, text: string) => Promise<{ ok: boolean; reason?: string }>
       stateGet: (key: string) => Promise<string | null>
       stateSet: (key: string, value: string) => void
       termOpen: (key: string, opts: OpenOpts) => Promise<boolean>

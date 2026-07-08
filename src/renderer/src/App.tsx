@@ -21,6 +21,7 @@ interface Session {
   categoryId: number | null
   theme: string | null
   dormant?: boolean
+  managed?: boolean
 }
 interface Category {
   id: number
@@ -146,6 +147,8 @@ export function App() {
     cwd: string
     note: string
   } | null>(null)
+  // The cross-session send composer (inject a prompt into another session).
+  const [send, setSend] = useState<Session | null>(null)
 
   useEffect(() => {
     window.cc.appVersion().then((v) => setVersion(v.full))
@@ -618,9 +621,14 @@ export function App() {
             setMenu(null)
             setSpawn({ parent: s, type, cwd: s.cwd, note: '' })
           }}
+          onSend={(s) => {
+            setMenu(null)
+            setSend(s)
+          }}
         />
       )}
       {spawn && <SpawnComposer spawn={spawn} setSpawn={setSpawn} />}
+      {send && <SendComposer target={send} setSend={setSend} />}
       {catEdit && <CategoryEditor edit={catEdit} setEdit={setCatEdit} />}
     </div>
   )
@@ -636,6 +644,7 @@ function ContextMenu({
   setEdge,
   onNewCat,
   onSpawn,
+  onSend,
 }: {
   menu: Menu
   snap: Snapshot
@@ -646,6 +655,7 @@ function ContextMenu({
   setEdge: (child: Session, parent: Session, type: MenuMode) => void
   onNewCat: () => void
   onSpawn: (s: Session, type: 'blocking' | 'tangential') => void
+  onSend: (s: Session) => void
 }) {
   const s = menu.session
   const hasParent = edgeByChild.has(s.sessionId)
@@ -684,6 +694,11 @@ function ContextMenu({
               </>
             )}
             <div className="menusep" />
+            {s.managed && (
+              <button className="menuitem" onClick={() => onSend(s)}>
+                Send prompt…
+              </button>
+            )}
             <button className="menuitem" onClick={() => onSpawn(s, 'blocking')}>
               Spawn blocking child…
             </button>
@@ -812,6 +827,66 @@ function SpawnComposer({
           </button>
           <button className="rbtn primary" onClick={submit}>
             Spawn {isBlocking ? 'blocking child' : 'offshoot'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SendComposer({ target, setSend }: { target: Session; setSend: (v: Session | null) => void }) {
+  const [text, setText] = useState('')
+  const [status, setStatus] = useState<{ ok: boolean; reason?: string } | null>(null)
+  const [sending, setSending] = useState(false)
+  const close = () => setSend(null)
+  const doSend = async () => {
+    if (!text.trim() || sending) return
+    setSending(true)
+    const res = await window.cc.sessionSend(target.sessionId, text.trim())
+    setSending(false)
+    setStatus(res)
+    if (res.ok) {
+      setText('')
+      setTimeout(close, 900)
+    }
+  }
+  const reasonText = (r?: string) =>
+    r === 'monitor-only'
+      ? 'monitor-only — open this session here first to send to it'
+      : r === 'write-failed'
+        ? 'write failed — the session may have exited'
+        : 'nothing to send'
+  return (
+    <div className="spawnscrim" onClick={close}>
+      <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
+        <div className="spawntitle">Send a prompt</div>
+        <div className="spawnsub">
+          injects into “{target.name ?? `pid ${target.pid}`}” as if typed — it runs on that session's
+          next turn. ⌘↩ to send.
+        </div>
+        <textarea
+          className="spawnnote"
+          autoFocus
+          value={text}
+          placeholder="Prompt to send…"
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) doSend()
+            if (e.key === 'Escape') close()
+          }}
+        />
+        <div className="spawnactions">
+          {status &&
+            (status.ok ? (
+              <span className="send-ok">✓ sent</span>
+            ) : (
+              <span className="send-fail">⚠ {reasonText(status.reason)}</span>
+            ))}
+          <button className="rbtn" onClick={close}>
+            Cancel
+          </button>
+          <button className="rbtn primary" onClick={doSend} disabled={sending || !text.trim()}>
+            {sending ? 'Sending…' : 'Send'}
           </button>
         </div>
       </div>

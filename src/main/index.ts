@@ -40,6 +40,7 @@ type EnrichedSession = LiveSession & {
   categoryId: number | null
   theme: string | null
   dormant?: boolean // registry node with no live process — resumable, survives restart
+  managed?: boolean // the app owns this session's PTY, so it can receive injected prompts
 }
 interface Snapshot {
   home: string
@@ -96,10 +97,12 @@ function snapshot(): Snapshot {
     return val
   }
 
+  const managedIds = managedSessionIds()
   const enriched: EnrichedSession[] = sessions.map((s) => ({
     ...s,
     categoryId: categoryOf(s.sessionId),
     theme: nodes.get(s.sessionId)?.theme ?? null,
+    managed: managedIds.has(s.sessionId),
   }))
 
   // Dormant nodes: sessions the user gave meaning to (categorized or placed in a
@@ -397,6 +400,13 @@ function managedSessionIds(): Set<string> {
   return ids
 }
 
+function findManagedTerm(sessionId: string): Term | undefined {
+  const direct = terminals.get(sessionId)
+  if (direct && !direct.exited) return direct
+  for (const t of terminals.values()) if (!t.exited && t.sessionId === sessionId) return t
+  return undefined
+}
+
 // Once a pending child has been adopted (has a session id), wire the typed edge
 // to its parent and best-effort deliver the handoff note.
 function reconcilePendingChildren(sessions: LiveSession[]): void {
@@ -589,6 +599,20 @@ ipcMain.handle(
     return { pid: spawnChild(parentSessionId, cwd, type, note), cwd }
   },
 )
+// Cross-session send: inject a prompt into another managed session. Returns a
+// delivery result the UI surfaces (sent / can't reach a monitor-only session).
+ipcMain.handle('session:send', (_e, sessionId: string, text: string) => {
+  if (!sessionId || !text?.trim()) return { ok: false, reason: 'empty' }
+  const t = findManagedTerm(sessionId)
+  if (!t) return { ok: false, reason: 'monitor-only' } // not open under management here
+  try {
+    injectPrompt(t, text.trim())
+    return { ok: true }
+  } catch {
+    return { ok: false, reason: 'write-failed' }
+  }
+})
+
 // Pick a folder without launching anything (used by the spawn-child composer).
 ipcMain.handle('dialog:pickFolder', async () => {
   if (!win) return null

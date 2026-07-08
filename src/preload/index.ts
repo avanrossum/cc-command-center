@@ -56,6 +56,8 @@ contextBridge.exposeInMainWorld('cc', {
     note?: string,
   ) => ipcRenderer.invoke('session:spawnChild', parentSessionId, cwd, type, note),
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
+  sessionSend: (sessionId: string, text: string) =>
+    ipcRenderer.invoke('session:send', sessionId, text) as Promise<{ ok: boolean; reason?: string }>,
 
   // workspace state (resume-on-restart)
   stateGet: (key: string) => ipcRenderer.invoke('state:get', key),
