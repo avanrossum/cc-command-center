@@ -100,3 +100,29 @@ This is the inverse of the earlier "what causes a session to drop from the list?
 3. **Graceful failure:** if a resume does fail, paint a friendly in-pane message + a "start fresh" button instead of raw stderr + `[session exited: 1]`.
 4. **Honest tag:** only show "original keeps running" when the original PID is actually alive.
 5. **General GC:** a way to remove any node from the list, and consider sweeping stale `sessions/*.json` for dead pids.
+
+---
+
+## Q5 — Clicking a session forks a duplicate "tracked" copy (list fills with dupes)
+
+**Reported:** 2026-07-07 (screenshot: `auto-ceo` ×3, all live). **Status:** open; same "session-list truth & hygiene" family as [Q4]. **More active than Q4** — it worsens the list on every click and spawns real duplicate `claude` processes, so it likely deserves priority.
+
+**Symptom.** Clicking a session in the nav adds another identical row (three `auto-ceo`, same cwd, all green). Happens even when only viewing — "even if you don't take over."
+
+**Root cause** (`App.tsx openSession` → `src/main/index.ts openTerminal`):
+1. Clicking a row calls `openSession(s)` with `resume: true`, which makes `TerminalView` call `term:open` with resume → main spawns **`claude --resume <sessionId>` as a brand-new process with a new pid.**
+2. That resumed copy writes its **own** `~/.claude/sessions/<newpid>.json` under the **same sessionId**. Now two files (original pid + copy pid) share one sessionId.
+3. `scanLiveSessions()` lists **per pid** with **no dedup by sessionId**, so the same conversation appears as two rows.
+4. Close (✕) kills the managed copy but not the original; reopening forks again (new pid → new row). The duplicate rows are themselves clickable and fork further — it compounds.
+
+Net: two problems. (a) **Viewing forks a managed copy at all** — should a click fork a session, or just select/preview it? (b) **The list never dedupes by sessionId.**
+
+**Fix path** (ties to Phase 3 adoption + Phase 4 resume/attach):
+1. **Dedup the list by sessionId** — never show one conversation twice; collapse the original + the managed copy into a single row (prefer the app-managed pid when present). Safe: a sessionId is unique per conversation, so same id = same session.
+2. **Decide what a click does** (UX call): most likely select/preview + an explicit **"Resume under management"** action, so viewing never forks.
+3. **Idempotent resume** — track managed terminals by **sessionId**, not just the logical pid; if one already exists for that sessionId, re-attach instead of spawning another.
+4. **Attach-don't-fork when possible** — if the original PID is still alive (e.g. after an app-only restart), attach rather than `--resume` (Phase 4 already notes this).
+
+**Caution:** dedup *alone* only hides the extra rows — the extra `claude` processes still spawn and run in the background. The real fix is not forking on view + idempotent resume.
+
+> **Suggested ordering:** make "session-list truth & hygiene" (Q4 + Q5 together) the **first slice** of the next work session — it's what a tester hits immediately, and it's a natural front-half of Phase 3/4.
