@@ -42,6 +42,17 @@ interface Snapshot {
   edges: Edge[]
 }
 
+// Sessions the user explicitly removed. A ghost that is still "alive" but has no
+// transcript can't be dropped by deleting its node alone (the scan re-adopts it),
+// so we also keep this deny-list and filter it out of every snapshot.
+function getRemovedSet(): Set<string> {
+  try {
+    return new Set(JSON.parse(getAppState('removedSessions') || '[]') as string[])
+  } catch {
+    return new Set()
+  }
+}
+
 function snapshot(): Snapshot {
   let sessions: LiveSession[] = []
   try {
@@ -49,6 +60,8 @@ function snapshot(): Snapshot {
   } catch (e) {
     console.error('[main] scan error', e)
   }
+  const removed = getRemovedSet()
+  sessions = sessions.filter((s) => !removed.has(s.sessionId))
   for (const s of sessions) {
     if (s.sessionId) ensureNode(s.sessionId, { cwd: s.cwd, name: s.name, origin: 'adopted' })
   }
@@ -111,6 +124,7 @@ interface Term {
   exited: boolean
   sessionId?: string
   cwd: string
+  key: string // mutable: a new:<pid> terminal is rehomed to its session id on adoption
 }
 // Managed terminals keyed by a STABLE string key: the Claude session id for a
 // scanned session, or `new:<pid>` for a freshly-launched one not yet adopted.
@@ -152,6 +166,7 @@ function resolveClaude(): string {
 
 interface OpenOpts {
   sessionId?: string
+  pid?: number
   cwd: string
   resume: boolean
   cols: number
@@ -159,18 +174,17 @@ interface OpenOpts {
 }
 
 function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: string }): Term {
-  const term: Term = { pty: p, buffer: '', exited: false, sessionId: meta.sessionId, cwd: meta.cwd }
+  // Handlers read term.key (mutable) rather than the captured key, so a terminal
+  // rehomed from new:<pid> to its session id keeps routing correctly.
+  const term: Term = { pty: p, buffer: '', exited: false, sessionId: meta.sessionId, cwd: meta.cwd, key }
   terminals.set(key, term)
   p.onData((data) => {
-    const t = terminals.get(key)
-    if (!t) return
-    t.buffer = (t.buffer + data).slice(-BUFFER_CAP)
-    if (attachedKey === key) win?.webContents.send('term:data', { key, data })
+    term.buffer = (term.buffer + data).slice(-BUFFER_CAP)
+    if (attachedKey === term.key) win?.webContents.send('term:data', { key: term.key, data })
   })
   p.onExit(({ exitCode }) => {
-    const t = terminals.get(key)
-    if (t) t.exited = true
-    win?.webContents.send('term:exit', { key, code: exitCode })
+    term.exited = true
+    win?.webContents.send('term:exit', { key: term.key, code: exitCode })
   })
   return term
 }
@@ -180,6 +194,20 @@ function openTerminal(key: string, opts: OpenOpts): void {
   if (term?.exited) {
     terminals.delete(key) // the process died; re-spawn a fresh one below
     term = undefined
+  }
+  // A session launched in-app runs under a new:<pid> key. Once the scan adopts
+  // it and the user re-opens it by session id, rehome that live terminal instead
+  // of forking a second `claude --resume` (the Q5 duplicate, new-session path).
+  if (!term && opts.sessionId && opts.pid != null) {
+    const prior = terminals.get(`new:${opts.pid}`)
+    if (prior && !prior.exited) {
+      terminals.delete(`new:${opts.pid}`)
+      prior.key = key
+      prior.sessionId = opts.sessionId
+      terminals.set(key, prior)
+      if (attachedKey === `new:${opts.pid}`) attachedKey = key
+      term = prior
+    }
   }
   const fresh = !term
   // Q4 recovery: never blindly `claude --resume` a session whose transcript is
@@ -207,15 +235,13 @@ function openTerminal(key: string, opts: OpenOpts): void {
   }
   attachedKey = key
   // On a fresh spawn (e.g. first open after an app restart), paint the persisted
-  // scrollback from the last run before the resumed session repaints its screen.
+  // scrollback from the last run before the resumed session repaints. No marker
+  // line — it would otherwise be re-serialized into the next snapshot and stack
+  // up across restarts. (Restored content itself is still re-captured; that
+  // staleness is bounded by the 1000-line cap and is a known cosmetic limit.)
   if (fresh && opts.sessionId) {
     const sb = getScrollback(opts.sessionId)
-    if (sb) {
-      win?.webContents.send('term:data', {
-        key,
-        data: sb + '\r\n\x1b[90m— restored scrollback; resuming… —\x1b[0m\r\n',
-      })
-    }
+    if (sb) win?.webContents.send('term:data', { key, data: sb })
   }
   if (term.buffer) win?.webContents.send('term:data', { key, data: term.buffer }) // replay live buffer
 }
@@ -230,7 +256,7 @@ function launchSession(cwd: string, args: string[] = []): number {
   console.log(`[main] new session: spawned ${cmd} ${args.join(' ')} in ${cwd} pid=${p.pid}`)
   wireTerm(key, p, { cwd })
   attachedKey = key
-  win?.webContents.send('term:show', { key, name: 'new session', cwd })
+  win?.webContents.send('term:show', { key, pid: p.pid, name: 'new session', cwd })
   return p.pid
 }
 
@@ -397,6 +423,10 @@ ipcMain.handle('session:remove', (_e, sessionId: string) => {
   if (attachedKey === sessionId) attachedKey = null
   purgeDeadSessionFiles(sessionId)
   deleteNode(sessionId)
+  // Also deny-list it so an alive-but-transcript-gone ghost can't be re-adopted.
+  const set = getRemovedSet()
+  set.add(sessionId)
+  setAppState('removedSessions', JSON.stringify([...set]))
   pushSessions()
   return true
 })

@@ -2,6 +2,7 @@ export {}
 
 interface OpenOpts {
   sessionId?: string
+  pid?: number
   cwd: string
   resume: boolean
   cols: number
@@ -38,7 +39,9 @@ declare global {
       termClose: (key: string) => void
       onTermData: (cb: (p: { key: string; data: string }) => void) => () => void
       onTermExit: (cb: (p: { key: string; code: number }) => void) => () => void
-      onTermShow: (cb: (p: { key: string; name: string; cwd: string }) => void) => () => void
+      onTermShow: (
+        cb: (p: { key: string; pid?: number; name: string; cwd: string }) => void,
+      ) => () => void
       onTermRecover: (
         cb: (p: { key: string; sessionId: string; cwd: string }) => void,
       ) => () => void

@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 interface OpenOpts {
   sessionId?: string
+  pid?: number
   cwd: string
   resume: boolean
   cols: number
@@ -60,7 +61,8 @@ contextBridge.exposeInMainWorld('cc', {
   termClose: (key: string) => ipcRenderer.send('term:close', key),
   onTermData: (cb: (p: { key: string; data: string }) => void) => sub('term:data', cb),
   onTermExit: (cb: (p: { key: string; code: number }) => void) => sub('term:exit', cb),
-  onTermShow: (cb: (p: { key: string; name: string; cwd: string }) => void) => sub('term:show', cb),
+  onTermShow: (cb: (p: { key: string; pid?: number; name: string; cwd: string }) => void) =>
+    sub('term:show', cb),
   onTermRecover: (cb: (p: { key: string; sessionId: string; cwd: string }) => void) =>
     sub('term:recover', cb),
 })

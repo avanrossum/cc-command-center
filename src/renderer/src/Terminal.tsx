@@ -9,6 +9,7 @@ import '@xterm/xterm/css/xterm.css'
 interface Props {
   termKey: string
   sessionId?: string
+  pid?: number
   cwd: string
   resume: boolean
   themeName?: string | null
@@ -17,7 +18,7 @@ interface Props {
 // Hosts one live terminal. The PTY lives in the main process and keeps running
 // when this component unmounts (switching sessions) — main replays its buffered
 // scrollback on reattach, so we just create a fresh xterm and let main feed it.
-export function TerminalView({ termKey, sessionId, cwd, resume, themeName }: Props) {
+export function TerminalView({ termKey, sessionId, pid, cwd, resume, themeName }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
 
@@ -77,9 +78,11 @@ export function TerminalView({ termKey, sessionId, cwd, resume, themeName }: Pro
     })
     const onData = term.onData((d) => window.cc.termInput(termKey, d))
 
-    window.cc.termOpen(termKey, { sessionId, cwd, resume, cols: term.cols, rows: term.rows }).then(() => {
-      window.cc.termResize(termKey, term.cols, term.rows)
-    })
+    window.cc
+      .termOpen(termKey, { sessionId, pid, cwd, resume, cols: term.cols, rows: term.rows })
+      .then(() => {
+        window.cc.termResize(termKey, term.cols, term.rows)
+      })
 
     const ro = new ResizeObserver(() => {
       fit.fit()

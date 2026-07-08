@@ -96,7 +96,15 @@ function psProcess(pid: number, startedAt?: number): { command: string } | null 
 }
 
 export function hasTranscript(sessionId: string, cwd: string): boolean {
-  return findTranscript(sessionId, cwd) !== undefined
+  const p = findTranscript(sessionId, cwd)
+  if (!p) return false
+  // A 0-byte transcript resumes into "No conversation found" too — treat it as
+  // gone so the recovery path handles it instead of a doomed `claude --resume`.
+  try {
+    return fs.statSync(p).size > 0
+  } catch {
+    return false
+  }
 }
 
 // Delete the stale ~/.claude/sessions/*.json files for a session id whose

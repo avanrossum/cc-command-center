@@ -112,7 +112,7 @@ export function App() {
     const offSessions = window.cc.onSessions((s) => setSnap(s as Snapshot))
     const offShow = window.cc.onTermShow((p) => {
       setRecover(null)
-      setSelected({ key: p.key, cwd: p.cwd, name: p.name, resume: false })
+      setSelected({ key: p.key, pid: p.pid, cwd: p.cwd, name: p.name, resume: false })
     })
     const offRecover = window.cc.onTermRecover((p) => setRecover(p))
     return () => {
@@ -217,6 +217,26 @@ export function App() {
     if (selected) window.cc.termClose(selected.key)
     setSelected(null)
   }
+
+  // Reconcile an in-app launched session (key new:<pid>) to its adopted session
+  // id once the scan surfaces it: the row highlights, the theme picker persists,
+  // and re-opening re-attaches (main rehomes the terminal) instead of forking a
+  // duplicate resume.
+  useEffect(() => {
+    if (!selected || !selected.key.startsWith('new:')) return
+    const s = live.find((x) => x.pid === selected.pid && x.alive)
+    if (s) {
+      window.cc.stateSet('activeSessionId', s.sessionId)
+      setSelected({
+        key: s.sessionId,
+        pid: s.pid,
+        sessionId: s.sessionId,
+        cwd: s.cwd,
+        name: s.name ?? selected.name,
+        resume: false,
+      })
+    }
+  }, [live, selected]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Restore-on-launch: once the last-active session appears live, reopen it —
   // but only if the user hasn't already selected something this run.
@@ -372,6 +392,7 @@ export function App() {
                 key={selected.key}
                 termKey={selected.key}
                 sessionId={selected.sessionId}
+                pid={selected.pid}
                 cwd={selected.cwd}
                 resume={selected.resume}
                 themeName={selThemeName}
@@ -388,6 +409,7 @@ export function App() {
                       <button
                         className="rbtn primary"
                         onClick={() => {
+                          window.cc.stateSet('activeSessionId', '') // repointed once the fresh one adopts
                           window.cc.sessionStartFresh(recover.cwd)
                           window.cc.sessionRemove(recover.sessionId)
                           setRecover(null)
@@ -398,6 +420,7 @@ export function App() {
                       <button
                         className="rbtn"
                         onClick={() => {
+                          window.cc.stateSet('activeSessionId', '') // don't restore a removed session
                           window.cc.sessionRemove(recover.sessionId)
                           setSelected(null)
                           setRecover(null)
