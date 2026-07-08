@@ -78,13 +78,14 @@ export function TerminalView({ termKey, sessionId, pid, cwd, resume, themeName }
     })
     const onData = term.onData((d) => window.cc.termInput(termKey, d))
 
-    // Shift+Enter → insert a newline instead of submitting. xterm emits a bare
-    // CR for Enter regardless of Shift, which Claude reads as "send"; Claude
-    // treats LF as send too, so emit ESC+CR (what Meta/Option+Enter sends) —
-    // Claude's native "insert newline" signal — and swallow xterm's default.
+    // Shift+Enter → insert a newline instead of submitting. xterm drops the
+    // Shift and emits a bare CR (which Claude reads as "send"); LF and ESC+CR
+    // don't cleanly work either. So insert the newline the bulletproof way:
+    // bracketed-paste a single LF. Paste content is literal (no submit), the
+    // same mechanism that reliably injects multi-line prompts.
     term.attachCustomKeyEventHandler((e) => {
       if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey) {
-        window.cc.termInput(termKey, '\x1b\r')
+        window.cc.termInput(termKey, '\x1b[200~\n\x1b[201~')
         return false
       }
       return true
