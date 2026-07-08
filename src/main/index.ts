@@ -353,6 +353,21 @@ function spawnChild(
   return pid
 }
 
+// Type text into a session's input as if pasted, then submit. Claude's Ink input
+// needs the bracketed-paste envelope; a raw CR alone does not submit, so the CR
+// is sent separately after a beat. This is the transport for every cross-session
+// send (Channels injection is blocked in this environment).
+function injectPrompt(term: Term, text: string, crDelay = 150): void {
+  term.pty.write(`\x1b[200~${text}\x1b[201~`)
+  setTimeout(() => {
+    try {
+      term.pty.write('\r')
+    } catch {
+      /* terminal gone */
+    }
+  }, crDelay)
+}
+
 // Best-effort deliver a handoff note as the child's first message. Waits until
 // the child has actually painted output (its input is up) before pasting — the
 // session-id file is written very early in startup, well before Ink is ready.
@@ -362,23 +377,24 @@ function deliverHandoffNote(childPid: number, note: string): void {
     const term = findTermByPid(childPid)
     if (!term || term.exited) return
     if (term.buffer.length > 200 || Date.now() - start > 6000) {
-      try {
-        term.pty.write(`\x1b[200~${note}\x1b[201~`) // bracketed paste (Ink needs the envelope)
-        setTimeout(() => {
-          try {
-            term.pty.write('\r') // separate CR submits; a raw CR alone does not
-          } catch {
-            /* gone */
-          }
-        }, 400)
-      } catch {
-        /* gone */
-      }
+      injectPrompt(term, note, 400)
       return
     }
     setTimeout(tryDeliver, 300)
   }
   setTimeout(tryDeliver, 400)
+}
+
+// Sessions the app owns a live PTY for (keyed by session id or new:<pid>). Only
+// these can receive an injected prompt; adopted/external sessions are read-only.
+function managedSessionIds(): Set<string> {
+  const ids = new Set<string>()
+  for (const [k, t] of terminals) {
+    if (t.exited) continue
+    ids.add(k)
+    if (t.sessionId) ids.add(t.sessionId)
+  }
+  return ids
 }
 
 // Once a pending child has been adopted (has a session id), wire the typed edge
