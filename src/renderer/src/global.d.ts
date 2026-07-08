@@ -55,6 +55,7 @@ declare global {
       termOpen: (key: string, opts: OpenOpts) => Promise<boolean>
       termAttach: (key: string) => void
       termInput: (key: string, data: string) => void
+      termPasteImage: (key: string) => Promise<boolean>
       termResize: (key: string, cols: number, rows: number) => void
       termClose: (key: string) => void
       onTermData: (cb: (p: { key: string; data: string }) => void) => () => void

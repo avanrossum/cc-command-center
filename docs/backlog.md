@@ -8,6 +8,28 @@
 
 
 
+## Broadcast — scope + graph-aware quick-selects (user, 2026-07-08)
+
+Broadcast (the `SendComposer` checkbox fan-out) works well. Two enhancements the
+user flagged as roadmap:
+
+1. **Scope control.** The composer currently lists every managed live session
+   app-wide (`live.filter(s => s.managed && !s.dormant)`), but the user perceives
+   it as scoped to the current category/folder. Add an explicit, visible scope
+   toggle: **this category** (default) vs **all categories** — so the intent is
+   obvious and expandable rather than implicit.
+
+2. **Graph-aware quick-selects.** Buttons that select target sets from the edge
+   graph relative to the origin session:
+   - **All children** — every session with a typed edge whose parent is the origin
+     (one hop; consider a "descendants" variant for the whole subtree).
+   - **All siblings** — every session sharing the origin's parent, with a
+     toggle to **include / exclude the parent** itself.
+   These compute from `snap.edges` (child_id/parent_id). Big boon once the fleet
+   has real tree structure — "tell all my children to X", "sync the siblings."
+   Pairs naturally with the awareness bus (a parent broadcasting down its subtree)
+   and the future control agent (which could issue these fan-outs itself).
+
 ## Upgrade xterm.js to 6.1+ (kitty keyboard protocol → Shift+Enter newline) — ✅ DONE (on beta)
 
 **Done 2026-07-08 (v0.6.7):** bumped `@xterm/xterm` → `6.1.0-beta.288` + addon-webgl `0.20.0-beta.287`, addon-fit `0.12.0-beta.288`, addon-serialize `0.15.0-beta.288`, and set `vtExtensions: { kittyKeyboard: true }` on the terminal. xterm now answers Claude's keyboard-protocol negotiation and reports Shift+Enter as CSI-u (`\x1b[13;2u`) → Claude inserts a newline natively. Custom key handler removed. **On BETA packages** — the user opted in to unblock the reflex-level friction. **Follow-up:** move all four to stable 6.1 when it ships; watch for any beta regressions in WebGL rendering / fit / serialize (scrollback snapshots) / normal input + paste.

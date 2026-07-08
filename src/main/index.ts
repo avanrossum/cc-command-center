@@ -715,6 +715,22 @@ ipcMain.on('term:attach', (_e, key: string) => {
 ipcMain.on('term:input', (_e, key: string, data: string) => {
   terminals.get(key)?.pty.write(data)
 })
+// Cmd+V image support. Text paste is handled separately by the Edit-menu Paste
+// role (webContents.paste → xterm bracketed paste); here we cover IMAGES only:
+// when the clipboard holds one, forward a Ctrl+V so Claude Code pastes it.
+//
+// We send the kitty-protocol encoding of Ctrl+V — CSI-u `\x1b[118;5u` ('v'=118,
+// mod 5 = Ctrl) — NOT the legacy `\x16`. This app runs xterm with the kitty
+// keyboard protocol on (for Shift+Enter) and Claude Code negotiates it, so a real
+// in-terminal Ctrl+V produces exactly these bytes, and that path is confirmed to
+// image-paste. (Legacy `\x16` is the equivalent only if kitty is inactive.) We
+// never send this for a text-only clipboard, so text (via the menu role) never
+// double-pastes; a clipboard holding BOTH image and text pastes both, by design.
+ipcMain.handle('term:pasteImage', (_e, key: string) => {
+  if (clipboard.readImage().isEmpty()) return false
+  terminals.get(key)?.pty.write('\x1b[118;5u')
+  return true
+})
 ipcMain.on('term:resize', (_e, key: string, cols: number, rows: number) => {
   try {
     terminals.get(key)?.pty.resize(cols, rows)

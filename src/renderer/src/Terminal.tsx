@@ -85,6 +85,30 @@ export function TerminalView({ termKey, sessionId, pid, cwd, resume, themeName }
     // Shift+Enter → newline is handled natively by the kitty keyboard protocol
     // (vtExtensions.kittyKeyboard above), so no custom key handler is needed.
 
+    // Cmd+V pastes both text and images. TEXT is handled by the Edit-menu Paste
+    // role (webContents.paste → xterm bracketed paste), unchanged. For IMAGES we
+    // additionally forward a Ctrl+V (main writes the kitty-encoded sequence) when
+    // the clipboard holds one. Bare Cmd+V only — exclude Shift/Ctrl/Alt and key
+    // autorepeat — and only while the terminal is focused, so composer inputs are
+    // unaffected. Return true so the menu's text paste still runs; this matches the
+    // pre-existing keydown path (under the kitty protocol xterm also reports Cmd+V
+    // as CSI-u Super+v, which Claude Code ignores — that predates this handler, so
+    // returning true adds no new PTY output beyond the image Ctrl+V).
+    term.attachCustomKeyEventHandler((e) => {
+      if (
+        e.type === 'keydown' &&
+        e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.shiftKey &&
+        !e.repeat &&
+        (e.key === 'v' || e.key === 'V')
+      ) {
+        window.cc.termPasteImage(termKey).catch(() => {})
+      }
+      return true
+    })
+
     window.cc
       .termOpen(termKey, { sessionId, pid, cwd, resume, cols: term.cols, rows: term.rows })
       .then(() => {
