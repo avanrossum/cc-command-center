@@ -44,6 +44,12 @@ contextBridge.exposeInMainWorld('cc', {
 
   // sessions
   sessionNew: () => ipcRenderer.invoke('session:new'),
+  sessionStartFresh: (cwd: string) => ipcRenderer.invoke('session:startFresh', cwd),
+  sessionRemove: (sessionId: string) => ipcRenderer.invoke('session:remove', sessionId),
+
+  // workspace state (resume-on-restart)
+  stateGet: (key: string) => ipcRenderer.invoke('state:get', key),
+  stateSet: (key: string, value: string) => ipcRenderer.send('state:set', key, value),
 
   // terminals — keyed by a stable string (session id, or `new:<pid>`)
   termOpen: (key: string, opts: OpenOpts) => ipcRenderer.invoke('term:open', key, opts),
@@ -55,4 +61,6 @@ contextBridge.exposeInMainWorld('cc', {
   onTermData: (cb: (p: { key: string; data: string }) => void) => sub('term:data', cb),
   onTermExit: (cb: (p: { key: string; code: number }) => void) => sub('term:exit', cb),
   onTermShow: (cb: (p: { key: string; name: string; cwd: string }) => void) => sub('term:show', cb),
+  onTermRecover: (cb: (p: { key: string; sessionId: string; cwd: string }) => void) =>
+    sub('term:recover', cb),
 })

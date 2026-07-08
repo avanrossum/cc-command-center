@@ -27,6 +27,10 @@ declare global {
       themeSet: (sessionId: string, theme: string | null) => Promise<boolean>
       snapshotSave: (sessionId: string, data: string) => void
       sessionNew: () => Promise<{ pid: number; cwd: string } | null>
+      sessionStartFresh: (cwd: string) => Promise<{ pid: number; cwd: string } | null>
+      sessionRemove: (sessionId: string) => Promise<boolean>
+      stateGet: (key: string) => Promise<string | null>
+      stateSet: (key: string, value: string) => void
       termOpen: (key: string, opts: OpenOpts) => Promise<boolean>
       termAttach: (key: string) => void
       termInput: (key: string, data: string) => void
@@ -35,6 +39,9 @@ declare global {
       onTermData: (cb: (p: { key: string; data: string }) => void) => () => void
       onTermExit: (cb: (p: { key: string; code: number }) => void) => () => void
       onTermShow: (cb: (p: { key: string; name: string; cwd: string }) => void) => () => void
+      onTermRecover: (
+        cb: (p: { key: string; sessionId: string; cwd: string }) => void,
+      ) => () => void
     }
   }
 }

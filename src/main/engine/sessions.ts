@@ -14,7 +14,7 @@ export function slugForCwd(cwd: string): string {
   return cwd.replace(/[/.]/g, '-')
 }
 
-function findTranscript(sessionId: string, cwd: string): string | undefined {
+export function findTranscript(sessionId: string, cwd: string): string | undefined {
   const guess = path.join(PROJECTS_DIR, slugForCwd(cwd), `${sessionId}.jsonl`)
   if (fs.existsSync(guess)) return guess
   // Fallback: the slug guess can miss (odd cwd encodings), so scan project dirs
@@ -93,6 +93,37 @@ function psProcess(pid: number, startedAt?: number): { command: string } | null 
     if (!Number.isNaN(psEpoch) && Math.abs(psEpoch - startedAt) > START_TOLERANCE_MS) return null
   }
   return { command }
+}
+
+export function hasTranscript(sessionId: string, cwd: string): boolean {
+  return findTranscript(sessionId, cwd) !== undefined
+}
+
+// Delete the stale ~/.claude/sessions/*.json files for a session id whose
+// process is dead (PID-reuse-safe). Returns how many were removed. Files for a
+// still-alive pid are left alone. Used to permanently drop a terminated ghost
+// from the list (the scan re-adds anything whose file still exists).
+export function purgeDeadSessionFiles(sessionId: string): number {
+  let files: string[] = []
+  try {
+    files = fs.readdirSync(SESSIONS_DIR).filter((f) => f.endsWith('.json'))
+  } catch {
+    return 0
+  }
+  let removed = 0
+  for (const f of files) {
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8'))
+      if (j.sessionId !== sessionId) continue
+      if (psProcess(j.pid, j.startedAt) === null) {
+        fs.unlinkSync(path.join(SESSIONS_DIR, f))
+        removed++
+      }
+    } catch {
+      /* skip malformed / already-gone file */
+    }
+  }
+  return removed
 }
 
 // Enumerate every registered session, filter to the live ones (PID-reuse safe),

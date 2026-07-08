@@ -228,6 +228,12 @@ export function assignCategory(sessionId: string, categoryId: number | null): vo
   must().prepare('UPDATE node SET category_id=? WHERE session_id=?').run(categoryId, sessionId)
 }
 
+// Remove a node entirely (edges cascade via ON DELETE CASCADE). Used to drop a
+// terminated session from the list.
+export function deleteNode(sessionId: string): void {
+  must().prepare('DELETE FROM node WHERE session_id=?').run(sessionId)
+}
+
 export function getNodeMap(): Map<string, NodeRow> {
   // Deliberately excludes the scrollback blob — this runs every scan.
   const rows = must()

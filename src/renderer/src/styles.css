@@ -311,6 +311,66 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--term-bg);
+  position: relative;
+}
+
+/* ---- gone-session recovery overlay ---- */
+.recover {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(11, 13, 18, 0.82);
+  backdrop-filter: blur(2px);
+  padding: 24px;
+}
+.recovercard {
+  max-width: 420px;
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px 24px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+}
+.recovertitle {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text);
+}
+.recoversub {
+  margin-top: 8px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--dim);
+}
+.recoveractions {
+  margin-top: 18px;
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+.rbtn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--dim);
+  border-radius: 7px;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.rbtn:hover {
+  color: var(--text);
+  border-color: var(--dim2);
+}
+.rbtn.primary {
+  background: rgba(52, 211, 153, 0.14);
+  border-color: rgba(52, 211, 153, 0.4);
+  color: #7ee7b8;
+}
+.rbtn.primary:hover {
+  background: rgba(52, 211, 153, 0.22);
 }
 .termbar {
   display: flex;

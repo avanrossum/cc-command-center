@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { TerminalView } from './Terminal'
 import { THEMES, themeByName, DEFAULT_THEME_NAME } from './themes'
 
@@ -98,23 +98,36 @@ export function App() {
   // Instant theme feedback for the current terminal before the persisted value
   // round-trips back through the next snapshot. Cleared when the selection changes.
   const [themeOverride, setThemeOverride] = useState<{ key: string; name: string } | null>(null)
+  // A session whose transcript is gone: the pane shows a recovery card instead
+  // of a doomed `claude --resume`.
+  const [recover, setRecover] = useState<{ key: string; sessionId: string; cwd: string } | null>(null)
+  // Restore-on-launch: the last-active session id to reopen once it appears live.
+  const [pendingRestore, setPendingRestore] = useState<string | null>(null)
+  const restoredRef = useRef(false)
 
   useEffect(() => {
     window.cc.appVersion().then((v) => setVersion(v.full))
     window.cc.getSessions().then((s) => setSnap(s as Snapshot))
+    window.cc.stateGet('activeSessionId').then((id) => setPendingRestore(id))
     const offSessions = window.cc.onSessions((s) => setSnap(s as Snapshot))
-    const offShow = window.cc.onTermShow((p) =>
-      setSelected({ key: p.key, cwd: p.cwd, name: p.name, resume: false }),
-    )
+    const offShow = window.cc.onTermShow((p) => {
+      setRecover(null)
+      setSelected({ key: p.key, cwd: p.cwd, name: p.name, resume: false })
+    })
+    const offRecover = window.cc.onTermRecover((p) => setRecover(p))
     return () => {
       offSessions()
       offShow()
+      offRecover()
     }
   }, [])
 
-  // Drop the theme override when the selection changes, so a newly-opened
-  // terminal reflects its own persisted theme.
-  useEffect(() => setThemeOverride(null), [selected?.key])
+  // On selection change: drop the theme override (so a newly-opened terminal
+  // reflects its own persisted theme) and clear any stale recovery card.
+  useEffect(() => {
+    setThemeOverride(null)
+    setRecover(null)
+  }, [selected?.key])
 
   // Live sessions, deduped by session id: a resumed managed copy registers its
   // own ~/.claude/sessions/<pid>.json under the SAME session id, which would
@@ -189,7 +202,8 @@ export function App() {
     return [...cats, uncat].filter((g) => g.id !== null || g.rows.length > 0)
   }, [live, snap.categories, edgeByChild])
 
-  const openSession = (s: Session) =>
+  const openSession = (s: Session) => {
+    window.cc.stateSet('activeSessionId', s.sessionId) // remember for restore-on-launch
     setSelected({
       key: s.sessionId,
       pid: s.pid,
@@ -198,10 +212,27 @@ export function App() {
       name: s.name ?? `pid ${s.pid}`,
       resume: true,
     })
+  }
   const closeTerminal = () => {
     if (selected) window.cc.termClose(selected.key)
     setSelected(null)
   }
+
+  // Restore-on-launch: once the last-active session appears live, reopen it —
+  // but only if the user hasn't already selected something this run.
+  useEffect(() => {
+    if (restoredRef.current) return
+    if (selected) {
+      restoredRef.current = true
+      return
+    }
+    if (!pendingRestore) return
+    const s = live.find((x) => x.sessionId === pendingRestore && x.alive)
+    if (s) {
+      restoredRef.current = true
+      openSession(s)
+    }
+  }, [live, selected, pendingRestore]) // eslint-disable-line react-hooks/exhaustive-deps
   // The theme shown for the open terminal: the just-picked override (instant),
   // else the session's persisted theme, else Default.
   const selLive = selected ? live.find((s) => s.sessionId === selected.key) : undefined
@@ -345,6 +376,39 @@ export function App() {
                 resume={selected.resume}
                 themeName={selThemeName}
               />
+              {recover && recover.key === selected.key && (
+                <div className="recover">
+                  <div className="recovercard">
+                    <div className="recovertitle">This conversation no longer exists</div>
+                    <div className="recoversub">
+                      Its transcript was deleted or pruned, so it can’t be resumed. Anything above is
+                      the last scrollback snapshot we saved.
+                    </div>
+                    <div className="recoveractions">
+                      <button
+                        className="rbtn primary"
+                        onClick={() => {
+                          window.cc.sessionStartFresh(recover.cwd)
+                          window.cc.sessionRemove(recover.sessionId)
+                          setRecover(null)
+                        }}
+                      >
+                        Start fresh here
+                      </button>
+                      <button
+                        className="rbtn"
+                        onClick={() => {
+                          window.cc.sessionRemove(recover.sessionId)
+                          setSelected(null)
+                          setRecover(null)
+                        }}
+                      >
+                        Remove from list
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </>
           ) : (
             <div className="placeholder">

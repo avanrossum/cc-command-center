@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import os from 'node:os'
 import { existsSync } from 'node:fs'
 import * as pty from 'node-pty'
-import { scanLiveSessions } from './engine/sessions'
+import { scanLiveSessions, hasTranscript, purgeDeadSessionFiles } from './engine/sessions'
 import type { LiveSession } from './engine/types'
 import { installAppMenu, setAboutPanel } from './about'
 import { APP_VERSION, BUILD_HASH, BUILD_TIME, FULL_VERSION } from '../shared/version'
@@ -22,6 +22,9 @@ import {
   setTheme,
   setScrollback,
   getScrollback,
+  deleteNode,
+  setAppState,
+  getAppState,
   type Category,
   type Edge,
 } from './registry'
@@ -179,6 +182,16 @@ function openTerminal(key: string, opts: OpenOpts): void {
     term = undefined
   }
   const fresh = !term
+  // Q4 recovery: never blindly `claude --resume` a session whose transcript is
+  // gone — it just prints "No conversation found" and exits 1. Paint whatever
+  // scrollback we saved and hand the pane a recovery affordance instead.
+  if (fresh && opts.resume && opts.sessionId && !hasTranscript(opts.sessionId, opts.cwd)) {
+    attachedKey = key
+    const sb = getScrollback(opts.sessionId)
+    if (sb) win?.webContents.send('term:data', { key, data: sb })
+    win?.webContents.send('term:recover', { key, sessionId: opts.sessionId, cwd: opts.cwd })
+    return
+  }
   if (!term) {
     const cmd = resolveClaude()
     const args = opts.resume && opts.sessionId ? ['--resume', opts.sessionId] : []
@@ -362,6 +375,34 @@ ipcMain.handle('session:new', async () => {
   const cwd = r.filePaths[0]
   return { pid: launchSession(cwd), cwd }
 })
+// Start a fresh Claude session in a known cwd (used by the recovery affordance
+// when a session's transcript is gone).
+ipcMain.handle('session:startFresh', (_e, cwd: string) => {
+  if (!cwd) return null
+  return { pid: launchSession(cwd), cwd }
+})
+// Remove a terminated session from the list: kill any managed terminal, purge
+// its dead ~/.claude/sessions files, and drop the registry node.
+ipcMain.handle('session:remove', (_e, sessionId: string) => {
+  if (!sessionId) return false
+  const t = terminals.get(sessionId)
+  if (t) {
+    try {
+      t.pty.kill()
+    } catch {
+      /* already gone */
+    }
+    terminals.delete(sessionId)
+  }
+  if (attachedKey === sessionId) attachedKey = null
+  purgeDeadSessionFiles(sessionId)
+  deleteNode(sessionId)
+  pushSessions()
+  return true
+})
+// Workspace state (last-active session for restore-on-launch, etc.)
+ipcMain.handle('state:get', (_e, key: string) => getAppState(key))
+ipcMain.on('state:set', (_e, key: string, value: string) => setAppState(key, value))
 
 app.setName('Claude Command Center')
 
