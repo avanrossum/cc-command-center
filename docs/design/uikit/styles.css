@@ -1,0 +1,202 @@
+/* ============================================================================
+   Claude Command Center — design tokens & primitives
+   For MipYip, LLC · drop into src/renderer/src/styles.css
+   Replaces the §10 variables in the current build. React 19 + plain CSS.
+   Dark is the product; [data-theme="light"] is secondary. The terminal
+   surface (--cc-term-bg) is NEVER themed — the terminal is always dark.
+   ============================================================================ */
+
+:root {
+  /* ---- surfaces ---- */
+  --cc-bg:            #0e0d0b;   /* app background (warm graphite) */
+  --cc-surface:       #14120f;   /* panels, headers, menus */
+  --cc-surface-2:     #100f0d;   /* tree + terminal chrome */
+  --cc-rail:          #0c0b09;   /* category rail well */
+  --cc-term-bg:       #0b0d12;   /* terminal — cool near-black, unthemed */
+  --cc-border:        #2a2824;   /* hairline separators */
+  --cc-hairline:      #201e1a;   /* faintest internal rule */
+  --cc-fill-sel:      rgba(255,255,255,.055); /* selection fill (any row) */
+  --cc-fill-hover:    rgba(255,255,255,.03);  /* hover fill */
+
+  /* ---- text (4 tiers) ---- */
+  --cc-text:  #e7e3db;  /* primary — names, headings           15.2:1 AAA */
+  --cc-dim:   #9a9384;  /* secondary — labels                   6.4:1 AA  */
+  --cc-meta:  #8a8272;  /* cwd, ages — smallest readable         5.1:1 AA  */
+  --cc-faint: #6a6355;  /* index digits, decorative — NON-TEXT   3.3:1     */
+
+  /* ---- status (primary channel; always paired with shape/motion) ---- */
+  --cc-working:      #34d399;  /* filled circle, pulsing   10.1:1 */
+  --cc-waiting:      #60a5fa;  /* filled square + accent    7.7:1 */
+  --cc-waiting-perm: #60a5fa;  /* ringed square + "perm"    (shape-split) */
+  --cc-idle:         #6b7280;  /* filled circle, static     4.0:1 */
+  --cc-unknown:      #a78bfa;  /* hollow circle             7.2:1 */
+  --cc-blocked:      #e070c8;  /* magenta diamond           6.8:1 */
+
+  /* ---- typed edges + accent ---- */
+  --cc-edge-blocking:   #d0a35b;  /* solid + warm  (child gates parent) */
+  --cc-edge-tangential: #7d8698;  /* dotted + cool (offshoot) */
+  --cc-accent:          #34d399;  /* new-session, "on" states */
+  --cc-accent-soft:     #7ee7b8;
+
+  /* ---- category palette (rail/header only, never a status dot) ---- */
+  --cc-cat-gold:       #e2b34a;
+  --cc-cat-sky:        #4ac0e2;
+  --cc-cat-terracotta: #e2724a;
+  --cc-cat-violet:     #9b6ff0;
+  --cc-cat-raspberry:  #d14a9b;
+  --cc-cat-teal:       #2fb8a0;
+  --cc-cat-coral:      #e0625f;
+  --cc-cat-lime:       #9bbf4a;
+  --cc-cat-indigo:     #6d7cf0;
+  --cc-cat-none:       var(--cc-faint); /* Uncategorized */
+
+  /* ---- type ---- */
+  --cc-font-ui:   -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --cc-font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --cc-fs-display: 52px; /* 1.04 */
+  --cc-fs-h2:      27px; /* 1.1  */
+  --cc-fs-lg:      15px; /* 1.5  body/descriptions */
+  --cc-fs-md:      13px; /* category header, button */
+  --cc-fs-base:  12.5px; /* session row name — the workhorse */
+  --cc-fs-sm:      11px; /* mono: paths, beacon items */
+  --cc-fs-xs:      10px; /* mono: ages, uppercase labels */
+
+  /* ---- radius (sharp inside, soft only when floating) ---- */
+  --cc-r-0:   1px;  /* rows, rail cells, chrome, inputs */
+  --cc-r-sm:  6px;  /* buttons, chips, menus */
+  --cc-r-md:  9px;  /* cards */
+  --cc-r-win: 12px; /* window only */
+
+  /* ---- space (2px base grid) ---- */
+  --cc-s-1: 2px;  --cc-s-2: 4px;  --cc-s-3: 6px;  --cc-s-4: 8px;
+  --cc-s-5: 10px; --cc-s-6: 12px; --cc-s-7: 14px; --cc-s-8: 16px;
+  --cc-s-9: 20px; --cc-s-10: 24px;
+
+  /* ---- elevation (hairline first; shadow only when detached) ---- */
+  --cc-e-1: 0 8px 24px -6px rgba(0,0,0,.55);  /* menus, popovers */
+  --cc-e-2: 0 30px 60px -20px rgba(0,0,0,.7); /* window, about */
+
+  /* ---- motion ---- */
+  --cc-dur-fast: 120ms;  /* hover, fills */
+  --cc-dur-base: 180ms;  /* state changes */
+  --cc-dur-slow: 260ms;  /* category swap */
+  --cc-pulse:   2400ms;  /* working dot */
+  --cc-ease-out:   cubic-bezier(.2,.7,.3,1);
+  --cc-ease-inout: cubic-bezier(.4,0,.2,1);
+
+  /* ---- key dimensions ---- */
+  --cc-row-h:   38px;  /* session row */
+  --cc-rail-w:  68px;  /* category rail */
+  --cc-cell-h:  46px;  /* rail cell */
+  --cc-tab-h:   42px;  /* terminal tab */
+  --cc-beacon-h:58px;  /* beacon bar */
+  --cc-indent:  12px;  /* per tree level */
+}
+
+[data-theme="light"] {
+  --cc-bg:       #f5f3ee;
+  --cc-surface:  #fbfaf6;
+  --cc-surface-2:#f0ede6;
+  --cc-rail:     #eae7df;
+  /* --cc-term-bg unchanged — terminal stays dark */
+  --cc-border:   #dcd7cc;
+  --cc-hairline: #e7e3d9;
+  --cc-fill-sel: rgba(0,0,0,.05);
+  --cc-fill-hover: rgba(0,0,0,.03);
+
+  --cc-text:  #26231d;
+  --cc-dim:   #6a6459;
+  --cc-meta:  #847d6f;
+  --cc-faint: #a9a294;
+
+  /* status hues darken for AA on warm paper (≥4.5:1 on --cc-bg) */
+  --cc-working:      #0f9d68;
+  --cc-waiting:      #2563eb;
+  --cc-waiting-perm: #2563eb;
+  --cc-unknown:      #7c53e0;
+  --cc-blocked:      #c026a3;
+  --cc-edge-blocking:#a9741f;
+  --cc-edge-tangential:#5c6675;
+  --cc-accent:       #0f9d68;
+}
+
+/* ============================================================================
+   Keyframes — GPU-cheap (opacity + box-shadow only). Many may run at once.
+   ============================================================================ */
+@keyframes cc-pulse {           /* working dot — signature life-sign */
+  0%   { box-shadow: 0 0 0 0    rgba(52,211,153,.5); }
+  70%  { box-shadow: 0 0 0 6px  rgba(52,211,153,0);  }
+  100% { box-shadow: 0 0 0 0    rgba(52,211,153,0);  }
+}
+@keyframes cc-arrive {          /* one-shot when a session ENTERS waiting */
+  0%   { box-shadow: 0 0 0 0    rgba(96,165,250,.55); }
+  100% { box-shadow: 0 0 0 8px  rgba(96,165,250,0);   }
+}
+@keyframes cc-blink { 0%,49%{opacity:1} 50%,100%{opacity:0} } /* cursor */
+
+/* ============================================================================
+   Global a11y
+   ============================================================================ */
+:focus-visible {
+  outline: 2px solid var(--cc-waiting);
+  outline-offset: 2px;
+  border-radius: var(--cc-r-0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* status never depends on motion, so nothing is lost */
+  .cc-dot--working { animation: none !important; box-shadow: 0 0 0 1px rgba(52,211,153,.5) !important; }
+  * { transition-duration: 0ms !important; }
+}
+
+/* ============================================================================
+   Canonical primitives — starting CSS for the workhorse pieces.
+   Recreate the rest from the HTML kit + README redlines.
+   ============================================================================ */
+
+/* --- status dot: shape carries state, not just hue --- */
+.cc-dot            { width:8px; height:8px; flex:none; }
+.cc-dot--working   { border-radius:50%; background:var(--cc-working); animation:cc-pulse var(--cc-pulse) var(--cc-ease-out) infinite; }
+.cc-dot--waiting   { border-radius:2px;  background:var(--cc-waiting); }               /* square */
+.cc-dot--perm      { border-radius:2px;  background:var(--cc-waiting-perm); box-shadow:0 0 0 2px rgba(96,165,250,.3); }
+.cc-dot--idle      { border-radius:50%;  background:var(--cc-idle); }
+.cc-dot--unknown   { border-radius:50%;  border:1.6px solid var(--cc-unknown); box-sizing:border-box; background:transparent; } /* hollow */
+.cc-dot--blocked   { background:var(--cc-blocked); transform:rotate(45deg); }          /* diamond */
+
+/* --- session row: SELECTION and STATUS are separate channels --- */
+.cc-row {
+  display:flex; align-items:center; gap:var(--cc-s-4);
+  height:var(--cc-row-h); padding:0 var(--cc-s-7);
+  font:var(--cc-fs-base)/1 var(--cc-font-ui); color:var(--cc-text);
+  border-radius:var(--cc-r-0); cursor:pointer;
+}
+.cc-row:hover              { background:var(--cc-fill-hover); }
+.cc-row--selected          { background:var(--cc-fill-sel); }        /* selection = neutral fill */
+.cc-row--waiting           { box-shadow:inset 2.5px 0 0 var(--cc-waiting); } /* status = left bar */
+.cc-row--blocked           { box-shadow:inset 2.5px 0 0 var(--cc-blocked); background:rgba(224,112,200,.05); }
+.cc-row--selected.cc-row--waiting { background:var(--cc-fill-sel); box-shadow:inset 2.5px 0 0 var(--cc-waiting); }
+.cc-row__name              { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cc-row__age               { margin-left:auto; font:var(--cc-fs-xs) var(--cc-font-mono); color:var(--cc-meta); }
+.cc-row__cwd               { font:var(--cc-fs-xs) var(--cc-font-mono); color:var(--cc-meta);
+                             overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } /* elide mid-path */
+
+/* --- typed tree edges (solid vs dotted survives grayscale) --- */
+.cc-edge                   { font:var(--cc-fs-base) var(--cc-font-mono); }
+.cc-edge--blocking         { color:var(--cc-edge-blocking); }        /* └─  solid warm */
+.cc-edge--tangential       { color:var(--cc-edge-tangential); letter-spacing:-1px; } /* └╌ dotted cool */
+
+/* --- category rail cell: active mirrors the selected-row language --- */
+.cc-rail                   { width:var(--cc-rail-w); background:var(--cc-rail); border-right:1px solid var(--cc-border); }
+.cc-rail__cell             { position:relative; height:var(--cc-cell-h); display:flex; align-items:center; justify-content:center;
+                             font:700 var(--cc-fs-md) var(--cc-font-ui); cursor:pointer; }
+.cc-rail__cell--active     { background:var(--cc-fill-sel); }
+.cc-rail__cell--active::before { content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--cat-color, var(--cc-cat-terracotta)); }
+.cc-rail__cell--waiting::after { content:""; position:absolute; right:0; top:9px; bottom:9px; width:3px; border-radius:2px 0 0 2px; background:var(--cc-waiting); } /* right-edge waiting bar */
+
+/* --- new-session button --- */
+.cc-btn-new {
+  width:100%; padding:9px; border-radius:var(--cc-r-0);
+  background:transparent; border:1px solid var(--cc-accent);
+  color:var(--cc-accent-soft); font:600 var(--cc-fs-base) var(--cc-font-mono); cursor:pointer;
+}
+.cc-btn-new:hover { background:rgba(52,211,153,.1); }

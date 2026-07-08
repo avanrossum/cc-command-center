@@ -85,6 +85,11 @@ Riskiest-first. The two biggest unknowns (does the Claude TUI render cleanly thr
 
 **Goal.** Prove requirement 5 and the spool-drain path: close the app and reopen to the same layout, tree, and repainted panes.
 
+**Model refinement (2026-07-08, roadmap — not yet built).** Distinguish a session that was still *open* at quit from one the user *exited*:
+- **Open** (not exited, not removed) → the app **auto-resumes** its terminal on next launch (all previously-open sessions, not just the last-active one), and tracks a `last_interacted` timestamp (real user input/focus, distinct from the last file-scan time) so "how long since I actually touched this" is truthful.
+- **Exited** (the terminal was closed / `/exit`) or **removed** → marked *dead* → enters the **7-day dormant decay** (resumable on click, but not auto-resumed).
+Today only the *last-active* session auto-restores and every not-live node is treated identically as dormant; this refinement separates "carry my workspace back" from "let old sessions fade."
+
 **Deliverables.**
 - Scrollback capture via `@xterm/addon-serialize` (1000-line cap), captured on idle-debounce and on quit, stored in `scrollback_snapshot`.
 - Reconcile-then-relaunch: attach if the PID is still alive after a mere app-restart; otherwise `claude --resume <claude_session_id>`.
@@ -100,6 +105,8 @@ Riskiest-first. The two biggest unknowns (does the Claude TUI render cleanly thr
 ---
 
 ## Phase 5 — Managed-launch and cross-session send
+
+**Sequencing (2026-07-08).** The managed-launch half is largely done (＋New session, spawn-child with typed edge + handoff note, resume). The **cross-session send half is deferred to AFTER Phase 6** (UI shell + the Claude Design ui-kit lands first), per the user. When it resumes, the send surfaces are already designed (README "Planned surfaces": inject / broadcast / copy / handoff with `◷ queued` / `✓ delivered` / `⚠ failed`).
 
 **Goal.** Spawn under management, wire the channel path, and ship a verified send with a fallback.
 

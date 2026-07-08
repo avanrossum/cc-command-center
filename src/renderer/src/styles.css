@@ -1,12 +1,132 @@
+/* ============================================================================
+   Design tokens — Claude Design UI kit (CC Command Center, MipYip LLC).
+   Dark is the product; [data-theme="light"] is secondary. --cc-term-bg is
+   NEVER themed (the terminal is always dark).
+   ============================================================================ */
 :root {
-  --bg: #0f1115;
-  --panel: #161922;
-  --panel2: #1b1f2a;
-  --border: #262c3a;
-  --text: #e5e7eb;
-  --dim: #8b94a7;
-  --dim2: #5b6474;
-  --term-bg: #0b0d12;
+  /* surfaces */
+  --cc-bg: #0e0d0b;
+  --cc-surface: #14120f;
+  --cc-surface-2: #100f0d;
+  --cc-rail: #0c0b09;
+  --cc-term-bg: #0b0d12;
+  --cc-border: #2a2824;
+  --cc-hairline: #201e1a;
+  --cc-fill-sel: rgba(255, 255, 255, 0.055);
+  --cc-fill-hover: rgba(255, 255, 255, 0.03);
+
+  /* text (4 tiers) */
+  --cc-text: #e7e3db;
+  --cc-dim: #9a9384;
+  --cc-meta: #8a8272;
+  --cc-faint: #6a6355;
+
+  /* status (primary channel; always paired with shape/motion) */
+  --cc-working: #34d399;
+  --cc-waiting: #60a5fa;
+  --cc-waiting-perm: #60a5fa;
+  --cc-idle: #6b7280;
+  --cc-unknown: #a78bfa;
+  --cc-blocked: #e070c8;
+
+  /* typed edges + accent */
+  --cc-edge-blocking: #d0a35b;
+  --cc-edge-tangential: #7d8698;
+  --cc-accent: #34d399;
+  --cc-accent-soft: #7ee7b8;
+
+  /* category palette (rail/header only, never a status dot) */
+  --cc-cat-gold: #e2b34a;
+  --cc-cat-sky: #4ac0e2;
+  --cc-cat-terracotta: #e2724a;
+  --cc-cat-violet: #9b6ff0;
+  --cc-cat-raspberry: #d14a9b;
+  --cc-cat-teal: #2fb8a0;
+  --cc-cat-coral: #e0625f;
+  --cc-cat-lime: #9bbf4a;
+  --cc-cat-indigo: #6d7cf0;
+  --cc-cat-none: var(--cc-faint);
+
+  /* type */
+  --cc-font-ui: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --cc-font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+  --cc-fs-display: 52px;
+  --cc-fs-h2: 27px;
+  --cc-fs-lg: 15px;
+  --cc-fs-md: 13px;
+  --cc-fs-base: 12.5px;
+  --cc-fs-sm: 11px;
+  --cc-fs-xs: 10px;
+
+  /* radius */
+  --cc-r-0: 1px;
+  --cc-r-sm: 6px;
+  --cc-r-md: 9px;
+  --cc-r-win: 12px;
+
+  /* space (2px grid) */
+  --cc-s-1: 2px;
+  --cc-s-2: 4px;
+  --cc-s-3: 6px;
+  --cc-s-4: 8px;
+  --cc-s-5: 10px;
+  --cc-s-6: 12px;
+  --cc-s-7: 14px;
+  --cc-s-8: 16px;
+  --cc-s-9: 20px;
+  --cc-s-10: 24px;
+
+  /* elevation */
+  --cc-e-1: 0 8px 24px -6px rgba(0, 0, 0, 0.55);
+  --cc-e-2: 0 30px 60px -20px rgba(0, 0, 0, 0.7);
+
+  /* motion */
+  --cc-dur-fast: 120ms;
+  --cc-dur-base: 180ms;
+  --cc-dur-slow: 260ms;
+  --cc-pulse: 2400ms;
+  --cc-ease-out: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --cc-ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* key dimensions */
+  --cc-row-h: 38px;
+  --cc-rail-w: 68px;
+  --cc-cell-h: 46px;
+  --cc-tab-h: 42px;
+  --cc-beacon-h: 58px;
+  --cc-indent: 12px;
+}
+
+@keyframes cc-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5); }
+  70% { box-shadow: 0 0 0 6px rgba(52, 211, 153, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+}
+@keyframes cc-arrive {
+  0% { box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.55); }
+  100% { box-shadow: 0 0 0 8px rgba(96, 165, 250, 0); }
+}
+
+:focus-visible {
+  outline: 2px solid var(--cc-waiting);
+  outline-offset: 2px;
+  border-radius: var(--cc-r-0);
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; transition-duration: 0ms !important; }
+}
+
+/* Legacy variable aliases → new tokens: existing components adopt the warm
+   palette with no rewrite; new cockpit regions use --cc-* directly. */
+:root {
+  --bg: var(--cc-bg);
+  --panel: var(--cc-surface);
+  --panel2: var(--cc-surface-2);
+  --border: var(--cc-border);
+  --text: var(--cc-text);
+  --dim: var(--cc-dim);
+  --dim2: var(--cc-meta);
+  --term-bg: var(--cc-term-bg);
 }
 
 * {
@@ -40,7 +160,7 @@ body {
   padding: 10px 18px;
   padding-top: 28px;
   border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, #12151d, #0f1115);
+  background: linear-gradient(180deg, var(--cc-surface), var(--cc-bg));
   -webkit-app-region: drag;
   flex: none;
 }
@@ -57,7 +177,7 @@ body {
   font-family: ui-monospace, monospace;
   font-size: 10px;
   color: var(--dim2);
-  background: #0e1118;
+  background: var(--cc-surface-2);
   border: 1px solid var(--border);
   border-radius: 20px;
   padding: 1px 8px;
@@ -169,7 +289,7 @@ body {
   border-color: var(--dim2);
 }
 .newcatinput {
-  background: #0e1118;
+  background: var(--cc-surface-2);
   border: 1px solid #3355aa;
   color: var(--text);
   border-radius: 6px;
@@ -211,7 +331,7 @@ body {
   margin-left: auto;
   color: var(--dim2);
   font-variant-numeric: tabular-nums;
-  background: #0e1118;
+  background: var(--cc-surface-2);
   border: 1px solid var(--border);
   border-radius: 20px;
   padding: 0 7px;
@@ -235,7 +355,7 @@ body {
   align-items: center;
   gap: 9px;
   padding: 7px 10px;
-  border-bottom: 1px solid #1d222e;
+  border-bottom: 1px solid var(--cc-hairline);
   cursor: pointer;
 }
 .row:last-child {
@@ -466,8 +586,8 @@ body {
   right: 0;
   z-index: 41;
   min-width: 190px;
-  background: #1a1e28;
-  border: 1px solid #333b4d;
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
   border-radius: 9px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
   padding: 5px;
@@ -571,7 +691,7 @@ body {
   font-family: ui-monospace, monospace;
   font-size: 11px;
   color: var(--dim);
-  background: #0e1118;
+  background: var(--cc-surface-2);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 9px;
@@ -583,7 +703,7 @@ body {
   width: 100%;
   min-height: 76px;
   resize: vertical;
-  background: #0e1118;
+  background: var(--cc-surface-2);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 7px;
@@ -611,8 +731,8 @@ body {
   position: fixed;
   z-index: 41;
   min-width: 210px;
-  background: #1a1e28;
-  border: 1px solid #333b4d;
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
   border-radius: 9px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
   padding: 5px;

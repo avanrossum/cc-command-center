@@ -442,7 +442,7 @@ function createWindow(): void {
     width: 1180,
     height: 800,
     minWidth: 820,
-    backgroundColor: '#0f1115',
+    backgroundColor: '#0e0d0b',
     title: 'CC Command Center',
     icon: join(app.getAppPath(), 'resources/icon.png'),
     titleBarStyle: 'hiddenInset',

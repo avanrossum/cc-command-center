@@ -31,8 +31,8 @@ function aboutHtml(): string {
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
-    background: radial-gradient(120% 80% at 50% 0%, #171b26 0%, #0f1115 60%);
-    color: #e5e7eb;
+    background: radial-gradient(120% 80% at 50% 0%, #14120f 0%, #0e0d0b 60%);
+    color: #e7e3db;
     font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     display: flex; flex-direction: column; align-items: center;
@@ -50,15 +50,15 @@ function aboutHtml(): string {
   }
   .meta {
     font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-    font-size: 11px; color: #5b6474; line-height: 1.7; -webkit-user-select: text;
+    font-size: 11px; color: #6a6355; line-height: 1.7; -webkit-user-select: text;
   }
-  .rule { width: 64px; height: 1px; background: #262c3a; margin: 20px 0 18px; }
-  .by { font-size: 13px; color: #8b94a7; }
+  .rule { width: 64px; height: 1px; background: #2a2824; margin: 20px 0 18px; }
+  .by { font-size: 13px; color: #9a9384; }
   .by a, .links a { color: #9db4ff; text-decoration: none; }
   .by a:hover, .links a:hover { text-decoration: underline; }
   .links { margin-top: 8px; font-size: 12px; }
   .note {
-    margin-top: 18px; font-size: 11px; color: #5b6474; max-width: 280px;
+    margin-top: 18px; font-size: 11px; color: #6a6355; max-width: 280px;
   }
   .copy { margin-top: auto; padding-top: 18px; font-size: 11px; color: #4a5160; }
 </style></head>
@@ -87,7 +87,7 @@ export function openAbout(parent?: BrowserWindow | null): void {
     maximizable: false,
     fullscreenable: false,
     title: `About ${APP_TITLE}`,
-    backgroundColor: '#0f1115',
+    backgroundColor: '#0e0d0b',
     parent: parent ?? undefined,
     show: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
