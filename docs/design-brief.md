@@ -8,6 +8,20 @@ Read this whole document before designing. The two sections that most constrain 
 
 ---
 
+## How to read this brief — build status & design latitude
+
+This brief covers both **what exists today** and **where the product is going**, on purpose: we want the visual system designed around the target, not just the current build. Every component in §7 carries a build-status tag:
+
+- **[NOW]** — exists in code today (v0.1.0). Restyle / elevate it; the backend is real.
+- **[NEXT]** — near-term (roadmap Phase 6). **Not built yet** — design it ahead of engineering so we build to your design. Underlying infrastructure is partly in place.
+- **[LATER]** — a known future feature (Phases 7–8). Wireframe-level direction is enough; don't over-invest.
+
+Roadmap phases are in `docs/roadmap.md`. Do **not** assume a [NEXT]/[LATER] feature has working backend logic — you're designing the surface ahead of it. The current single-sidebar layout (§5.1) is [NOW]; the four-region cockpit (§5.2) is the [NEXT] target.
+
+**Design latitude — this is important.** Where this brief gives a constraint or a *current* value but not a *final* number, that decision is **yours** to make and return as a token: exact row heights, the blocked-state hue, motion durations/easings, icon forms, the spacing scale, precise beacon-bar layout. Treat a missing specific as license to decide, not a blocker to stall on. Return your decisions as CSS custom properties (§11) with a one-line rationale. The pixel values quoted in §3.3/§10/§13 are a factual snapshot of what's there now (your density budget and starting point), not a target to preserve. We would rather you decide and document than send back 20 clarifying questions — flag only genuine product ambiguities.
+
+---
+
 ## 1. What the product is
 
 Claude Command Center is a **single desktop window that manages many concurrent Claude Code CLI sessions**. A power user runs 10–25 `claude` sessions at once across different projects; today those are scattered across that many terminal windows ("window soup"), and it is impossible to see, at a glance, which ones are working, which are waiting for a human, and which are idle — or how they relate to each other.
@@ -32,7 +46,7 @@ It is a **cockpit for an operator running a fleet of agents**. The emotional tar
 
 1. **The terminal is the hero content.** The right-hand pane hosts a live `claude` TUI rendered by **xterm.js** (a canvas/WebGL terminal grid). You cannot restyle the terminal's *contents* — Claude's TUI paints its own colors, spinners, and boxes. You design the **chrome around** the terminal (the frame, header, tabs, borders, padding) and must ensure it never competes with or muddies terminal legibility. The terminal background is near-black (`#0b0d12`); app chrome should sit comfortably against it.
 2. **Dark-first, and it must coexist with terminal colors.** The chrome palette must not clash with the 16 ANSI colors a terminal emits. Avoid saturated backgrounds bleeding into the terminal area. A light theme is optional/secondary; dark is the product.
-3. **Density is real.** The sidebar/tree must stay readable and scannable at **20–30 sessions** across several categories with nesting. Row height, truncation, and status affordances must survive that density. Don't design for 5 rows.
+3. **Density is real.** The sidebar/tree must stay readable and scannable at **20–30 sessions** across several categories with nesting. Row height, truncation, and status affordances must survive that density. Don't design for 5 rows. *Current numbers as a starting point (yours to change): sidebar 340px wide; row ~34px tall (7px vertical padding, 13px name + 10px cwd on a second line); status dot 8px; tree indent 16px per level; category color dot 8px; count badge pill; UI text 13px, monospace metadata 10–11px. Treat these as the present density budget, not a target.*
 4. **Status legibility beats decoration.** Color is *the* status channel; spend the palette's contrast budget on making working/waiting/idle/blocked instantly distinguishable, including for the ~8% of users with color-vision deficiency (pair color with shape/position/motion, not color alone).
 5. **macOS-native feel, Electron reality.** Standard traffic-light window controls, `hiddenInset` title bar (the top bar is a draggable region), respects macOS conventions. Rendered with HTML/CSS in Chromium — anything CSS can do is available, but keep it GPU-cheap (see #6).
 6. **Performance / self-contained.** No runtime network calls for assets. Fonts must be bundleable (system fonts preferred: SF Pro / system-ui for UI, SF Mono / Menlo / `ui-monospace` for code and IDs). Motion must be cheap — many rows may animate (pulsing "working" dots). Only visible terminal panes hold WebGL contexts (a hard ~16-context cap), so the design can't assume many terminals painted at once.
@@ -103,7 +117,11 @@ The product is heading toward a **four-region cockpit**. Please design the targe
 - **Task tree:** as today but richer — collapse/expand with **worst-descendant status roll-up** on collapsed parents, a **blocked-parent banner**, and drag-to-reparent.
 - **Terminal region:** may host **multiple terminals as tabs** (or a split) rather than strictly one at a time. Design a tab/pane model that respects the WebGL "only visible panes are live" constraint.
 
-Please design both the beacon bar and the category rail even though they aren't built yet — they're the near-term direction and the visual system should be built around them.
+**States to cover for the two centerpiece regions** (enumerated so nothing's missed — the exact layout is your call):
+- **Beacon bar:** at-rest/calm (0 waiting, 0 blocked); a few (1–3) waiting/blocked shown as jumpable items; many (overflow — decide truncate vs. scroll vs. "+N more"); waiting vs. blocked visually distinct within the list; clicking an item jumps to that session and switches to its category.
+- **Category rail:** the set of categories with per-category waiting pip (present only when waiting > 0, or always — your call); selected vs. unselected; many categories (overflow behavior); zero-waiting-everywhere calm state; add-category affordance.
+
+Please design both even though they aren't built yet — they're the near-term direction and the visual system should be built around them.
 
 ## 6. Entity state matrix (design every state)
 
@@ -119,7 +137,7 @@ A session row currently shows: an optional tree connector, a **status dot**, the
 | **waiting** | waiting on the human (input or a permission prompt) | blue `#60a5fa` | **the attention state** — should read as "come here." Row has a left accent bar today. Highest-priority to surface. |
 | **idle** | done / stale, nothing happening | gray `#6b7280` | should recede. |
 | **unknown** | state can't be determined (parser/degraded) | purple `#a78bfa` | rare; a graceful "we're not sure" look, not an error. |
-| **blocked** *(planned)* | a parent whose blocking child is unfinished | — | needs its own treatment + a banner ("blocked, waiting on → schema-fix"). Distinct from idle. Design this. |
+| **blocked** *([NEXT], no code yet)* | a parent whose blocking child is unfinished | — | needs its own treatment + a banner ("blocked, waiting on → schema-fix"). Its hue is **your** deliverable; it must read distinctly from **idle** and must not be confused with the **amber blocking-edge** connector color. Design this. |
 
 Sub-states / modifiers to account for:
 - **waiting-permission vs waiting-input** *(planned, Phase 7):* a finer split of "waiting" — blocked on a permission dialog vs. asking a question. May want a distinct glyph/shade within the waiting family.
@@ -154,7 +172,7 @@ Each category has a name, a **color**, and a count. Personal / business / client
 
 ## 7. Component inventory (each needs a designed treatment)
 
-Existing (restyle / elevate):
+Existing — **[NOW], real in code** (restyle / elevate). Two of these straddle into [NEXT]: item 2's count pills grow into the full beacon bar, and item 10's term bar grows to host tabs + a theme swatch — design the [NOW] form and the [NEXT] evolution:
 1. **Top bar / brand** — pulsing status dot motif, wordmark, **version badge** (monospace pill, e.g. `0.1.0-63842`), draggable region.
 2. **Global summary → Beacon bar** — evolve today's count pills into the full global board (§5.2). Count pills currently: colored dot + `N working`, etc., dim when zero.
 3. **Status pill / count chip.**
@@ -169,13 +187,13 @@ Existing (restyle / elevate):
 12. **Placeholder / empty states** (§6.4).
 13. **About window** — small branded window: app name, full version + build hash + build time, "by MipYip, LLC" (link to https://mipyip.com), a source-repo link, a "automatic updates coming" note, copyright. Currently a dark card with a green pulse mark; you may give it a proper treatment. Keep it self-contained (no external assets).
 
-Planned (design now, build later):
-14. **Category rail** (§5.2).
-15. **Blocked-parent banner** + **collapsed roll-up** (§6.2).
-16. **Per-terminal theme swatch + picker** — the user assigns each terminal a color scheme (iTerm-style). Needs: a swatch/dropdown in the term bar, and a **small color cue on the sidebar row** so sessions are distinguishable by color in the list. Design the swatch, the picker, and the row cue. (~8 built-in schemes + user imports.)
-17. **Cross-session send affordances** — inject a prompt into another session, **broadcast** to many, **copy** text out, **share/handoff** a file + note to a child on spawn. Needs iconography and a delivered/queued/failed status language (an action that can be "queued", "delivered", or "failed" must look different). Also an optional **handoff-note** composer shown when spawning a child.
-18. **Keyboard command palette / "jump to next waiting"** — a keyboard-first navigation surface. Design a palette and clear focus/selection rings for full keyboard operation.
-19. **Multiple terminals** — tab bar or split for the terminal region.
+Planned — **no UI in code yet; design ahead of engineering.** Phase tags reference `docs/roadmap.md`:
+14. **[NEXT] Category rail** (§5.2) — Phase 6.
+15. **[NEXT] Blocked-parent banner** + **collapsed roll-up** (§6.2) — Phase 6 (also needs a "blocked" state the engine doesn't compute yet).
+16. **[NEXT] Per-terminal theme swatch + picker** — the user assigns each terminal a color scheme (iTerm-style). Needs: a swatch/dropdown in the term bar, and a **small color cue on the sidebar row** so sessions are distinguishable by color in the list — resolve how that cue coexists with the status dot (don't let it read as a second status). Design the swatch, the picker, and the row cue. (~8 built-in schemes + user `.itermcolors` imports.) Backlog spec: `docs/backlog.md` #1.
+17. **[NEXT] Cross-session send affordances** — inject a prompt into another session, **broadcast** to many, **copy** text out, **share/handoff** a file + note to a child on spawn. Needs iconography and a delivered/queued/failed status language (an action that can be "queued", "delivered", or "failed" must look different). Also an optional **handoff-note** composer shown when spawning a child. Phase 5. Decide where these live (term bar / context menu / a send panel) — your call, note the rationale.
+18. **[LATER] Keyboard command palette / "jump to next waiting"** — a keyboard-first navigation surface. Design a palette and clear focus/selection rings for full keyboard operation. Focus-ring style is a [NOW] concern (applies to today's rows/buttons too); the palette surface itself is Phase 6.
+19. **[LATER] Multiple terminals** — tab bar or split for the terminal region. State whether the model is tabs (one visible) or a split (several visible); tabs is the likely default given the WebGL visible-only constraint. Phase 6/8.
 
 ## 8. Interaction & navigation model
 
@@ -230,7 +248,7 @@ Deliver a system that drops into a React 19 + plain-CSS (custom properties) code
 7. **Iconography direction** — a small, coherent icon set (status, send/broadcast/copy/handoff, category, theme swatch, close, collapse). Line-based, monochrome-tintable, bundleable (SVG).
 8. **Motion spec** (§9).
 9. **The About window** treatment (§7.13), self-contained.
-10. **Accessibility notes** — contrast targets, CVD strategy, focus-visible treatment, minimum hit areas.
+10. **Accessibility, as concrete acceptance criteria** — a contrast table giving the WCAG ratio for every status/edge/text color against both `--term-bg` (`#0b0d12`) and `--bg` (`#0f1115`), meeting AA (≥ 4.5:1 for text, ≥ 3:1 for non-text/UI indicators); CVD simulations (protanopia / deuteranopia / tritanopia) demonstrating all coarse states stay distinguishable (color paired with shape/position/motion, not hue alone); `:focus-visible` treatment for keyboard nav; minimum hit areas.
 
 Format: whatever's most useful, but **CSS-variable tokens + annotated component redlines + a states matrix** are the highest-value artifacts for handing straight back to engineering. A Figma/visual kit is welcome alongside, but the tokens are what we integrate.
 
@@ -251,6 +269,11 @@ Format: whatever's most useful, but **CSS-variable tokens + annotated component 
   - `src/renderer/src/Terminal.tsx` — the xterm host (terminal pane).
   - `src/renderer/src/styles.css` — **all** styles/tokens (this is where your tokens land).
   - `src/main/about.ts` — the About window (self-contained HTML string).
+- **Example data for realistic mockups** (use these lengths/shapes, don't invent short ones):
+  - Session names: derived from the task, up to ~40 chars — e.g. `schema-migration-spike`, `client-acme-invoice-export`, `fix-webgl-context-leak`, or an unnamed session shown as `pid 48213`.
+  - Category names: up to ~24 chars — e.g. `Personal`, `MipYip`, `Client · Acme Corp`, `Client · Northwind`.
+  - cwds: home-relativized with `~`, up to ~60 chars, monospace, truncate on the left-important tail — e.g. `~/Developer/claude-command-center`, `~/clients/acme/web/apps/dashboard`.
+  - Ages: `12s`, `4m`, `3h`, `2d`. Counts per category: 1–12. Nesting: up to ~3 levels deep.
 - **Constraints recap:** self-contained assets only; GPU-cheap motion; only visible terminal panes are live (WebGL context cap ~16); density 20–30 sessions.
 
 ---
