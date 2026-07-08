@@ -15,6 +15,9 @@ function sub<T>(channel: string, cb: (payload: T) => void): () => void {
 }
 
 contextBridge.exposeInMainWorld('cc', {
+  // app
+  appVersion: () => ipcRenderer.invoke('app:version'),
+
   // status board
   getSessions: () => ipcRenderer.invoke('cc:getSessions'),
   onSessions: (cb: (snapshot: unknown) => void) => sub('cc:sessions', cb),

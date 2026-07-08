@@ -11,6 +11,7 @@ interface OpenOpts {
 declare global {
   interface Window {
     cc: {
+      appVersion: () => Promise<{ full: string; version: string; hash: string; time: string }>
       getSessions: () => Promise<unknown>
       onSessions: (cb: (snapshot: unknown) => void) => () => void
       catCreate: (name: string) => Promise<{ id: number; name: string; color: string }>

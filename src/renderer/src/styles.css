@@ -53,6 +53,17 @@ body {
   font-weight: 600;
   letter-spacing: 0.2px;
 }
+.ver {
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--dim2);
+  background: #0e1118;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 1px 8px;
+  -webkit-app-region: no-drag;
+  -webkit-user-select: text;
+}
 .pulse {
   width: 8px;
   height: 8px;

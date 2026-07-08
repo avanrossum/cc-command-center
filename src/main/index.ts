@@ -5,6 +5,8 @@ import { existsSync } from 'node:fs'
 import * as pty from 'node-pty'
 import { scanLiveSessions } from './engine/sessions'
 import type { LiveSession } from './engine/types'
+import { installAppMenu, setAboutPanel } from './about'
+import { APP_VERSION, BUILD_HASH, BUILD_TIME, FULL_VERSION } from '../shared/version'
 import {
   initRegistry,
   listCategories,
@@ -275,6 +277,12 @@ function createWindow(): void {
   })
 }
 
+ipcMain.handle('app:version', () => ({
+  full: FULL_VERSION,
+  version: APP_VERSION,
+  hash: BUILD_HASH,
+  time: BUILD_TIME,
+}))
 ipcMain.handle('cc:getSessions', () => snapshot())
 ipcMain.handle('cat:list', () => listCategories())
 ipcMain.handle('cat:create', (_e, name: string) => createCategory(name))
@@ -314,7 +322,11 @@ ipcMain.handle('session:new', async () => {
   return { pid: launchSession(cwd), cwd }
 })
 
+app.setName('Claude Command Center')
+
 app.whenReady().then(() => {
+  setAboutPanel()
+  installAppMenu(() => win)
   initRegistry(join(app.getPath('userData'), 'registry.db'))
   maybeSeed()
   createWindow()

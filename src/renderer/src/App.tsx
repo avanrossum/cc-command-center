@@ -87,8 +87,10 @@ export function App() {
   const [menu, setMenu] = useState<Menu | null>(null)
   const [newCat, setNewCat] = useState(false)
   const [newCatName, setNewCatName] = useState('')
+  const [version, setVersion] = useState('')
 
   useEffect(() => {
+    window.cc.appVersion().then((v) => setVersion(v.full))
     window.cc.getSessions().then((s) => setSnap(s as Snapshot))
     const offSessions = window.cc.onSessions((s) => setSnap(s as Snapshot))
     const offShow = window.cc.onTermShow((p) =>
@@ -195,6 +197,7 @@ export function App() {
         <div className="brand">
           <span className="pulse" />
           <span className="title">Claude Command Center</span>
+          {version && <span className="ver" title="version · build">{version}</span>}
         </div>
         <div className="summary">
           <Pill n={counts.working} label="working" color={STATE.working.color} />

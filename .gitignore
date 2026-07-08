@@ -6,6 +6,9 @@ out/
 dist/
 build/
 
+# Generated at build time (see scripts/gen-version.mjs)
+src/shared/version.ts
+
 # Logs
 *.log
 npm-debug.log*
