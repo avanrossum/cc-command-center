@@ -78,18 +78,13 @@ export function TerminalView({ termKey, sessionId, pid, cwd, resume, themeName }
     })
     const onData = term.onData((d) => window.cc.termInput(termKey, d))
 
-    // Shift+Enter → insert a newline instead of submitting. xterm drops the
-    // Shift and emits a bare CR (which Claude reads as "send"); LF and ESC+CR
-    // don't cleanly work either. So insert the newline the bulletproof way:
-    // bracketed-paste a single LF. Paste content is literal (no submit), the
-    // same mechanism that reliably injects multi-line prompts.
-    term.attachCustomKeyEventHandler((e) => {
-      if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey) {
-        window.cc.termInput(termKey, '\x1b[200~\n\x1b[201~')
-        return false
-      }
-      return true
-    })
+    // NOTE: Shift+Enter → newline is intentionally NOT handled here. xterm.js 6.0
+    // can't represent Shift+Enter distinctly (it drops the modifier and sends a
+    // bare CR); the correct signal is the kitty keyboard protocol (`\x1b[13;2u`),
+    // which only xterm.js 6.1+ supports. Every legacy byte we can inject (LF,
+    // ESC+CR, bracketed-paste LF) either submits or misbehaves once the buffer
+    // has text. So we leave Shift+Enter as a plain submit until a stable xterm
+    // 6.1 upgrade — see docs/backlog.md. Meanwhile Claude's `\`+Enter works.
 
     window.cc
       .termOpen(termKey, { sessionId, pid, cwd, resume, cols: term.cols, rows: term.rows })
