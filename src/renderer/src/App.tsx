@@ -630,7 +630,13 @@ export function App() {
         />
       )}
       {spawn && <SpawnComposer spawn={spawn} setSpawn={setSpawn} />}
-      {send && <SendComposer target={send} setSend={setSend} />}
+      {send && (
+        <SendComposer
+          origin={send}
+          managed={live.filter((s) => s.managed && !s.dormant)}
+          setSend={setSend}
+        />
+      )}
       {newSessionOpen && (
         <NewSessionComposer
           categories={snap.categories}
@@ -950,35 +956,51 @@ function NewSessionComposer({
   )
 }
 
-function SendComposer({ target, setSend }: { target: Session; setSend: (v: Session | null) => void }) {
+function SendComposer({
+  origin,
+  managed,
+  setSend,
+}: {
+  origin: Session
+  managed: Session[]
+  setSend: (v: Session | null) => void
+}) {
   const [text, setText] = useState('')
-  const [status, setStatus] = useState<{ ok: boolean; reason?: string } | null>(null)
+  const [targets, setTargets] = useState<Set<string>>(new Set([origin.sessionId]))
+  const [status, setStatus] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const close = () => setSend(null)
+  const toggle = (sid: string) =>
+    setTargets((prev) => {
+      const n = new Set(prev)
+      if (n.has(sid)) n.delete(sid)
+      else n.add(sid)
+      return n
+    })
   const doSend = async () => {
-    if (!text.trim() || sending) return
+    if (!text.trim() || targets.size === 0 || sending) return
     setSending(true)
-    const res = await window.cc.sessionSend(target.sessionId, text.trim())
+    const results = await Promise.all(
+      [...targets].map((sid) => window.cc.sessionSend(sid, text.trim())),
+    )
     setSending(false)
-    setStatus(res)
-    if (res.ok) {
+    const ok = results.filter((r) => r.ok).length
+    const fail = results.length - ok
+    setStatus(`✓ sent to ${ok}${fail ? ` · ${fail} failed` : ''}`)
+    if (fail === 0) {
       setText('')
-      setTimeout(close, 900)
+      setTimeout(close, 1000)
     }
   }
-  const reasonText = (r?: string) =>
-    r === 'monitor-only'
-      ? 'monitor-only — open this session here first to send to it'
-      : r === 'write-failed'
-        ? 'write failed — the session may have exited'
-        : 'nothing to send'
+  // origin first, then the other managed sessions you could also fan out to
+  const list = [origin, ...managed.filter((m) => m.sessionId !== origin.sessionId)]
   return (
     <div className="spawnscrim" onClick={close}>
       <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
         <div className="spawntitle">Send a prompt</div>
         <div className="spawnsub">
-          injects into “{target.name ?? `pid ${target.pid}`}” as if typed — it runs on that session's
-          next turn. ⌘↩ to send.
+          injects into the selected session(s) as if typed — runs on each one's next turn. ⌘↩ to
+          send.
         </div>
         <textarea
           className="spawnnote"
@@ -991,18 +1013,33 @@ function SendComposer({ target, setSend }: { target: Session; setSend: (v: Sessi
             if (e.key === 'Escape') close()
           }}
         />
+        <div className="spawnlabel">
+          Targets <span className="spawnopt">check multiple to broadcast</span>
+        </div>
+        <div className="send-targets">
+          {list.map((s) => (
+            <label key={s.sessionId} className="send-target">
+              <input
+                type="checkbox"
+                checked={targets.has(s.sessionId)}
+                onChange={() => toggle(s.sessionId)}
+              />
+              <span className={`cc-dot cc-dot--${s.state}`} />
+              <span className="st-name">{s.name ?? `pid ${s.pid}`}</span>
+            </label>
+          ))}
+        </div>
         <div className="spawnactions">
-          {status &&
-            (status.ok ? (
-              <span className="send-ok">✓ sent</span>
-            ) : (
-              <span className="send-fail">⚠ {reasonText(status.reason)}</span>
-            ))}
+          {status && <span className="send-ok">{status}</span>}
           <button className="rbtn" onClick={close}>
             Cancel
           </button>
-          <button className="rbtn primary" onClick={doSend} disabled={sending || !text.trim()}>
-            {sending ? 'Sending…' : 'Send'}
+          <button
+            className="rbtn primary"
+            onClick={doSend}
+            disabled={sending || !text.trim() || targets.size === 0}
+          >
+            {sending ? 'Sending…' : targets.size > 1 ? `Broadcast (${targets.size})` : 'Send'}
           </button>
         </div>
       </div>

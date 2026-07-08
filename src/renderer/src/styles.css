@@ -892,6 +892,33 @@ body {
   opacity: 0.45;
   cursor: default;
 }
+.send-targets {
+  max-height: 148px;
+  overflow-y: auto;
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-r-sm);
+  padding: 4px;
+}
+.send-target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: var(--cc-r-0);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.send-target:hover {
+  background: var(--cc-fill-hover);
+}
+.send-target input {
+  accent-color: var(--cc-accent);
+}
+.st-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .send-ok {
   margin-right: auto;
   font-size: 12px;
