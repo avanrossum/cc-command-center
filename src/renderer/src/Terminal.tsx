@@ -91,25 +91,12 @@ export function TerminalView({ termKey, sessionId, pid, cwd, resume, themeName }
     // no preventDefault, so the menu accelerator fires normally. (Returning true
     // let xterm consume Cmd+V/Cmd+Q under the kitty protocol — it sent a CSI-u
     // sequence and called preventDefault, typing a literal 'v' and blocking Cmd+Q.)
-    // Non-Cmd keys fall through (return true) so kitty Shift+Enter and Ctrl+V still
-    // work. Cmd+V additionally image-pastes when the clipboard holds an image —
-    // TEXT paste is the Edit-menu Paste role's job; bare Cmd+V only, skip repeat.
-    term.attachCustomKeyEventHandler((e) => {
-      if (e.metaKey) {
-        if (
-          e.type === 'keydown' &&
-          !e.ctrlKey &&
-          !e.altKey &&
-          !e.shiftKey &&
-          !e.repeat &&
-          (e.key === 'v' || e.key === 'V')
-        ) {
-          window.cc.termPasteImage(termKey).catch(() => {})
-        }
-        return false
-      }
-      return true
-    })
+    // The Edit-menu Paste role then handles Cmd+V for BOTH text and images: it
+    // fires webContents.paste → xterm sends a bracketed paste, and Claude Code
+    // pastes the clipboard image on it. So no extra image handling belongs here —
+    // an explicit Ctrl+V injection here just double-pasted the image. Non-Cmd keys
+    // fall through (return true) so kitty Shift+Enter and Ctrl+V still work.
+    term.attachCustomKeyEventHandler((e) => !e.metaKey)
 
     window.cc
       .termOpen(termKey, { sessionId, pid, cwd, resume, cols: term.cols, rows: term.rows })
