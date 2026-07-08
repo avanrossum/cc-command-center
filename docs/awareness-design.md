@@ -28,7 +28,14 @@ Every primitive already exists: read (transcript tail), write (inject), address 
 - **C1 · Tree edges only** — parent↔child (blocking) links, matching the hierarchy model.
 - **C2 · Any managed session → any** — full mesh; the edge graph is just the default address book.
 
-## Recommendation
+## DECISIONS (user, 2026-07-08) — build to these
+- **Transport = A2 filesystem mailbox.** Env `CC_OUTBOX`/`CC_INBOX`/`CC_PEER` on managed launch; session writes/reads message files with native Write/Bash; app watches.
+- **Autonomy = B2 autonomous within a trusted pair.** You **bless a link once**; thereafter messages flow **without per-message approval** — but every hop is **logged and interruptible**, with a global kill switch. (Not approve-each.)
+- **Scope = C1 tree edges by DEFAULT, C2 overridable.** Route parent↔child by default, but the user can add explicit any→any links ("be disorganized") — trust is per-link regardless.
+
+Implication: the safety model is **trust-gate (bless the link) + full log + loop guard + kill switch**, not per-message approval. The message log / transparency surface is therefore *mandatory*, not optional.
+
+## Recommendation (superseded by the decisions above; kept for context)
 Start minimal and safe: **A2 (mailbox) + B1 (approve-each) + C1 (tree edges)** as slice 1 — a child writes to its outbox, the app routes to the parent, surfaces it for approval, and delivers when the parent is idle/waiting. Prove the loop end-to-end with a human gate, then relax autonomy (B2) and widen scope (C2) once trusted. This is also the exact substrate the **control agent** (roadmap Future direction) would later drive — build it as tools the app exposes, so an agent can only do what a user could, all logged.
 
 ## Slice 1 (once decisions are made)
