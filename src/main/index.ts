@@ -1,7 +1,7 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, nativeImage } from 'electron'
 import { join } from 'node:path'
 import os from 'node:os'
-import { existsSync } from 'node:fs'
+import { existsSync, copyFileSync, mkdirSync } from 'node:fs'
 import * as pty from 'node-pty'
 import { scanLiveSessions, hasTranscript, purgeDeadSessionFiles } from './engine/sessions'
 import type { LiveSession } from './engine/types'
@@ -425,7 +425,8 @@ function createWindow(): void {
     height: 800,
     minWidth: 820,
     backgroundColor: '#0f1115',
-    title: 'Claude Command Center',
+    title: 'CC Command Center',
+    icon: join(app.getAppPath(), 'resources/icon.png'),
     titleBarStyle: 'hiddenInset',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -578,9 +579,40 @@ ipcMain.handle('session:remove', (_e, sessionId: string) => {
 ipcMain.handle('state:get', (_e, key: string) => getAppState(key))
 ipcMain.on('state:set', (_e, key: string, value: string) => setAppState(key, value))
 
-app.setName('Claude Command Center')
+app.setName('CC Command Center')
+
+// Electron derives userData from the app name, so a rename would point at a
+// fresh empty dir. Carry the existing registry across: if the new location has
+// no DB yet but the previous ("Claude Command Center") one does, copy it over.
+function migrateUserData(fromName: string): void {
+  try {
+    const dest = app.getPath('userData')
+    const src = join(app.getPath('appData'), fromName)
+    if (existsSync(join(dest, 'registry.db')) || !existsSync(join(src, 'registry.db'))) return
+    mkdirSync(dest, { recursive: true })
+    for (const f of ['registry.db', 'registry.db-wal', 'registry.db-shm']) {
+      const s = join(src, f)
+      if (existsSync(s)) copyFileSync(s, join(dest, f))
+    }
+    console.log(`[main] migrated userData from "${fromName}"`)
+  } catch (e) {
+    console.error('[main] userData migration failed', e)
+  }
+}
+
+function setDockIcon(): void {
+  if (process.platform !== 'darwin' || !app.dock) return
+  try {
+    const img = nativeImage.createFromPath(join(app.getAppPath(), 'resources/icon.png'))
+    if (!img.isEmpty()) app.dock.setIcon(img)
+  } catch (e) {
+    console.error('[main] dock icon failed', e)
+  }
+}
 
 app.whenReady().then(() => {
+  migrateUserData('Claude Command Center')
+  setDockIcon()
   setAboutPanel()
   installAppMenu(() => win)
   initRegistry(join(app.getPath('userData'), 'registry.db'))

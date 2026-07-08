@@ -1,7 +1,7 @@
 import { app, BrowserWindow, Menu, shell, type MenuItemConstructorOptions } from 'electron'
 import { APP_VERSION, BUILD_HASH, BUILD_BRANCH, BUILD_TIME, FULL_VERSION } from '../shared/version'
 
-const APP_TITLE = 'Claude Command Center'
+const APP_TITLE = 'CC Command Center'
 const COMPANY = 'MipYip, LLC'
 const COMPANY_URL = 'https://mipyip.com'
 // Private repository. Update this if the repo moves or is renamed. The link

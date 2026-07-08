@@ -296,7 +296,7 @@ export function App() {
       <header className="topbar">
         <div className="brand">
           <span className="pulse" />
-          <span className="title">Claude Command Center</span>
+          <span className="title">CC Command Center</span>
           {version && <span className="ver" title="version · build">{version}</span>}
         </div>
         <div className="summary">
@@ -565,6 +565,20 @@ function ContextMenu({
               >
                 Clear parent
               </button>
+            )}
+            {s.dormant && (
+              <>
+                <div className="menusep" />
+                <button
+                  className="menuitem danger"
+                  onClick={() => {
+                    window.cc.sessionRemove(s.sessionId)
+                    setMenu(null)
+                  }}
+                >
+                  Remove from list
+                </button>
+              </>
             )}
             <div className="menusep" />
             <button className="menuitem" onClick={onNewCat}>
