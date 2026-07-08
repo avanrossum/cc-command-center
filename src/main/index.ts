@@ -31,6 +31,7 @@ import {
 
 let win: BrowserWindow | null = null
 let pollTimer: NodeJS.Timeout | null = null
+const DORMANT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000 // dormant/resumable sessions age out after a week
 
 // ---------- session polling (status board) ----------
 type EnrichedSession = LiveSession & {
@@ -67,7 +68,9 @@ function snapshot(): Snapshot {
   const removed = getRemovedSet()
   sessions = sessions.filter((s) => !removed.has(s.sessionId))
   for (const s of sessions) {
-    if (s.sessionId) ensureNode(s.sessionId, { cwd: s.cwd, name: s.name, origin: 'adopted' })
+    // Skip --bg-spare processes: they're not real interactive sessions, and a
+    // node for one would resurface as a bogus dormant "resume" row once it dies.
+    if (s.sessionId && !s.isSpare) ensureNode(s.sessionId, { cwd: s.cwd, name: s.name, origin: 'adopted' })
   }
   reconcilePendingChildren(sessions)
   const nodes = getNodeMap()
@@ -82,6 +85,7 @@ function snapshot(): Snapshot {
   // survive a quit/restart and can be resumed. Uncategorized, edge-less dead
   // sessions are dropped to avoid clutter.
   const edges = getEdges()
+  const now = Date.now()
   const liveIds = new Set(sessions.map((s) => s.sessionId))
   const edgeIds = new Set<string>()
   for (const e of edges) {
@@ -91,6 +95,9 @@ function snapshot(): Snapshot {
   for (const [sid, node] of nodes) {
     if (liveIds.has(sid) || removed.has(sid)) continue
     if (node.category_id == null && !edgeIds.has(sid)) continue
+    // Recency gate: only recently-active sessions stay resumable, so the dormant
+    // list can't grow without bound as sessions accumulate in a categorized cwd.
+    if (node.last_seen && now - node.last_seen > DORMANT_MAX_AGE_MS) continue
     enriched.push({
       pid: 0,
       sessionId: sid,

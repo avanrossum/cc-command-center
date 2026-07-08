@@ -578,9 +578,11 @@ function ContextMenu({
             </div>
             {candidates.length === 0 && <div className="emptycat">no other sessions in this category</div>}
             {candidates.sort(bySort).map((p) => (
-              <button key={p.pid} className="menuitem" onClick={() => setEdge(s, p, menu.mode)}>
+              <button key={p.sessionId} className="menuitem" onClick={() => setEdge(s, p, menu.mode)}>
                 <span className="dot" style={{ background: STATE[p.state].color }} />
-                <span className="grow">{p.name ?? `pid ${p.pid}`}</span>
+                <span className="grow">
+                  {p.name ?? (p.dormant ? p.sessionId.slice(0, 8) : `pid ${p.pid}`)}
+                </span>
               </button>
             ))}
             <div className="menusep" />
