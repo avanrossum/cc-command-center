@@ -218,9 +218,19 @@ export function ensureNode(
       'UPDATE node SET cwd=COALESCE(?,cwd), name=COALESCE(?,name), last_seen=? WHERE session_id=?',
     ).run(info.cwd ?? null, info.name ?? null, now, sessionId)
   } else {
+    // Auto-categorize a brand-new session by folder: if another session in the
+    // same cwd is already categorized, inherit that category. Only at creation,
+    // so a later manual move to Uncategorized (or elsewhere) is never overridden.
+    let categoryId: number | null = null
+    if (info.cwd) {
+      const sib = d
+        .prepare('SELECT category_id FROM node WHERE cwd=? AND category_id IS NOT NULL LIMIT 1')
+        .get(info.cwd) as { category_id: number } | undefined
+      categoryId = sib?.category_id ?? null
+    }
     d.prepare(
       'INSERT INTO node (session_id, cwd, name, category_id, origin, first_seen, last_seen) VALUES (?,?,?,?,?,?,?)',
-    ).run(sessionId, info.cwd ?? null, info.name ?? null, null, info.origin ?? 'adopted', now, now)
+    ).run(sessionId, info.cwd ?? null, info.name ?? null, categoryId, info.origin ?? 'adopted', now, now)
   }
 }
 
