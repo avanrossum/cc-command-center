@@ -930,6 +930,22 @@ body {
   color: #f0857d;
 }
 
+/* ---- transient toast ---- */
+.flash {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  color: var(--cc-text);
+  border-radius: var(--cc-r-sm);
+  padding: 8px 14px;
+  font-size: 12.5px;
+  box-shadow: var(--cc-e-1);
+}
+
 /* ---- context menu ---- */
 .menuscrim {
   position: fixed;

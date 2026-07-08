@@ -151,6 +151,12 @@ export function App() {
   const [send, setSend] = useState<Session | null>(null)
   // The New-session modal.
   const [newSessionOpen, setNewSessionOpen] = useState(false)
+  // Transient confirmation toast (copy-out, etc.).
+  const [flash, setFlash] = useState<string | null>(null)
+  const showFlash = (msg: string) => {
+    setFlash(msg)
+    window.setTimeout(() => setFlash((f) => (f === msg ? null : f)), 1600)
+  }
 
   useEffect(() => {
     window.cc.appVersion().then((v) => setVersion(v.full))
@@ -627,6 +633,12 @@ export function App() {
             setMenu(null)
             setSend(s)
           }}
+          onCopy={(s) => {
+            setMenu(null)
+            window.cc
+              .copyOutput(s.sessionId, s.cwd)
+              .then((r) => showFlash(r.ok ? `copied ${r.chars} chars` : 'no output to copy'))
+          }}
         />
       )}
       {spawn && <SpawnComposer spawn={spawn} setSpawn={setSpawn} />}
@@ -646,6 +658,7 @@ export function App() {
         />
       )}
       {catEdit && <CategoryEditor edit={catEdit} setEdit={setCatEdit} />}
+      {flash && <div className="flash">{flash}</div>}
     </div>
   )
 }
@@ -661,6 +674,7 @@ function ContextMenu({
   onNewCat,
   onSpawn,
   onSend,
+  onCopy,
 }: {
   menu: Menu
   snap: Snapshot
@@ -672,6 +686,7 @@ function ContextMenu({
   onNewCat: () => void
   onSpawn: (s: Session, type: 'blocking' | 'tangential') => void
   onSend: (s: Session) => void
+  onCopy: (s: Session) => void
 }) {
   const s = menu.session
   const hasParent = edgeByChild.has(s.sessionId)
@@ -710,6 +725,9 @@ function ContextMenu({
               </>
             )}
             <div className="menusep" />
+            <button className="menuitem" onClick={() => onCopy(s)}>
+              Copy last output
+            </button>
             {s.managed && (
               <button className="menuitem" onClick={() => onSend(s)}>
                 Send prompt…

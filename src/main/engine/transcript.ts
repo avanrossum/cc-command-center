@@ -112,3 +112,46 @@ export function deriveStateFromTranscript(path: string, now = Date.now()): Deriv
   }
   return { state: 'unknown', reason: 'no conversation record found', mtimeMs }
 }
+
+function extractText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .filter((b) => b && typeof b === 'object' && (b as { type?: string }).type === 'text')
+      .map((b) => (b as { text?: string }).text ?? '')
+      .join('')
+      .trim()
+  }
+  return ''
+}
+
+// The text of the session's most recent completed assistant message (skips
+// trailing tool_use-only records). Used by cross-session copy-out.
+export function readLastAssistantText(path: string): string | null {
+  let stat: fs.Stats
+  try {
+    stat = fs.statSync(path)
+  } catch {
+    return null
+  }
+  for (const bytes of [TAIL_BYTES, Math.min(stat.size, MAX_SCAN_BYTES)]) {
+    const buf = readTail(path, stat.size, bytes)
+    if (buf == null) return null
+    const lines = buf.split('\n')
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim()
+      if (!line) continue
+      let r: Record<string, unknown>
+      try {
+        r = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (!r || r.isSidechain || r.type !== 'assistant') continue
+      const text = extractText((r.message as { content?: unknown } | undefined)?.content)
+      if (text) return text
+    }
+    if (bytes >= stat.size) break
+  }
+  return null
+}

@@ -1,9 +1,15 @@
-import { app, BrowserWindow, ipcMain, dialog, nativeImage } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, nativeImage, clipboard } from 'electron'
 import { join } from 'node:path'
 import os from 'node:os'
 import { existsSync, copyFileSync, mkdirSync } from 'node:fs'
 import * as pty from 'node-pty'
-import { scanLiveSessions, hasTranscript, purgeDeadSessionFiles } from './engine/sessions'
+import {
+  scanLiveSessions,
+  hasTranscript,
+  purgeDeadSessionFiles,
+  findTranscript,
+} from './engine/sessions'
+import { readLastAssistantText } from './engine/transcript'
 import type { LiveSession } from './engine/types'
 import { installAppMenu, setAboutPanel } from './about'
 import { APP_VERSION, BUILD_HASH, BUILD_TIME, FULL_VERSION } from '../shared/version'
@@ -658,6 +664,17 @@ ipcMain.handle(
     return { pid: spawnChild(parentSessionId, cwd, type, note), cwd }
   },
 )
+// Copy-out: put the session's most recent assistant reply on the clipboard, so
+// it can be handed to another session (or anywhere).
+ipcMain.handle('session:copyOutput', (_e, sessionId: string, cwd: string) => {
+  const path = findTranscript(sessionId, cwd)
+  if (!path) return { ok: false }
+  const text = readLastAssistantText(path)
+  if (!text) return { ok: false }
+  clipboard.writeText(text)
+  return { ok: true, chars: text.length }
+})
+
 // Cross-session send: inject a prompt into another managed session. Returns a
 // delivery result the UI surfaces (sent / can't reach a monitor-only session).
 ipcMain.handle('session:send', (_e, sessionId: string, text: string) => {
