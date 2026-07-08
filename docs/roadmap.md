@@ -194,6 +194,20 @@ Riskiest-first. The two biggest unknowns (does the Claude TUI render cleanly thr
 
 ---
 
+## Phase 10 — Hierarchy model v2 (tangent decoupling + context extraction)
+
+**Goal.** The two edge types are not symmetric; make the model reflect that.
+
+- **Blocking child** — a hard edge, part of the parent's tree. DONE (pre-Phase-10): category is derived from the parent (blocking chain → root); a blocking child can't be independently categorized; categorizing a parent carries its blocking subtree.
+- **Tangential offshoot** — should NOT be a hard tree edge. It's an independent "spawned new idea": free to sit in any category, and it should not render *under* the parent as if it belongs to that tree. Replace the hard `edge` row for tangents with a **soft provenance link** ("spawned from X") that's informational only — surfaced if useful, but never gating or grouping. A blocking child rolls its parent back; a tangent never does and never inherits.
+- **Context without the transcript (the hard part).** A tangent must be pre-seeded with the *necessary* context from its spawner **without shipping the entire transcript.** Options to evaluate: an LLM-generated summary of the relevant slice, the parent authoring a short brief at spawn, a selected set of transcript records, or a retrieval step. This is the same primitive the handoff-note field wants and it feeds the Phase 9 messaging bus — solve it once.
+
+**Definition of done.**
+- Tangential offshoots are independent nodes (own category, not rendered inside the parent's blocking tree) with an optional soft "spawned from" provenance.
+- Spawning a tangent (or a child with a handoff note) carries a bounded, relevant context payload — never the full transcript — and the mechanism is shared with cross-session send.
+
+---
+
 ## v0 task breakdown (Phase 0 + first usable milestone)
 
 v0 = Phase 0 spike proven, then the smallest usable app: adopted sessions visible with correct coarse status, resumable on restart. This spans Phase 0 through Phase 4 with a minimal read-only UI.
