@@ -976,6 +976,10 @@ body {
 .cat-in:focus {
   border-color: var(--cc-waiting);
 }
+select.cat-in {
+  appearance: none;
+  cursor: pointer;
+}
 .cat-colors {
   display: flex;
   flex-wrap: wrap;

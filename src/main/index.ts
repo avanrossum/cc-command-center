@@ -61,6 +61,30 @@ function getRemovedSet(): Set<string> {
   }
 }
 
+// User-given session names, kept in app_state so the periodic scan (which reads
+// Claude's own generated title) can't clobber them.
+function getSessionNames(): Record<string, string> {
+  try {
+    return JSON.parse(getAppState('sessionNames') || '{}') as Record<string, string>
+  } catch {
+    return {}
+  }
+}
+function setSessionName(sessionId: string, name: string): void {
+  const m = getSessionNames()
+  m[sessionId] = name
+  setAppState('sessionNames', JSON.stringify(m))
+}
+
+// Split a flags string into argv, respecting simple quotes.
+function parseArgs(s: string): string[] {
+  const out: string[] = []
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(s))) out.push(m[1] ?? m[2] ?? m[3])
+  return out
+}
+
 function snapshot(): Snapshot {
   let sessions: LiveSession[] = []
   try {
@@ -76,6 +100,7 @@ function snapshot(): Snapshot {
     if (s.sessionId && !s.isSpare) ensureNode(s.sessionId, { cwd: s.cwd, name: s.name, origin: 'adopted' })
   }
   reconcilePendingChildren(sessions)
+  reconcilePendingNew(sessions)
   const nodes = getNodeMap()
   const edges = getEdges()
   const now = Date.now()
@@ -98,8 +123,10 @@ function snapshot(): Snapshot {
   }
 
   const managedIds = managedSessionIds()
+  const names = getSessionNames()
   const enriched: EnrichedSession[] = sessions.map((s) => ({
     ...s,
+    name: names[s.sessionId] || s.name,
     categoryId: categoryOf(s.sessionId),
     theme: nodes.get(s.sessionId)?.theme ?? null,
     managed: managedIds.has(s.sessionId),
@@ -125,7 +152,7 @@ function snapshot(): Snapshot {
       pid: 0,
       sessionId: sid,
       cwd: node.cwd ?? '',
-      name: node.name ?? undefined,
+      name: names[sid] || node.name || undefined,
       alive: false,
       isSpare: false,
       state: 'idle',
@@ -340,6 +367,16 @@ interface PendingChild {
 const pendingChildren = new Map<number, PendingChild>()
 const PENDING_TTL_MS = 60_000
 
+// A session created via the New-session modal, awaiting adoption to apply its
+// category / name / initial instructions.
+interface PendingNew {
+  categoryId: number | null
+  name?: string
+  instructions?: string
+  at: number
+}
+const pendingNew = new Map<number, PendingNew>()
+
 function findTermByPid(pid: number): Term | undefined {
   for (const t of terminals.values()) if (t.pty.pid === pid) return t
   return undefined
@@ -429,6 +466,28 @@ function reconcilePendingChildren(sessions: LiveSession[]): void {
       console.error('[main] link spawned child failed', e)
     }
     if (pend.note) deliverHandoffNote(s.pid, pend.note)
+  }
+}
+
+// Apply a New-session modal's category / name / initial instructions once the
+// session is adopted and has a session id.
+function reconcilePendingNew(sessions: LiveSession[]): void {
+  if (pendingNew.size === 0) return
+  const now = Date.now()
+  for (const [pid, p] of pendingNew) if (now - p.at > PENDING_TTL_MS) pendingNew.delete(pid)
+  for (const s of sessions) {
+    if (!s.sessionId) continue
+    const p = pendingNew.get(s.pid)
+    if (!p) continue
+    pendingNew.delete(s.pid)
+    try {
+      ensureNode(s.sessionId, { cwd: s.cwd, name: s.name })
+      if (p.categoryId != null) assignCategory(s.sessionId, p.categoryId)
+      if (p.name) setSessionName(s.sessionId, p.name)
+    } catch (e) {
+      console.error('[main] configure new session failed', e)
+    }
+    if (p.instructions) deliverHandoffNote(s.pid, p.instructions)
   }
 }
 
@@ -613,15 +672,46 @@ ipcMain.handle('session:send', (_e, sessionId: string, text: string) => {
   }
 })
 
-// Pick a folder without launching anything (used by the spawn-child composer).
+// Pick a folder without launching anything; remembers the last location so the
+// dialog reopens there instead of ~/ each time.
 ipcMain.handle('dialog:pickFolder', async () => {
   if (!win) return null
+  const last = getAppState('lastFolder') || undefined
   const r = await dialog.showOpenDialog(win, {
     properties: ['openDirectory', 'createDirectory'],
     title: 'Folder for the new session…',
+    defaultPath: last,
   })
-  return r.canceled ? null : (r.filePaths[0] ?? null)
+  if (r.canceled || !r.filePaths[0]) return null
+  setAppState('lastFolder', r.filePaths[0])
+  return r.filePaths[0]
 })
+
+// Create a session from the New-session modal: launch in cwd with flags, then
+// apply category / name / initial instructions once it's adopted.
+ipcMain.handle(
+  'session:create',
+  (
+    _e,
+    opts: {
+      cwd: string
+      flags?: string
+      categoryId?: number | null
+      name?: string
+      instructions?: string
+    },
+  ) => {
+    if (!opts?.cwd) return null
+    const pid = launchSession(opts.cwd, opts.flags ? parseArgs(opts.flags) : [])
+    pendingNew.set(pid, {
+      categoryId: opts.categoryId ?? null,
+      name: opts.name?.trim() || undefined,
+      instructions: opts.instructions?.trim() || undefined,
+      at: Date.now(),
+    })
+    return { pid, cwd: opts.cwd }
+  },
+)
 // Remove a terminated session from the list: kill any managed terminal, purge
 // its dead ~/.claude/sessions files, and drop the registry node.
 ipcMain.handle('session:remove', (_e, sessionId: string) => {

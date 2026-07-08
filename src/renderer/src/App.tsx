@@ -149,6 +149,8 @@ export function App() {
   } | null>(null)
   // The cross-session send composer (inject a prompt into another session).
   const [send, setSend] = useState<Session | null>(null)
+  // The New-session modal.
+  const [newSessionOpen, setNewSessionOpen] = useState(false)
 
   useEffect(() => {
     window.cc.appVersion().then((v) => setVersion(v.full))
@@ -457,7 +459,7 @@ export function App() {
         </nav>
 
         <aside className="treepane">
-          <button className="newsession" onClick={() => window.cc.sessionNew()}>
+          <button className="newsession" onClick={() => setNewSessionOpen(true)}>
             ＋ New session…
           </button>
           {newCat && (
@@ -629,6 +631,14 @@ export function App() {
       )}
       {spawn && <SpawnComposer spawn={spawn} setSpawn={setSpawn} />}
       {send && <SendComposer target={send} setSend={setSend} />}
+      {newSessionOpen && (
+        <NewSessionComposer
+          categories={snap.categories}
+          defaultCat={selectedCat}
+          home={snap.home}
+          close={() => setNewSessionOpen(false)}
+        />
+      )}
       {catEdit && <CategoryEditor edit={catEdit} setEdit={setCatEdit} />}
     </div>
   )
@@ -827,6 +837,112 @@ function SpawnComposer({
           </button>
           <button className="rbtn primary" onClick={submit}>
             Spawn {isBlocking ? 'blocking child' : 'offshoot'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function NewSessionComposer({
+  categories,
+  defaultCat,
+  home,
+  close,
+}: {
+  categories: Category[]
+  defaultCat: number | null
+  home: string
+  close: () => void
+}) {
+  const [name, setName] = useState('')
+  const [cat, setCat] = useState<number | null>(defaultCat)
+  const [cwd, setCwd] = useState('')
+  const [flags, setFlags] = useState('')
+  const [instructions, setInstructions] = useState('')
+  const pick = async () => {
+    const p = await window.cc.pickFolder()
+    if (p) setCwd(p)
+  }
+  const create = () => {
+    if (!cwd) return
+    window.cc.sessionCreate({
+      cwd,
+      flags: flags.trim() || undefined,
+      categoryId: cat,
+      name: name.trim() || undefined,
+      instructions: instructions.trim() || undefined,
+    })
+    close()
+  }
+  const shortCwd = home && cwd.startsWith(home) ? cwd.replace(home, '~') : cwd
+  return (
+    <div className="spawnscrim" onClick={close}>
+      <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
+        <div className="spawntitle">New session</div>
+        <div className="spawnsub">launches a managed Claude session and adopts it here.</div>
+
+        <div className="spawnlabel">
+          Name <span className="spawnopt">optional</span>
+        </div>
+        <input
+          className="cat-in"
+          autoFocus
+          value={name}
+          placeholder="e.g. schema-fix"
+          onChange={(e) => setName(e.target.value)}
+        />
+
+        <div className="spawnlabel">Category</div>
+        <select
+          className="cat-in"
+          value={cat ?? ''}
+          onChange={(e) => setCat(e.target.value === '' ? null : Number(e.target.value))}
+        >
+          <option value="">Uncategorized</option>
+          {categories.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+
+        <div className="spawnlabel">Folder</div>
+        <div className="spawnfolder">
+          <span className="spawncwd" title={cwd}>
+            {cwd ? shortCwd : 'choose a folder…'}
+          </span>
+          <button className="rbtn" onClick={pick}>
+            Choose…
+          </button>
+        </div>
+
+        <div className="spawnlabel">
+          Flags <span className="spawnopt">optional CLI args</span>
+        </div>
+        <input
+          className="cat-in"
+          value={flags}
+          placeholder="e.g. --model opus"
+          onChange={(e) => setFlags(e.target.value)}
+        />
+
+        <div className="spawnlabel">
+          Initial instructions <span className="spawnopt">optional — sent as the first message</span>
+        </div>
+        <textarea
+          className="spawnnote"
+          value={instructions}
+          placeholder="What should it start on?"
+          onChange={(e) => setInstructions(e.target.value)}
+        />
+
+        <div className="spawnactions">
+          <button className="rbtn" onClick={close}>
+            Cancel
+          </button>
+          <button className="rbtn primary" onClick={create} disabled={!cwd}>
+            Create session
           </button>
         </div>
       </div>

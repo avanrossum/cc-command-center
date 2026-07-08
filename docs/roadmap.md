@@ -223,6 +223,8 @@ Today only the *last-active* session auto-restores and every not-live node is tr
 
 **Hard requirement — transparency (the user flagged this).** The control agent's activity MUST be viewable: it lives as its own **visible** session (terminal + transcript) plus an **activity log of every tool-call/action it takes**, never a hidden actor. This is both the trust story and the acceptable-use story — human-viewable, human-approvable (an approve-gate on consequential actions), no covert automation, no rate-limit end-run.
 
+**It's a control surface, not a chat partner (user, 2026-07-08).** The user should be **discouraged, or outright prevented, from conversing with the control agent directly.** Interaction is by *directing and approving its actions on the fleet* — not a freeform chat box. This keeps it from degrading into an unmonitored "shadow assistant" the user offloads general work to (which would undercut the transparency/AUP story and blur it with just another session). The user talks to their *sessions*; the control agent is infrastructure that helps orchestrate them, surfaced and gated, not a Claude you chat with.
+
 **How it wires in.** The app exposes its fleet primitives to the agent as tools (an MCP surface or the app's own tool API): `list_sessions` / `read_session` / `send_to_session` / `spawn` / `set_edge` / `get_status`. Same capabilities the UI uses, so the agent can only do what a user could do here — and every action is surfaced. Depends on Phases 5 + 9 being solid first (reliable send + read + routing).
 
 ---

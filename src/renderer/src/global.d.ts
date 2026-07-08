@@ -30,6 +30,13 @@ declare global {
       themeSet: (sessionId: string, theme: string | null) => Promise<boolean>
       snapshotSave: (sessionId: string, data: string) => void
       sessionNew: () => Promise<{ pid: number; cwd: string } | null>
+      sessionCreate: (opts: {
+        cwd: string
+        flags?: string
+        categoryId?: number | null
+        name?: string
+        instructions?: string
+      }) => Promise<{ pid: number; cwd: string } | null>
       sessionStartFresh: (cwd: string) => Promise<{ pid: number; cwd: string } | null>
       sessionRemove: (sessionId: string) => Promise<boolean>
       sessionSpawnChild: (

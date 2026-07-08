@@ -47,6 +47,13 @@ contextBridge.exposeInMainWorld('cc', {
 
   // sessions
   sessionNew: () => ipcRenderer.invoke('session:new'),
+  sessionCreate: (opts: {
+    cwd: string
+    flags?: string
+    categoryId?: number | null
+    name?: string
+    instructions?: string
+  }) => ipcRenderer.invoke('session:create', opts),
   sessionStartFresh: (cwd: string) => ipcRenderer.invoke('session:startFresh', cwd),
   sessionRemove: (sessionId: string) => ipcRenderer.invoke('session:remove', sessionId),
   sessionSpawnChild: (
