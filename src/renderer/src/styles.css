@@ -315,13 +315,16 @@ body {
 }
 
 /* ---- gone-session recovery overlay ---- */
+/* Fixed + explicit z-index (like .menu) so it reliably sits above the WebGL
+   terminal canvas for hit-testing, not just paint. */
 .recover {
-  position: absolute;
+  position: fixed;
   inset: 0;
+  z-index: 45;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(11, 13, 18, 0.82);
+  background: rgba(11, 13, 18, 0.88);
   backdrop-filter: blur(2px);
   padding: 24px;
 }

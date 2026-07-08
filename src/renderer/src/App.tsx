@@ -398,12 +398,17 @@ export function App() {
                 themeName={selThemeName}
               />
               {recover && recover.key === selected.key && (
-                <div className="recover">
+                <div
+                  className="recover"
+                  onClick={(e) => {
+                    if (e.target === e.currentTarget) setRecover(null) // click-away to dismiss
+                  }}
+                >
                   <div className="recovercard">
                     <div className="recovertitle">This conversation no longer exists</div>
                     <div className="recoversub">
-                      Its transcript was deleted or pruned, so it can’t be resumed. Anything above is
-                      the last scrollback snapshot we saved.
+                      Its transcript was deleted or pruned, so it can’t be resumed. Pick up where it
+                      left off, or clear it out.
                     </div>
                     <div className="recoveractions">
                       <button
