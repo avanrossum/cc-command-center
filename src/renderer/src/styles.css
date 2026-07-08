@@ -361,14 +361,58 @@ body {
 .row:last-child {
   border-bottom: 0;
 }
+/* Status = 2.5px inset left bar; selection = neutral fill (separate channels). */
 .row.state-waiting {
-  box-shadow: inset 3px 0 0 #60a5fa;
+  box-shadow: inset 2.5px 0 0 var(--cc-waiting);
+}
+.row.state-blocked {
+  box-shadow: inset 2.5px 0 0 var(--cc-blocked);
+  background: rgba(224, 112, 200, 0.05);
 }
 .row:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--cc-fill-hover);
 }
 .row.sel {
-  background: rgba(96, 165, 250, 0.12);
+  background: var(--cc-fill-sel);
+}
+.row.sel.state-waiting {
+  box-shadow: inset 2.5px 0 0 var(--cc-waiting);
+}
+.row.sel .name {
+  color: #fff;
+}
+
+/* status dot — SHAPE carries state, not just hue */
+.cc-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+}
+.cc-dot--working {
+  border-radius: 50%;
+  background: var(--cc-working);
+  animation: cc-pulse var(--cc-pulse) var(--cc-ease-out) infinite;
+}
+.cc-dot--waiting {
+  border-radius: 2px;
+  background: var(--cc-waiting);
+}
+.cc-dot--idle {
+  border-radius: 50%;
+  background: var(--cc-idle);
+}
+.cc-dot--unknown {
+  border-radius: 50%;
+  border: 1.6px solid var(--cc-unknown);
+  box-sizing: border-box;
+  background: transparent;
+}
+.cc-dot--blocked {
+  border-radius: 1px;
+  background: var(--cc-blocked);
+  transform: rotate(45deg);
+  width: 7px;
+  height: 7px;
 }
 .dot {
   width: 8px;
@@ -376,9 +420,7 @@ body {
   border-radius: 50%;
   flex: none;
 }
-.row.state-working .dot {
-  animation: pulse 2s infinite;
-}
+
 /* Dormant: a registered session that isn't running — resumable on click. */
 .row.dormant {
   opacity: 0.6;
@@ -386,9 +428,12 @@ body {
 .row.dormant:hover {
   opacity: 1;
 }
-.row.dormant .dot {
+.row.dormant .cc-dot {
   background: transparent !important;
-  border: 1.5px solid var(--dim2);
+  border: 1.5px solid var(--cc-faint);
+  border-radius: 50%;
+  transform: none;
+  animation: none;
   width: 7px;
   height: 7px;
 }
@@ -408,10 +453,10 @@ body {
   margin-right: -3px;
 }
 .edge-blocking {
-  color: #d0a35b;
+  color: var(--cc-edge-blocking);
 }
 .edge-tangential {
-  color: #7d8698;
+  color: var(--cc-edge-tangential);
 }
 .rowmain {
   display: flex;

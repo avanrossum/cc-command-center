@@ -3,6 +3,9 @@ import { TerminalView } from './Terminal'
 import { THEMES, themeByName, DEFAULT_THEME_NAME } from './themes'
 
 type CoarseState = 'working' | 'waiting' | 'idle' | 'unknown'
+// 'blocked' is a DERIVED display state (a parent whose blocking child is
+// unfinished) — computed in the renderer, not reported by the engine.
+type DisplayState = CoarseState | 'blocked'
 
 interface Session {
   pid: number
@@ -59,14 +62,15 @@ interface TreeRow {
   edgeType: string | null
 }
 
-const STATE: Record<CoarseState, { label: string; color: string; order: number }> = {
+const STATE: Record<DisplayState, { label: string; color: string; order: number }> = {
   working: { label: 'Working', color: '#34d399', order: 0 },
   // Blue = the assistant's last turn ended recently, so structurally it's the
   // human's move. It does NOT mean a question/permission was detected (that
   // precision is roadmap Phase 7) — so the honest label is "Your turn".
   waiting: { label: 'Your turn', color: '#60a5fa', order: 1 },
-  idle: { label: 'Idle', color: '#6b7280', order: 2 },
-  unknown: { label: 'Unknown', color: '#a78bfa', order: 3 },
+  blocked: { label: 'Blocked', color: '#e070c8', order: 2 },
+  idle: { label: 'Idle', color: '#6b7280', order: 3 },
+  unknown: { label: 'Unknown', color: '#a78bfa', order: 4 },
 }
 
 function fmtAge(ms: number | undefined, now: number): string {
@@ -149,11 +153,26 @@ export function App() {
     }
     return [...bySession.values()]
   }, [snap])
+  // Derived 'blocked': a parent whose blocking child is still unfinished (child
+  // working or waiting). The engine doesn't report this — we compute it here.
+  const blockedSet = useMemo(() => {
+    const stateById = new Map(live.map((s) => [s.sessionId, s.state]))
+    const blocked = new Set<string>()
+    for (const e of snap.edges) {
+      if (e.type !== 'blocking') continue
+      const cs = stateById.get(e.child_id)
+      if (cs === 'working' || cs === 'waiting') blocked.add(e.parent_id)
+    }
+    return blocked
+  }, [live, snap.edges])
+  const dstate = (s: Session): DisplayState =>
+    !s.dormant && blockedSet.has(s.sessionId) ? 'blocked' : s.state
+
   const counts = useMemo(() => {
-    const c: Record<CoarseState, number> = { working: 0, waiting: 0, idle: 0, unknown: 0 }
-    for (const s of live) if (!s.dormant) c[s.state]++
+    const c: Record<DisplayState, number> = { working: 0, waiting: 0, blocked: 0, idle: 0, unknown: 0 }
+    for (const s of live) if (!s.dormant) c[blockedSet.has(s.sessionId) ? 'blocked' : s.state]++
     return c
-  }, [live])
+  }, [live, blockedSet])
   const liveCount = useMemo(() => live.filter((s) => !s.dormant).length, [live])
   const dormantCount = useMemo(() => live.filter((s) => s.dormant).length, [live])
   const short = (cwd: string) => (snap.home ? cwd.replace(snap.home, '~') : cwd)
@@ -302,6 +321,9 @@ export function App() {
         <div className="summary">
           <Pill n={counts.working} label="working" color={STATE.working.color} />
           <Pill n={counts.waiting} label="your turn" color={STATE.waiting.color} />
+          {counts.blocked > 0 && (
+            <Pill n={counts.blocked} label="blocked" color={STATE.blocked.color} />
+          )}
           <Pill n={counts.idle} label="idle" color={STATE.idle.color} />
           <span className="total">{liveCount} sessions</span>
           {dormantCount > 0 && <span className="total dorm">· {dormantCount} dormant</span>}
@@ -350,7 +372,7 @@ export function App() {
                 {g.rows.map(({ s, depth, edgeType }) => (
                   <li
                     key={s.sessionId}
-                    className={`row state-${s.state}${s.dormant ? ' dormant' : ''}${selected?.key === s.sessionId ? ' sel' : ''}`}
+                    className={`row state-${dstate(s)}${s.dormant ? ' dormant' : ''}${selected?.key === s.sessionId ? ' sel' : ''}`}
                     style={{ paddingLeft: 10 + depth * 16 }}
                     title={s.stateReason}
                     onClick={() => openSession(s)}
@@ -364,7 +386,7 @@ export function App() {
                         {edgeType === 'blocking' ? '└─' : '└╌'}
                       </span>
                     )}
-                    <span className="dot" style={{ background: STATE[s.state].color }} />
+                    <span className={`cc-dot cc-dot--${dstate(s)}`} />
                     {s.theme && s.theme !== DEFAULT_THEME_NAME && (
                       <span
                         className="tswatch"
@@ -600,7 +622,7 @@ function ContextMenu({
             {candidates.length === 0 && <div className="emptycat">no other sessions in this category</div>}
             {candidates.sort(bySort).map((p) => (
               <button key={p.sessionId} className="menuitem" onClick={() => setEdge(s, p, menu.mode)}>
-                <span className="dot" style={{ background: STATE[p.state].color }} />
+                <span className={`cc-dot cc-dot--${p.state}`} />
                 <span className="grow">
                   {p.name ?? (p.dormant ? p.sessionId.slice(0, 8) : `pid ${p.pid}`)}
                 </span>
