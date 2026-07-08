@@ -85,26 +85,28 @@ export function TerminalView({ termKey, sessionId, pid, cwd, resume, themeName }
     // Shift+Enter → newline is handled natively by the kitty keyboard protocol
     // (vtExtensions.kittyKeyboard above), so no custom key handler is needed.
 
-    // Cmd+V pastes both text and images. TEXT is handled by the Edit-menu Paste
-    // role (webContents.paste → xterm bracketed paste), unchanged. For IMAGES we
-    // additionally forward a Ctrl+V (main writes the kitty-encoded sequence) when
-    // the clipboard holds one. Bare Cmd+V only — exclude Shift/Ctrl/Alt and key
-    // autorepeat — and only while the terminal is focused, so composer inputs are
-    // unaffected. Return true so the menu's text paste still runs; this matches the
-    // pre-existing keydown path (under the kitty protocol xterm also reports Cmd+V
-    // as CSI-u Super+v, which Claude Code ignores — that predates this handler, so
-    // returning true adds no new PTY output beyond the image Ctrl+V).
+    // On macOS the Cmd (meta) key is never terminal input — every Cmd shortcut
+    // belongs to the app menu / OS (paste, copy, quit, close, …). Return FALSE for
+    // any Cmd combo so xterm ignores the key at the top of _keyDown: no PTY write,
+    // no preventDefault, so the menu accelerator fires normally. (Returning true
+    // let xterm consume Cmd+V/Cmd+Q under the kitty protocol — it sent a CSI-u
+    // sequence and called preventDefault, typing a literal 'v' and blocking Cmd+Q.)
+    // Non-Cmd keys fall through (return true) so kitty Shift+Enter and Ctrl+V still
+    // work. Cmd+V additionally image-pastes when the clipboard holds an image —
+    // TEXT paste is the Edit-menu Paste role's job; bare Cmd+V only, skip repeat.
     term.attachCustomKeyEventHandler((e) => {
-      if (
-        e.type === 'keydown' &&
-        e.metaKey &&
-        !e.ctrlKey &&
-        !e.altKey &&
-        !e.shiftKey &&
-        !e.repeat &&
-        (e.key === 'v' || e.key === 'V')
-      ) {
-        window.cc.termPasteImage(termKey).catch(() => {})
+      if (e.metaKey) {
+        if (
+          e.type === 'keydown' &&
+          !e.ctrlKey &&
+          !e.altKey &&
+          !e.shiftKey &&
+          !e.repeat &&
+          (e.key === 'v' || e.key === 'V')
+        ) {
+          window.cc.termPasteImage(termKey).catch(() => {})
+        }
+        return false
       }
       return true
     })
