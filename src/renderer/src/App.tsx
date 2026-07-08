@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { TerminalView } from './Terminal'
+import { THEMES, themeByName, DEFAULT_THEME_NAME } from './themes'
 
 type CoarseState = 'working' | 'waiting' | 'idle' | 'unknown'
 
@@ -14,6 +15,7 @@ interface Session {
   transcriptMtimeMs?: number
   isSpare: boolean
   categoryId: number | null
+  theme: string | null
 }
 interface Category {
   id: number
@@ -91,6 +93,9 @@ export function App() {
   const [newCat, setNewCat] = useState(false)
   const [newCatName, setNewCatName] = useState('')
   const [version, setVersion] = useState('')
+  // Instant theme feedback for the current terminal before the persisted value
+  // round-trips back through the next snapshot. Cleared when the selection changes.
+  const [themeOverride, setThemeOverride] = useState<{ pid: number; name: string } | null>(null)
 
   useEffect(() => {
     window.cc.appVersion().then((v) => setVersion(v.full))
@@ -104,6 +109,10 @@ export function App() {
       offShow()
     }
   }, [])
+
+  // Drop the theme override when the selection changes, so a newly-opened
+  // terminal reflects its own persisted theme.
+  useEffect(() => setThemeOverride(null), [selected?.pid])
 
   const live = useMemo(() => snap.sessions.filter((s) => !s.isSpare), [snap])
   const counts = useMemo(() => {
@@ -178,6 +187,19 @@ export function App() {
   const closeTerminal = () => {
     if (selected) window.cc.termClose(selected.pid)
     setSelected(null)
+  }
+  // The theme shown for the open terminal: the just-picked override (instant),
+  // else the session's persisted theme, else Default.
+  const selLive = selected ? live.find((s) => s.pid === selected.pid) : undefined
+  const selThemeName =
+    themeOverride && selected && themeOverride.pid === selected.pid
+      ? themeOverride.name
+      : selLive?.theme ?? DEFAULT_THEME_NAME
+  const pickTheme = (name: string) => {
+    if (!selected) return
+    setThemeOverride({ pid: selected.pid, name })
+    // Persist by session id when known; store null for Default to keep it clean.
+    if (selected.sessionId) window.cc.themeSet(selected.sessionId, name === DEFAULT_THEME_NAME ? null : name)
   }
   const assign = (s: Session, categoryId: number | null) => {
     window.cc.catAssign(s.sessionId, categoryId)
@@ -267,6 +289,13 @@ export function App() {
                       </span>
                     )}
                     <span className="dot" style={{ background: STATE[s.state].color }} />
+                    {s.theme && s.theme !== DEFAULT_THEME_NAME && (
+                      <span
+                        className="tswatch"
+                        style={{ background: themeByName(s.theme).accent }}
+                        title={`theme: ${s.theme}`}
+                      />
+                    )}
                     <span className="rowmain">
                       <span className="name">{s.name ?? <em>pid {s.pid}</em>}</span>
                       <span className="rowcwd">{short(s.cwd)}</span>
@@ -289,6 +318,7 @@ export function App() {
                 </span>
                 {selected.resume && <span className="tnote">resumed copy — original keeps running</span>}
                 <span className="grow" />
+                <ThemePicker current={selThemeName} onPick={pickTheme} />
                 <button className="tclose" onClick={closeTerminal} title="Close terminal">
                   ✕
                 </button>
@@ -299,6 +329,7 @@ export function App() {
                 sessionId={selected.sessionId}
                 cwd={selected.cwd}
                 resume={selected.resume}
+                themeName={selThemeName}
               />
             </>
           ) : (
@@ -418,5 +449,40 @@ function Pill({ n, label, color }: { n: number; label: string; color: string }) 
       <span className="pdot" style={{ background: color }} />
       {n} {label}
     </span>
+  )
+}
+
+function ThemePicker({ current, onPick }: { current: string; onPick: (name: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const cur = themeByName(current)
+  return (
+    <div className="themepicker">
+      <button className="themebtn" onClick={() => setOpen((o) => !o)} title={`Terminal theme: ${cur.name}`}>
+        <span className="tswatch" style={{ background: cur.accent }} />
+        <span className="themename">{cur.name}</span>
+        <span className="caret">▾</span>
+      </button>
+      {open && (
+        <>
+          <div className="menuscrim" onClick={() => setOpen(false)} />
+          <div className="thememenu">
+            {THEMES.map((t) => (
+              <button
+                key={t.name}
+                className="menuitem"
+                onClick={() => {
+                  onPick(t.name)
+                  setOpen(false)
+                }}
+              >
+                <span className="tswatch" style={{ background: t.accent }} />
+                <span className="grow">{t.name}</span>
+                {t.name === cur.name && <span className="check">✓</span>}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   )
 }

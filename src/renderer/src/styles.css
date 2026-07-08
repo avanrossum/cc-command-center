@@ -340,6 +340,53 @@ body {
   border-radius: 5px;
   padding: 1px 7px;
 }
+
+/* ---- theme swatch + picker ---- */
+/* A rounded square, deliberately not a circle, so it never reads as a second
+   status dot next to the round status indicator. */
+.tswatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.themepicker {
+  position: relative;
+  -webkit-app-region: no-drag;
+}
+.themebtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--dim);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.themebtn:hover {
+  color: var(--text);
+  border-color: var(--dim2);
+}
+.caret {
+  font-size: 9px;
+  color: var(--dim2);
+}
+.thememenu {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 0;
+  z-index: 41;
+  min-width: 190px;
+  background: #1a1e28;
+  border: 1px solid #333b4d;
+  border-radius: 9px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  padding: 5px;
+}
 .grow {
   flex: 1;
 }

@@ -24,6 +24,7 @@ declare global {
         type: 'blocking' | 'tangential',
       ) => Promise<boolean>
       edgeClear: (childId: string) => Promise<boolean>
+      themeSet: (sessionId: string, theme: string | null) => Promise<boolean>
       sessionNew: () => Promise<{ pid: number; cwd: string } | null>
       termOpen: (pid: number, opts: OpenOpts) => Promise<boolean>
       termAttach: (pid: number) => void

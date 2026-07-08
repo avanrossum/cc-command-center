@@ -34,6 +34,10 @@ contextBridge.exposeInMainWorld('cc', {
     ipcRenderer.invoke('edge:set', childId, parentId, type),
   edgeClear: (childId: string) => ipcRenderer.invoke('edge:clear', childId),
 
+  // per-terminal theme
+  themeSet: (sessionId: string, theme: string | null) =>
+    ipcRenderer.invoke('theme:set', sessionId, theme),
+
   // sessions
   sessionNew: () => ipcRenderer.invoke('session:new'),
 

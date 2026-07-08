@@ -22,6 +22,7 @@ export interface NodeRow {
   origin: string | null
   first_seen: number
   last_seen: number
+  theme: string | null
 }
 
 const PALETTE = [
@@ -80,6 +81,17 @@ export function initRegistry(dbPath: string): void {
     `)
     db.pragma('user_version = 2')
   }
+  if (v < 3) {
+    // Per-terminal color theme (an xterm ITheme name, or a serialized custom
+    // theme). NULL = the default theme.
+    db.exec(`ALTER TABLE node ADD COLUMN theme TEXT;`)
+    db.pragma('user_version = 3')
+  }
+}
+
+// Set (or clear, with null) a session's terminal theme by name.
+export function setTheme(sessionId: string, theme: string | null): void {
+  must().prepare('UPDATE node SET theme=? WHERE session_id=?').run(theme, sessionId)
 }
 
 export interface Edge {

@@ -19,6 +19,7 @@ import {
   setParent,
   clearParent,
   getEdges,
+  setTheme,
   type Category,
   type Edge,
 } from './registry'
@@ -27,7 +28,7 @@ let win: BrowserWindow | null = null
 let pollTimer: NodeJS.Timeout | null = null
 
 // ---------- session polling (status board) ----------
-type EnrichedSession = LiveSession & { categoryId: number | null }
+type EnrichedSession = LiveSession & { categoryId: number | null; theme: string | null }
 interface Snapshot {
   home: string
   scannedAt: number
@@ -50,6 +51,7 @@ function snapshot(): Snapshot {
   const enriched: EnrichedSession[] = sessions.map((s) => ({
     ...s,
     categoryId: nodes.get(s.sessionId)?.category_id ?? null,
+    theme: nodes.get(s.sessionId)?.theme ?? null,
   }))
   return {
     home: os.homedir(),
@@ -308,6 +310,12 @@ ipcMain.handle('edge:set', (_e, childId: string, parentId: string, type: 'blocki
 })
 ipcMain.handle('edge:clear', (_e, childId: string) => {
   clearParent(childId)
+  pushSessions()
+  return true
+})
+ipcMain.handle('theme:set', (_e, sessionId: string, theme: string | null) => {
+  if (!sessionId) return false
+  setTheme(sessionId, theme)
   pushSessions()
   return true
 })
