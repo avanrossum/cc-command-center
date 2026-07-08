@@ -107,12 +107,20 @@ let attachedPid: number | null = null
 function buildEnv(): NodeJS.ProcessEnv {
   const home = os.homedir()
   const extra = [join(home, '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin']
-  return {
-    ...process.env,
-    PATH: [...extra, process.env.PATH || ''].join(':'),
-    TERM: 'xterm-256color',
-    COLORTERM: 'truecolor',
+  const env: NodeJS.ProcessEnv = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    // Strip Claude Code / agent env so spawned sessions run as fresh TOP-LEVEL
+    // sessions. If they inherit CLAUDECODE / CLAUDE_CODE_SESSION_ID /
+    // CLAUDE_CODE_CHILD_SESSION (which they do when this app is itself launched
+    // from a Claude Code session), the spawned claude registers as a nested
+    // child and never writes ~/.claude/sessions — so it never shows in the list.
+    if (/^(CLAUDE|ANTHROPIC)/i.test(k) || k === 'AI_AGENT' || k === 'BAGGAGE') continue
+    env[k] = v
   }
+  env.PATH = [...extra, process.env.PATH || ''].join(':')
+  env.TERM = 'xterm-256color'
+  env.COLORTERM = 'truecolor'
+  return env
 }
 
 function resolveClaude(): string {
