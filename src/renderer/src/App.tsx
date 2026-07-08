@@ -35,6 +35,14 @@ interface Edge {
   parent_id: string
   type: string
   source: string
+  trusted?: number
+}
+interface MsgLogEntry {
+  from: string
+  to: string
+  text: string
+  status: string
+  at: number
 }
 interface Snapshot {
   home: string
@@ -42,6 +50,7 @@ interface Snapshot {
   sessions: Session[]
   categories: Category[]
   edges: Edge[]
+  messages?: MsgLogEntry[]
 }
 interface Selected {
   key: string
@@ -151,6 +160,8 @@ export function App() {
   const [send, setSend] = useState<Session | null>(null)
   // The New-session modal.
   const [newSessionOpen, setNewSessionOpen] = useState(false)
+  // The cross-session message log (awareness bus transparency).
+  const [logOpen, setLogOpen] = useState(false)
   // Transient confirmation toast (copy-out, etc.).
   const [flash, setFlash] = useState<string | null>(null)
   const showFlash = (msg: string) => {
@@ -430,6 +441,11 @@ export function App() {
             </div>
           )}
         </div>
+        {snap.messages && snap.messages.length > 0 && (
+          <button className="msgbtn" onClick={() => setLogOpen(true)} title="Cross-session message log">
+            ✉ {snap.messages.length}
+          </button>
+        )}
         <div className="cmdk" title="Command palette — coming soon">
           ⌘K
         </div>
@@ -658,6 +674,7 @@ export function App() {
         />
       )}
       {catEdit && <CategoryEditor edit={catEdit} setEdit={setCatEdit} />}
+      {logOpen && <MessageLog messages={snap.messages ?? []} close={() => setLogOpen(false)} />}
       {flash && <div className="flash">{flash}</div>}
     </div>
   )
@@ -746,6 +763,19 @@ function ContextMenu({
             <button className="menuitem" onClick={() => setMenu({ ...menu, mode: 'tangential' })}>
               Make tangential offshoot of…
             </button>
+            {hasParent && (
+              <button
+                className="menuitem"
+                onClick={() => {
+                  window.cc.edgeTrust(s.sessionId, !edgeByChild.get(s.sessionId)?.trusted)
+                  setMenu(null)
+                }}
+              >
+                {edgeByChild.get(s.sessionId)?.trusted
+                  ? 'Untrust link messaging'
+                  : 'Trust link — let it message its parent'}
+              </button>
+            )}
             {hasParent && (
               <button
                 className="menuitem"
@@ -967,6 +997,40 @@ function NewSessionComposer({
           </button>
           <button className="rbtn primary" onClick={create} disabled={!cwd}>
             Create session
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function MessageLog({ messages, close }: { messages: MsgLogEntry[]; close: () => void }) {
+  const cls = (status: string) =>
+    status.startsWith('delivered') ? 'ok' : status.startsWith('held') ? 'held' : 'drop'
+  return (
+    <div className="spawnscrim" onClick={close}>
+      <div className="spawnmodal msglog" onClick={(e) => e.stopPropagation()}>
+        <div className="spawntitle">Cross-session messages</div>
+        <div className="spawnsub">
+          every message the awareness bus routed — delivered, held (untrusted link), or dropped.
+        </div>
+        <div className="msglist">
+          {messages.length === 0 && <div className="emptycat">no messages yet</div>}
+          {[...messages].reverse().map((m, i) => (
+            <div key={i} className="msgrow">
+              <div className="msgmeta">
+                <span className="msgroute">
+                  {m.from} → {m.to}
+                </span>
+                <span className={`msgstatus s-${cls(m.status)}`}>{m.status}</span>
+              </div>
+              <div className="msgtext">{m.text}</div>
+            </div>
+          ))}
+        </div>
+        <div className="spawnactions">
+          <button className="rbtn" onClick={close}>
+            Close
           </button>
         </div>
       </div>

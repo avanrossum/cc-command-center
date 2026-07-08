@@ -304,13 +304,81 @@ body {
 }
 .cmdk {
   align-self: center;
-  margin-left: auto;
   font: 11px var(--cc-font-mono);
   color: var(--cc-meta);
   border: 1px solid var(--cc-border);
   border-radius: var(--cc-r-sm);
   padding: 4px 8px;
   -webkit-app-region: no-drag;
+}
+.msgbtn {
+  align-self: center;
+  margin-left: auto;
+  font: 11px var(--cc-font-mono);
+  color: var(--cc-dim);
+  background: transparent;
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-r-sm);
+  padding: 4px 8px;
+  margin-right: 8px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.msgbtn:hover {
+  color: var(--cc-text);
+  border-color: var(--cc-dim2);
+}
+
+/* ---- message log ---- */
+.msglog {
+  width: 520px;
+}
+.msglist {
+  max-height: 320px;
+  overflow-y: auto;
+  margin-top: 10px;
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-r-sm);
+}
+.msgrow {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--cc-hairline);
+}
+.msgrow:last-child {
+  border-bottom: 0;
+}
+.msgmeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+.msgroute {
+  font: 11px var(--cc-font-mono);
+  color: var(--cc-dim);
+}
+.msgstatus {
+  margin-left: auto;
+  font: 9.5px var(--cc-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.msgstatus.s-ok {
+  color: var(--cc-working);
+}
+.msgstatus.s-held {
+  color: var(--cc-edge-blocking);
+}
+.msgstatus.s-drop {
+  color: #f0857d;
+}
+.msgtext {
+  font-size: 12px;
+  color: var(--cc-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 60px;
+  overflow: hidden;
 }
 
 /* ---- body: category rail + tree pane + terminal ---- */

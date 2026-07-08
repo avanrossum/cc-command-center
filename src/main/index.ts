@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, nativeImage, clipboard } from 'electron'
 import { join } from 'node:path'
 import os from 'node:os'
-import { existsSync, copyFileSync, mkdirSync } from 'node:fs'
+import { existsSync, copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import * as pty from 'node-pty'
 import {
   scanLiveSessions,
@@ -27,6 +27,7 @@ import {
   setParent,
   clearParent,
   getEdges,
+  setEdgeTrust,
   setTheme,
   setScrollback,
   getScrollback,
@@ -54,6 +55,7 @@ interface Snapshot {
   sessions: EnrichedSession[]
   categories: Category[]
   edges: Edge[]
+  messages: MsgLogEntry[]
 }
 
 // Sessions the user explicitly removed. A ghost that is still "alive" but has no
@@ -107,6 +109,8 @@ function snapshot(): Snapshot {
   }
   reconcilePendingChildren(sessions)
   reconcilePendingNew(sessions)
+  processMailbox(sessions)
+  tryDeliveries(sessions)
   const nodes = getNodeMap()
   const edges = getEdges()
   const now = Date.now()
@@ -175,6 +179,7 @@ function snapshot(): Snapshot {
     sessions: enriched,
     categories: listCategories(),
     edges,
+    messages: messageLog.slice(-40),
   }
 }
 
@@ -348,15 +353,142 @@ function openTerminal(key: string, opts: OpenOpts): void {
 // Launch a brand-new managed Claude session in a folder. Keyed by `new:<pid>`
 // until the next scan adopts it (Claude writes ~/.claude/sessions/<pid>.json,
 // so the sidebar row appears and, once opened, reconciles by session id).
-function launchSession(cwd: string, args: string[] = []): number {
+function launchSession(cwd: string, args: string[] = [], extraEnv: Record<string, string> = {}): number {
   const cmd = resolveClaude()
-  const p = pty.spawn(cmd, args, { name: 'xterm-256color', cols: 120, rows: 30, cwd, env: buildEnv() })
+  const p = pty.spawn(cmd, args, {
+    name: 'xterm-256color',
+    cols: 120,
+    rows: 30,
+    cwd,
+    env: { ...buildEnv(), ...extraEnv },
+  })
   const key = `new:${p.pid}`
   console.log(`[main] new session: spawned ${cmd} ${args.join(' ')} in ${cwd} pid=${p.pid}`)
   wireTerm(key, p, { cwd })
   attachedKey = key
   win?.webContents.send('term:show', { key, pid: p.pid, name: 'new session', cwd })
   return p.pid
+}
+
+// ---------- awareness bus: autonomous cross-session messaging ----------
+// A child writes a message to its outbox file (taught via the spawn preamble);
+// each scan the app reads it, routes to the parent via the edge graph, and — if
+// the link is trusted — injects it into the parent as a new turn when the parent
+// is free. Every hop is logged; a rate/hop guard stops runaway loops.
+const MAIL_DIR = join(os.homedir(), '.claude', 'ccc', 'mail')
+const HOP_MAX = 6
+const RATE_WINDOW_MS = 60_000
+const RATE_MAX = 6
+let outboxCounter = 0
+const outboxOwner = new Map<string, number>() // outbox token -> child pid
+
+interface Delivery {
+  to: string
+  fromName: string
+  text: string
+  hops: number
+  at: number
+}
+export interface MsgLogEntry {
+  from: string
+  to: string
+  text: string
+  status: string
+  at: number
+}
+const deliveryQueue: Delivery[] = []
+const messageLog: MsgLogEntry[] = []
+const linkRate = new Map<string, number[]>()
+
+function awarenessPreamble(outbox: string): string {
+  return (
+    `[CC Command Center — fleet] You are a child session in a managed fleet. When your ` +
+    `PARENT session needs to know something, message it by writing plain text to this file:\n${outbox}\n` +
+    `It is delivered to your parent when they are free. Message your parent only when they genuinely need the update.`
+  )
+}
+
+function logMsg(from: string, to: string, text: string, status: string): void {
+  messageLog.push({ from, to, text: text.slice(0, 500), status, at: Date.now() })
+  if (messageLog.length > 60) messageLog.shift()
+}
+
+// Read child outboxes, route each message to its parent by the edge graph.
+function processMailbox(sessions: LiveSession[]): void {
+  let files: string[] = []
+  try {
+    files = readdirSync(MAIL_DIR).filter((f) => f.endsWith('.msg'))
+  } catch {
+    return
+  }
+  for (const f of files) {
+    const fp = join(MAIL_DIR, f)
+    let content = ''
+    try {
+      content = readFileSync(fp, 'utf8').trim()
+    } catch {
+      continue
+    }
+    if (!content) continue
+    try {
+      writeFileSync(fp, '') // consume
+    } catch {
+      /* ignore */
+    }
+    const childPid = outboxOwner.get(f.replace(/\.msg$/, ''))
+    const child = childPid ? sessions.find((s) => s.pid === childPid && s.sessionId) : undefined
+    if (!child) {
+      logMsg(`pid ${childPid ?? '?'}`, '?', content, 'dropped: unknown sender')
+      continue
+    }
+    const edge = getEdges().find((e) => e.child_id === child.sessionId)
+    if (!edge) {
+      logMsg(child.name ?? child.sessionId, '?', content, 'held: no parent link')
+      continue
+    }
+    if (!edge.trusted) {
+      logMsg(child.name ?? child.sessionId, 'parent', content, 'held: link not trusted')
+      continue
+    }
+    deliveryQueue.push({
+      to: edge.parent_id,
+      fromName: child.name ?? `pid ${child.pid}`,
+      text: content,
+      hops: 1,
+      at: Date.now(),
+    })
+  }
+}
+
+// Deliver queued messages to targets that are free (idle/waiting), rate-limited.
+function tryDeliveries(sessions: LiveSession[]): void {
+  if (deliveryQueue.length === 0) return
+  const now = Date.now()
+  for (let i = deliveryQueue.length - 1; i >= 0; i--) {
+    const d = deliveryQueue[i]
+    const target = sessions.find((s) => s.sessionId === d.to)
+    const term = findManagedTerm(d.to)
+    if (!target || !term) {
+      if (now - d.at > 120_000) {
+        deliveryQueue.splice(i, 1)
+        logMsg(d.fromName, d.to, d.text, 'expired: target not open')
+      }
+      continue
+    }
+    if (target.state === 'working') continue // hold for a good moment
+    const key = `${d.fromName}->${d.to}`
+    const stamps = (linkRate.get(key) ?? []).filter((t) => now - t < RATE_WINDOW_MS)
+    if (d.hops > HOP_MAX || stamps.length >= RATE_MAX) {
+      deliveryQueue.splice(i, 1)
+      logMsg(d.fromName, target.name ?? d.to, d.text, 'dropped: loop/rate guard')
+      continue
+    }
+    injectPrompt(term, `[message from ${d.fromName}]\n${d.text}`)
+    stamps.push(now)
+    linkRate.set(key, stamps)
+    deliveryQueue.splice(i, 1)
+    logMsg(d.fromName, target.name ?? d.to, d.text, 'delivered')
+  }
 }
 
 // Children spawned from an active session. The typed edge can't be set until the
@@ -394,8 +526,18 @@ function spawnChild(
   type: 'blocking' | 'tangential',
   note?: string,
 ): number {
-  const pid = launchSession(cwd)
-  pendingChildren.set(pid, { parentSessionId, type, note: note?.trim() || undefined, at: Date.now() })
+  const token = `cc-${Date.now()}-${outboxCounter++}`
+  const outbox = join(MAIL_DIR, `${token}.msg`)
+  const pid = launchSession(cwd, [], { CC_OUTBOX: outbox, CC_ROLE: 'child' })
+  outboxOwner.set(token, pid)
+  const userNote = note?.trim()
+  const preamble = awarenessPreamble(outbox)
+  pendingChildren.set(pid, {
+    parentSessionId,
+    type,
+    note: userNote ? `${preamble}\n\n— — —\n\n${userNote}` : preamble,
+    at: Date.now(),
+  })
   return pid
 }
 
@@ -625,6 +767,11 @@ ipcMain.handle('edge:clear', (_e, childId: string) => {
   pushSessions()
   return true
 })
+ipcMain.handle('edge:trust', (_e, childId: string, trusted: boolean) => {
+  setEdgeTrust(childId, trusted)
+  pushSessions()
+  return true
+})
 ipcMain.handle('theme:set', (_e, sessionId: string, theme: string | null) => {
   if (!sessionId) return false
   setTheme(sessionId, theme)
@@ -789,6 +936,11 @@ function setDockIcon(): void {
 
 app.whenReady().then(() => {
   migrateUserData('Claude Command Center')
+  try {
+    mkdirSync(MAIL_DIR, { recursive: true })
+  } catch {
+    /* ignore */
+  }
   setDockIcon()
   setAboutPanel()
   installAppMenu(() => win)
