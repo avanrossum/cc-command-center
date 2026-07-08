@@ -2,7 +2,11 @@
 
 Shelved deliberately at the end of a long session. Each is self-contained and ready to build.
 
-## 1. Per-terminal theme selector (high value — user really wants this)
+## 1. Per-terminal theme selector — ✅ SHIPPED v0.2.0 (import bonus still open)
+
+**Done:** 8 built-in xterm IThemes (`src/renderer/src/themes.ts`), `node.theme` column (migration `user_version=3`) + `setTheme` + `theme:set` IPC, a term-bar picker with live apply + persistence, and a shape-distinct identity swatch on sidebar rows. Themes are remembered per session and applied live without remounting the terminal.
+
+**Still open (the bonus):** `.itermcolors` import — parse the plist (keys like `Ansi 0 Color`, `Background Color`, `Cursor Color` → dicts of `Red/Green/Blue Component` floats 0–1), convert each float triple to `#rrggbb`, map iTerm keys → xterm ITheme keys, store the resulting ITheme JSON (a `custom_theme` table or a serialized value in `node.theme`), and add an "Import .itermcolors…" item (`dialog.showOpenDialog` with `filters:[{name:'iTerm colors', extensions:['itermcolors']}]`). Original spec retained below for that work.
 
 Differentiate sessions visually the way iTerm color schemes do today. Per-terminal, remembered.
 
