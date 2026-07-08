@@ -23,6 +23,10 @@ export interface NodeRow {
   first_seen: number
   last_seen: number
   theme: string | null
+  // Scrollback is stored but intentionally NOT loaded by getNodeMap (it is large
+  // and the scan runs every ~1.5s); fetch it on demand with getScrollback.
+  scrollback?: string | null
+  scrollback_at?: number | null
 }
 
 const PALETTE = [
@@ -87,11 +91,52 @@ export function initRegistry(dbPath: string): void {
     db.exec(`ALTER TABLE node ADD COLUMN theme TEXT;`)
     db.pragma('user_version = 3')
   }
+  if (v < 4) {
+    // Scrollback snapshot for resume-on-restart: a serialized xterm buffer
+    // painted into the pane before the resumed session repaints. Plus a small
+    // key/value store for workspace state (last-active session, open set).
+    db.exec(`
+      ALTER TABLE node ADD COLUMN scrollback TEXT;
+      ALTER TABLE node ADD COLUMN scrollback_at INTEGER;
+      CREATE TABLE IF NOT EXISTS app_state (
+        key TEXT PRIMARY KEY,
+        value TEXT
+      );
+    `)
+    db.pragma('user_version = 4')
+  }
 }
 
 // Set (or clear, with null) a session's terminal theme by name.
 export function setTheme(sessionId: string, theme: string | null): void {
   must().prepare('UPDATE node SET theme=? WHERE session_id=?').run(theme, sessionId)
+}
+
+// Scrollback snapshot: persisted per session, fetched on demand (never in the
+// periodic scan). Only writes when the node already exists.
+export function setScrollback(sessionId: string, data: string, at: number): void {
+  must().prepare('UPDATE node SET scrollback=?, scrollback_at=? WHERE session_id=?').run(data, at, sessionId)
+}
+
+export function getScrollback(sessionId: string): string | null {
+  const row = must().prepare('SELECT scrollback FROM node WHERE session_id=?').get(sessionId) as
+    | { scrollback: string | null }
+    | undefined
+  return row?.scrollback ?? null
+}
+
+// Workspace key/value state (last-active session id, open session set, …).
+export function setAppState(key: string, value: string): void {
+  must()
+    .prepare('INSERT INTO app_state (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+    .run(key, value)
+}
+
+export function getAppState(key: string): string | null {
+  const row = must().prepare('SELECT value FROM app_state WHERE key=?').get(key) as
+    | { value: string | null }
+    | undefined
+  return row?.value ?? null
 }
 
 export interface Edge {
@@ -184,7 +229,12 @@ export function assignCategory(sessionId: string, categoryId: number | null): vo
 }
 
 export function getNodeMap(): Map<string, NodeRow> {
-  const rows = must().prepare('SELECT * FROM node').all() as NodeRow[]
+  // Deliberately excludes the scrollback blob — this runs every scan.
+  const rows = must()
+    .prepare(
+      'SELECT session_id, cwd, name, category_id, origin, first_seen, last_seen, theme FROM node',
+    )
+    .all() as NodeRow[]
   const m = new Map<string, NodeRow>()
   for (const r of rows) m.set(r.session_id, r)
   return m

@@ -20,6 +20,8 @@ import {
   clearParent,
   getEdges,
   setTheme,
+  setScrollback,
+  getScrollback,
   type Category,
   type Edge,
 } from './registry'
@@ -176,6 +178,7 @@ function openTerminal(key: string, opts: OpenOpts): void {
     terminals.delete(key) // the process died; re-spawn a fresh one below
     term = undefined
   }
+  const fresh = !term
   if (!term) {
     const cmd = resolveClaude()
     const args = opts.resume && opts.sessionId ? ['--resume', opts.sessionId] : []
@@ -190,7 +193,18 @@ function openTerminal(key: string, opts: OpenOpts): void {
     term = wireTerm(key, p, { sessionId: opts.sessionId, cwd: opts.cwd })
   }
   attachedKey = key
-  if (term.buffer) win?.webContents.send('term:data', { key, data: term.buffer }) // replay scrollback
+  // On a fresh spawn (e.g. first open after an app restart), paint the persisted
+  // scrollback from the last run before the resumed session repaints its screen.
+  if (fresh && opts.sessionId) {
+    const sb = getScrollback(opts.sessionId)
+    if (sb) {
+      win?.webContents.send('term:data', {
+        key,
+        data: sb + '\r\n\x1b[90m— restored scrollback; resuming… —\x1b[0m\r\n',
+      })
+    }
+  }
+  if (term.buffer) win?.webContents.send('term:data', { key, data: term.buffer }) // replay live buffer
 }
 
 // Launch a brand-new managed Claude session in a folder. Keyed by `new:<pid>`
@@ -329,6 +343,14 @@ ipcMain.handle('theme:set', (_e, sessionId: string, theme: string | null) => {
   setTheme(sessionId, theme)
   pushSessions()
   return true
+})
+ipcMain.on('snapshot:save', (_e, sessionId: string, data: string) => {
+  if (!sessionId || !data) return
+  try {
+    setScrollback(sessionId, data, Date.now())
+  } catch {
+    /* node may not exist yet (session not adopted) — ignore */
+  }
 })
 ipcMain.handle('session:new', async () => {
   if (!win) return null

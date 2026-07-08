@@ -38,6 +38,10 @@ contextBridge.exposeInMainWorld('cc', {
   themeSet: (sessionId: string, theme: string | null) =>
     ipcRenderer.invoke('theme:set', sessionId, theme),
 
+  // scrollback snapshot (resume-on-restart)
+  snapshotSave: (sessionId: string, data: string) =>
+    ipcRenderer.send('snapshot:save', sessionId, data),
+
   // sessions
   sessionNew: () => ipcRenderer.invoke('session:new'),
 

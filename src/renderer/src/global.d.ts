@@ -25,6 +25,7 @@ declare global {
       ) => Promise<boolean>
       edgeClear: (childId: string) => Promise<boolean>
       themeSet: (sessionId: string, theme: string | null) => Promise<boolean>
+      snapshotSave: (sessionId: string, data: string) => void
       sessionNew: () => Promise<{ pid: number; cwd: string } | null>
       termOpen: (key: string, opts: OpenOpts) => Promise<boolean>
       termAttach: (key: string) => void
