@@ -51,7 +51,7 @@ This is a natural third level of the existing hierarchy: category → session �
 
 ## Q3 — What does the "status dot" actually mean? (esp. blue = "waiting")
 
-**Asked:** 2026-07-07. **Status:** answered inline below; a real precision fix is roadmap **Phase 7**.
+**Asked:** 2026-07-07. **Status:** answered inline below. Cheap fix **shipped** — blue relabeled **"Your turn"** in the UI. The real precision fix is roadmap **Phase 7**.
 
 **The observation (correct).** Sessions sometimes turn **blue ("Waiting on you")** when they aren't really waiting on the human so much as "the assistant finished its turn / asked something / is ready for a new turn."
 

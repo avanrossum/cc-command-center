@@ -56,7 +56,10 @@ interface TreeRow {
 
 const STATE: Record<CoarseState, { label: string; color: string; order: number }> = {
   working: { label: 'Working', color: '#34d399', order: 0 },
-  waiting: { label: 'Waiting on you', color: '#60a5fa', order: 1 },
+  // Blue = the assistant's last turn ended recently, so structurally it's the
+  // human's move. It does NOT mean a question/permission was detected (that
+  // precision is roadmap Phase 7) — so the honest label is "Your turn".
+  waiting: { label: 'Your turn', color: '#60a5fa', order: 1 },
   idle: { label: 'Idle', color: '#6b7280', order: 2 },
   unknown: { label: 'Unknown', color: '#a78bfa', order: 3 },
 }
@@ -201,7 +204,7 @@ export function App() {
         </div>
         <div className="summary">
           <Pill n={counts.working} label="working" color={STATE.working.color} />
-          <Pill n={counts.waiting} label="waiting" color={STATE.waiting.color} />
+          <Pill n={counts.waiting} label="your turn" color={STATE.waiting.color} />
           <Pill n={counts.idle} label="idle" color={STATE.idle.color} />
           <span className="total">{live.length} sessions</span>
         </div>

@@ -134,7 +134,7 @@ A session row currently shows: an optional tree connector, a **status dot**, the
 | State | Meaning | Current color | Notes |
 |---|---|---|---|
 | **working** | actively producing output | green `#34d399` | dot **pulses** (subtle). The "alive" state. |
-| **waiting** | waiting on the human (input or a permission prompt) | blue `#60a5fa` | **the attention state** — should read as "come here." Row has a left accent bar today. Highest-priority to surface. |
+| **waiting** (labeled **"Your turn"** in the UI) | the assistant's last turn ended recently, so structurally it's the human's move | blue `#60a5fa` | **the attention state** — should read as "come here." Note it means "your move," *not* a detected question/permission (that split is Phase 7). Row has a left accent bar today. Highest-priority to surface. |
 | **idle** | done / stale, nothing happening | gray `#6b7280` | should recede. |
 | **unknown** | state can't be determined (parser/degraded) | purple `#a78bfa` | rare; a graceful "we're not sure" look, not an error. |
 | **blocked** *([NEXT], no code yet)* | a parent whose blocking child is unfinished | — | needs its own treatment + a banner ("blocked, waiting on → schema-fix"). Its hue is **your** deliverable; it must read distinctly from **idle** and must not be confused with the **amber blocking-edge** connector color. Design this. |
