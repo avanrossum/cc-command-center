@@ -17,6 +17,12 @@ declare global {
       catRename: (id: number, name: string) => Promise<boolean>
       catDelete: (id: number) => Promise<boolean>
       catAssign: (sessionId: string, categoryId: number | null) => Promise<boolean>
+      edgeSet: (
+        childId: string,
+        parentId: string,
+        type: 'blocking' | 'tangential',
+      ) => Promise<boolean>
+      edgeClear: (childId: string) => Promise<boolean>
       termOpen: (pid: number, opts: OpenOpts) => Promise<boolean>
       termAttach: (pid: number) => void
       termInput: (pid: number, data: string) => void

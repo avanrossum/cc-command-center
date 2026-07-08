@@ -26,6 +26,11 @@ contextBridge.exposeInMainWorld('cc', {
   catAssign: (sessionId: string, categoryId: number | null) =>
     ipcRenderer.invoke('cat:assign', sessionId, categoryId),
 
+  // task-tree edges
+  edgeSet: (childId: string, parentId: string, type: 'blocking' | 'tangential') =>
+    ipcRenderer.invoke('edge:set', childId, parentId, type),
+  edgeClear: (childId: string) => ipcRenderer.invoke('edge:clear', childId),
+
   // terminals
   termOpen: (pid: number, opts: OpenOpts) => ipcRenderer.invoke('term:open', pid, opts),
   termAttach: (pid: number) => ipcRenderer.send('term:attach', pid),

@@ -232,6 +232,18 @@ body {
 .row.state-working .dot {
   animation: pulse 2s infinite;
 }
+.edge {
+  flex: none;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  margin-right: -3px;
+}
+.edge-blocking {
+  color: #d0a35b;
+}
+.edge-tangential {
+  color: #7d8698;
+}
 .rowmain {
   display: flex;
   flex-direction: column;

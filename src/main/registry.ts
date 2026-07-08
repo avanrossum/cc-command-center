@@ -66,6 +66,62 @@ export function initRegistry(dbPath: string): void {
     `)
     db.pragma('user_version = 1')
   }
+  if (v < 2) {
+    // Typed parent→child edges. child_id is PRIMARY KEY, so a child has at most
+    // one parent. type: 'blocking' (parent rolls back to it) | 'tangential'.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS edge (
+        child_id TEXT PRIMARY KEY REFERENCES node(session_id) ON DELETE CASCADE,
+        parent_id TEXT NOT NULL REFERENCES node(session_id) ON DELETE CASCADE,
+        type TEXT NOT NULL DEFAULT 'blocking',
+        source TEXT NOT NULL DEFAULT 'manual',
+        created_at INTEGER NOT NULL
+      );
+    `)
+    db.pragma('user_version = 2')
+  }
+}
+
+export interface Edge {
+  child_id: string
+  parent_id: string
+  type: string
+  source: string
+}
+
+// Set (or move) a child's parent. Rejects self-parenting and any cycle (parent
+// must not already be a descendant of the child). Returns false if rejected.
+export function setParent(
+  childId: string,
+  parentId: string,
+  type: 'blocking' | 'tangential',
+): boolean {
+  if (childId === parentId) return false
+  const d = must()
+  let cur: string | undefined = parentId
+  const seen = new Set<string>()
+  while (cur) {
+    if (cur === childId) return false // would create a cycle
+    if (seen.has(cur)) break
+    seen.add(cur)
+    const row = d.prepare('SELECT parent_id FROM edge WHERE child_id=?').get(cur) as
+      | { parent_id: string }
+      | undefined
+    cur = row?.parent_id
+  }
+  d.prepare(
+    `INSERT INTO edge (child_id, parent_id, type, source, created_at) VALUES (?,?,?, 'manual', ?)
+     ON CONFLICT(child_id) DO UPDATE SET parent_id=excluded.parent_id, type=excluded.type`,
+  ).run(childId, parentId, type, Date.now())
+  return true
+}
+
+export function clearParent(childId: string): void {
+  must().prepare('DELETE FROM edge WHERE child_id=?').run(childId)
+}
+
+export function getEdges(): Edge[] {
+  return must().prepare('SELECT child_id, parent_id, type, source FROM edge').all() as Edge[]
 }
 
 export function listCategories(): Category[] {

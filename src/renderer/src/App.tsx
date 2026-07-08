@@ -15,21 +15,25 @@ interface Session {
   isSpare: boolean
   categoryId: number | null
 }
-
 interface Category {
   id: number
   name: string
   color: string
   sort: number
 }
-
+interface Edge {
+  child_id: string
+  parent_id: string
+  type: string
+  source: string
+}
 interface Snapshot {
   home: string
   scannedAt: number
   sessions: Session[]
   categories: Category[]
+  edges: Edge[]
 }
-
 interface Selected {
   pid: number
   sessionId?: string
@@ -37,11 +41,17 @@ interface Selected {
   name: string
   resume: boolean
 }
-
+type MenuMode = 'root' | 'blocking' | 'tangential'
 interface Menu {
   x: number
   y: number
   session: Session
+  mode: MenuMode
+}
+interface TreeRow {
+  s: Session
+  depth: number
+  edgeType: string | null
 }
 
 const STATE: Record<CoarseState, { label: string; color: string; order: number }> = {
@@ -62,8 +72,17 @@ function fmtAge(ms: number | undefined, now: number): string {
   return `${Math.round(h / 24)}d`
 }
 
+const bySort = (a: Session, b: Session) =>
+  STATE[a.state].order - STATE[b.state].order || (a.name ?? '').localeCompare(b.name ?? '')
+
 export function App() {
-  const [snap, setSnap] = useState<Snapshot>({ home: '', scannedAt: 0, sessions: [], categories: [] })
+  const [snap, setSnap] = useState<Snapshot>({
+    home: '',
+    scannedAt: 0,
+    sessions: [],
+    categories: [],
+    edges: [],
+  })
   const [selected, setSelected] = useState<Selected | null>(null)
   const [menu, setMenu] = useState<Menu | null>(null)
   const [newCat, setNewCat] = useState(false)
@@ -82,14 +101,18 @@ export function App() {
   }, [])
 
   const live = useMemo(() => snap.sessions.filter((s) => !s.isSpare), [snap])
-
   const counts = useMemo(() => {
     const c: Record<CoarseState, number> = { working: 0, waiting: 0, idle: 0, unknown: 0 }
     for (const s of live) c[s.state]++
     return c
   }, [live])
-
   const short = (cwd: string) => (snap.home ? cwd.replace(snap.home, '~') : cwd)
+
+  const edgeByChild = useMemo(() => {
+    const m = new Map<string, Edge>()
+    for (const e of snap.edges) m.set(e.child_id, e)
+    return m
+  }, [snap.edges])
 
   const groups = useMemo(() => {
     const byCat = new Map<number | null, Session[]>()
@@ -99,26 +122,45 @@ export function App() {
       arr.push(s)
       byCat.set(k, arr)
     }
-    const sortSessions = (arr: Session[]) =>
-      arr.sort(
-        (a, b) =>
-          STATE[a.state].order - STATE[b.state].order || (a.name ?? '').localeCompare(b.name ?? ''),
-      )
+    // Flatten a category's sessions into a depth-tagged tree via the edges,
+    // treating a session whose parent is outside this category as a root.
+    const buildTree = (sessions: Session[]): TreeRow[] => {
+      const byId = new Map(sessions.map((s) => [s.sessionId, s]))
+      const childrenOf = new Map<string, { s: Session; type: string }[]>()
+      const roots: Session[] = []
+      for (const s of sessions) {
+        const e = edgeByChild.get(s.sessionId)
+        if (e && byId.has(e.parent_id)) {
+          const arr = childrenOf.get(e.parent_id) ?? []
+          arr.push({ s, type: e.type })
+          childrenOf.set(e.parent_id, arr)
+        } else {
+          roots.push(s)
+        }
+      }
+      const out: TreeRow[] = []
+      const walk = (s: Session, depth: number, edgeType: string | null) => {
+        out.push({ s, depth, edgeType })
+        const kids = (childrenOf.get(s.sessionId) ?? []).sort((a, b) => bySort(a.s, b.s))
+        for (const k of kids) walk(k.s, depth + 1, k.type)
+      }
+      for (const r of roots.sort(bySort)) walk(r, 0, null)
+      return out
+    }
     const cats = snap.categories.map((c) => ({
       id: c.id as number | null,
       name: c.name,
       color: c.color,
-      sessions: sortSessions(byCat.get(c.id) ?? []),
+      rows: buildTree(byCat.get(c.id) ?? []),
     }))
     const uncat = {
       id: null as number | null,
       name: 'Uncategorized',
       color: '#5b6474',
-      sessions: sortSessions(byCat.get(null) ?? []),
+      rows: buildTree(byCat.get(null) ?? []),
     }
-    // Keep real categories visible even when empty; drop Uncategorized when empty.
-    return [...cats, uncat].filter((g) => g.id !== null || g.sessions.length > 0)
-  }, [live, snap.categories])
+    return [...cats, uncat].filter((g) => g.id !== null || g.rows.length > 0)
+  }, [live, snap.categories, edgeByChild])
 
   const openSession = (s: Session) =>
     setSelected({
@@ -128,17 +170,18 @@ export function App() {
       name: s.name ?? `pid ${s.pid}`,
       resume: true,
     })
-
   const closeTerminal = () => {
     if (selected) window.cc.termClose(selected.pid)
     setSelected(null)
   }
-
   const assign = (s: Session, categoryId: number | null) => {
     window.cc.catAssign(s.sessionId, categoryId)
     setMenu(null)
   }
-
+  const setEdge = (child: Session, parent: Session, type: MenuMode) => {
+    if (type === 'blocking' || type === 'tangential') window.cc.edgeSet(child.sessionId, parent.sessionId, type)
+    setMenu(null)
+  }
   const createCategory = async () => {
     const name = newCatName.trim()
     if (name) await window.cc.catCreate(name)
@@ -182,7 +225,7 @@ export function App() {
                 onBlur={createCategory}
               />
             ) : (
-              <button className="addcat" onClick={() => setNewCat(true)} title="New category">
+              <button className="addcat" onClick={() => setNewCat(true)}>
                 + Category
               </button>
             )}
@@ -193,21 +236,27 @@ export function App() {
               <div className="grouphead">
                 <span className="cdot" style={{ background: g.color }} />
                 <span className="cname">{g.name}</span>
-                <span className="gcount">{g.sessions.length}</span>
+                <span className="gcount">{g.rows.length}</span>
               </div>
               <ul className="rows">
-                {g.sessions.length === 0 && <li className="emptycat">drag or right-click a session here</li>}
-                {g.sessions.map((s) => (
+                {g.rows.length === 0 && <li className="emptycat">right-click a session to move it here</li>}
+                {g.rows.map(({ s, depth, edgeType }) => (
                   <li
                     key={s.pid}
                     className={`row state-${s.state}${selected?.pid === s.pid ? ' sel' : ''}`}
+                    style={{ paddingLeft: 10 + depth * 16 }}
                     title={s.stateReason}
                     onClick={() => openSession(s)}
                     onContextMenu={(e) => {
                       e.preventDefault()
-                      setMenu({ x: e.clientX, y: e.clientY, session: s })
+                      setMenu({ x: e.clientX, y: e.clientY, session: s, mode: 'root' })
                     }}
                   >
+                    {edgeType && (
+                      <span className={`edge edge-${edgeType}`}>
+                        {edgeType === 'blocking' ? '└─' : '└╌'}
+                      </span>
+                    )}
                     <span className="dot" style={{ background: STATE[s.state].color }} />
                     <span className="rowmain">
                       <span className="name">{s.name ?? <em>pid {s.pid}</em>}</span>
@@ -229,9 +278,7 @@ export function App() {
                 <span className="tcwd" title={selected.cwd}>
                   {short(selected.cwd)}
                 </span>
-                {selected.resume && (
-                  <span className="tnote">resumed copy — original keeps running</span>
-                )}
+                {selected.resume && <span className="tnote">resumed copy — original keeps running</span>}
                 <span className="grow" />
                 <button className="tclose" onClick={closeTerminal} title="Close terminal">
                   ✕
@@ -249,52 +296,110 @@ export function App() {
             <div className="placeholder">
               <p>Select a session to open its terminal.</p>
               <p className="sub">
-                Right-click a session to move it into a category. Opening a session running in iTerm
-                resumes a managed copy here — the original keeps running until you close it.
+                Right-click a session to set its category or make it a blocking child / tangential
+                offshoot of another. Opening a session running in iTerm resumes a managed copy here.
               </p>
             </div>
           )}
         </main>
       </div>
 
-      {menu && (
-        <>
-          <div
-            className="menuscrim"
-            onClick={() => setMenu(null)}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              setMenu(null)
-            }}
-          />
-          <div className="menu" style={{ left: menu.x, top: menu.y }}>
-            <div className="menuhead">Move “{menu.session.name ?? `pid ${menu.session.pid}`}” to</div>
+      {menu && <ContextMenu menu={menu} snap={snap} live={live} edgeByChild={edgeByChild} setMenu={setMenu} assign={assign} setEdge={setEdge} onNewCat={() => { setMenu(null); setNewCat(true) }} />}
+    </div>
+  )
+}
+
+function ContextMenu({
+  menu,
+  snap,
+  live,
+  edgeByChild,
+  setMenu,
+  assign,
+  setEdge,
+  onNewCat,
+}: {
+  menu: Menu
+  snap: Snapshot
+  live: Session[]
+  edgeByChild: Map<string, Edge>
+  setMenu: (m: Menu | null) => void
+  assign: (s: Session, c: number | null) => void
+  setEdge: (child: Session, parent: Session, type: MenuMode) => void
+  onNewCat: () => void
+}) {
+  const s = menu.session
+  const hasParent = edgeByChild.has(s.sessionId)
+  const candidates = live.filter((x) => x.categoryId === s.categoryId && x.sessionId !== s.sessionId)
+  return (
+    <>
+      <div
+        className="menuscrim"
+        onClick={() => setMenu(null)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          setMenu(null)
+        }}
+      />
+      <div className="menu" style={{ left: menu.x, top: menu.y }}>
+        {menu.mode === 'root' ? (
+          <>
+            <div className="menuhead">Move “{s.name ?? `pid ${s.pid}`}” to</div>
             {snap.categories.map((c) => (
-              <button key={c.id} className="menuitem" onClick={() => assign(menu.session, c.id)}>
+              <button key={c.id} className="menuitem" onClick={() => assign(s, c.id)}>
                 <span className="cdot" style={{ background: c.color }} />
                 <span className="grow">{c.name}</span>
-                {menu.session.categoryId === c.id && <span className="check">✓</span>}
+                {s.categoryId === c.id && <span className="check">✓</span>}
               </button>
             ))}
-            <button className="menuitem" onClick={() => assign(menu.session, null)}>
+            <button className="menuitem" onClick={() => assign(s, null)}>
               <span className="cdot" style={{ background: '#5b6474' }} />
               <span className="grow">Uncategorized</span>
-              {menu.session.categoryId == null && <span className="check">✓</span>}
+              {s.categoryId == null && <span className="check">✓</span>}
             </button>
             <div className="menusep" />
-            <button
-              className="menuitem"
-              onClick={() => {
-                setMenu(null)
-                setNewCat(true)
-              }}
-            >
+            <button className="menuitem" onClick={() => setMenu({ ...menu, mode: 'blocking' })}>
+              Make blocking child of…
+            </button>
+            <button className="menuitem" onClick={() => setMenu({ ...menu, mode: 'tangential' })}>
+              Make tangential offshoot of…
+            </button>
+            {hasParent && (
+              <button
+                className="menuitem"
+                onClick={() => {
+                  window.cc.edgeClear(s.sessionId)
+                  setMenu(null)
+                }}
+              >
+                Clear parent
+              </button>
+            )}
+            <div className="menusep" />
+            <button className="menuitem" onClick={onNewCat}>
               + New category…
             </button>
-          </div>
-        </>
-      )}
-    </div>
+          </>
+        ) : (
+          <>
+            <div className="menuhead">
+              {menu.mode === 'blocking' ? 'Blocking child of…' : 'Tangential offshoot of…'}
+            </div>
+            {candidates.length === 0 && <div className="emptycat">no other sessions in this category</div>}
+            {candidates.sort(bySort).map((p) => (
+              <button key={p.pid} className="menuitem" onClick={() => setEdge(s, p, menu.mode)}>
+                <span className="dot" style={{ background: STATE[p.state].color }} />
+                <span className="grow">{p.name ?? `pid ${p.pid}`}</span>
+              </button>
+            ))}
+            <div className="menusep" />
+            <button className="menuitem" onClick={() => setMenu({ ...menu, mode: 'root' })}>
+              ← back
+            </button>
+          </>
+        )}
+      </div>
+    </>
   )
 }
 

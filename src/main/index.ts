@@ -14,7 +14,11 @@ import {
   ensureNode,
   assignCategory,
   getNodeMap,
+  setParent,
+  clearParent,
+  getEdges,
   type Category,
+  type Edge,
 } from './registry'
 
 let win: BrowserWindow | null = null
@@ -27,6 +31,7 @@ interface Snapshot {
   scannedAt: number
   sessions: EnrichedSession[]
   categories: Category[]
+  edges: Edge[]
 }
 
 function snapshot(): Snapshot {
@@ -49,6 +54,7 @@ function snapshot(): Snapshot {
     scannedAt: Date.now(),
     sessions: enriched,
     categories: listCategories(),
+    edges: getEdges(),
   }
 }
 
@@ -60,12 +66,20 @@ function maybeSeed(): void {
   const exp = createCategory('Experiments')
   const proj = createCategory('Command Center')
   try {
+    const client: string[] = []
     for (const s of scanLiveSessions()) {
       if (!s.sessionId) continue
       ensureNode(s.sessionId, { cwd: s.cwd, name: s.name })
-      if (s.cwd.includes('client')) assignCategory(s.sessionId, sf.id)
-      else if (s.cwd.includes('/experiments/')) assignCategory(s.sessionId, exp.id)
+      if (s.cwd.includes('client')) {
+        assignCategory(s.sessionId, sf.id)
+        client.push(s.sessionId)
+      } else if (s.cwd.includes('/experiments/')) assignCategory(s.sessionId, exp.id)
       else if (s.cwd.includes('claude-command-center')) assignCategory(s.sessionId, proj.id)
+    }
+    // demo tree: a blocking child and a tangential offshoot under one session
+    if (client.length >= 3) {
+      setParent(client[1], client[0], 'blocking')
+      setParent(client[2], client[0], 'tangential')
     }
   } catch (e) {
     console.error('[main] seed error', e)
@@ -249,6 +263,16 @@ ipcMain.handle('cat:delete', (_e, id: number) => {
 })
 ipcMain.handle('cat:assign', (_e, sessionId: string, categoryId: number | null) => {
   assignCategory(sessionId, categoryId)
+  pushSessions()
+  return true
+})
+ipcMain.handle('edge:set', (_e, childId: string, parentId: string, type: 'blocking' | 'tangential') => {
+  const ok = setParent(childId, parentId, type)
+  if (ok) pushSessions()
+  return ok
+})
+ipcMain.handle('edge:clear', (_e, childId: string) => {
+  clearParent(childId)
   pushSessions()
   return true
 })
