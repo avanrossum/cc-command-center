@@ -104,6 +104,13 @@ export function App() {
   // Restore-on-launch: the last-active session id to reopen once it appears live.
   const [pendingRestore, setPendingRestore] = useState<string | null>(null)
   const restoredRef = useRef(false)
+  // The spawn-a-child composer (folder + optional handoff note).
+  const [spawn, setSpawn] = useState<{
+    parent: Session
+    type: 'blocking' | 'tangential'
+    cwd: string
+    note: string
+  } | null>(null)
 
   useEffect(() => {
     window.cc.appVersion().then((v) => setVersion(v.full))
@@ -450,7 +457,26 @@ export function App() {
         </main>
       </div>
 
-      {menu && <ContextMenu menu={menu} snap={snap} live={live} edgeByChild={edgeByChild} setMenu={setMenu} assign={assign} setEdge={setEdge} onNewCat={() => { setMenu(null); setNewCat(true) }} />}
+      {menu && (
+        <ContextMenu
+          menu={menu}
+          snap={snap}
+          live={live}
+          edgeByChild={edgeByChild}
+          setMenu={setMenu}
+          assign={assign}
+          setEdge={setEdge}
+          onNewCat={() => {
+            setMenu(null)
+            setNewCat(true)
+          }}
+          onSpawn={(s, type) => {
+            setMenu(null)
+            setSpawn({ parent: s, type, cwd: s.cwd, note: '' })
+          }}
+        />
+      )}
+      {spawn && <SpawnComposer spawn={spawn} setSpawn={setSpawn} />}
     </div>
   )
 }
@@ -464,6 +490,7 @@ function ContextMenu({
   assign,
   setEdge,
   onNewCat,
+  onSpawn,
 }: {
   menu: Menu
   snap: Snapshot
@@ -473,6 +500,7 @@ function ContextMenu({
   assign: (s: Session, c: number | null) => void
   setEdge: (child: Session, parent: Session, type: MenuMode) => void
   onNewCat: () => void
+  onSpawn: (s: Session, type: 'blocking' | 'tangential') => void
 }) {
   const s = menu.session
   const hasParent = edgeByChild.has(s.sessionId)
@@ -502,6 +530,13 @@ function ContextMenu({
               <span className="cdot" style={{ background: '#5b6474' }} />
               <span className="grow">Uncategorized</span>
               {s.categoryId == null && <span className="check">✓</span>}
+            </button>
+            <div className="menusep" />
+            <button className="menuitem" onClick={() => onSpawn(s, 'blocking')}>
+              Spawn blocking child…
+            </button>
+            <button className="menuitem" onClick={() => onSpawn(s, 'tangential')}>
+              Spawn tangential offshoot…
             </button>
             <div className="menusep" />
             <button className="menuitem" onClick={() => setMenu({ ...menu, mode: 'blocking' })}>
@@ -546,6 +581,73 @@ function ContextMenu({
         )}
       </div>
     </>
+  )
+}
+
+type SpawnState = { parent: Session; type: 'blocking' | 'tangential'; cwd: string; note: string }
+
+function SpawnComposer({
+  spawn,
+  setSpawn,
+}: {
+  spawn: SpawnState
+  setSpawn: (s: SpawnState | null) => void
+}) {
+  const isBlocking = spawn.type === 'blocking'
+  const parentName = spawn.parent.name ?? `pid ${spawn.parent.pid}`
+  const submit = () => {
+    window.cc.sessionSpawnChild(spawn.parent.sessionId, spawn.cwd, spawn.type, spawn.note.trim() || undefined)
+    setSpawn(null)
+  }
+  return (
+    <div className="spawnscrim" onClick={() => setSpawn(null)}>
+      <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
+        <div className="spawntitle">Spawn {isBlocking ? 'blocking child' : 'tangential offshoot'}</div>
+        <div className="spawnsub">
+          of “{parentName}” —{' '}
+          {isBlocking
+            ? 'blocks the parent until it’s done; the parent rolls back to it.'
+            : 'spun off with context; does not block the parent.'}
+        </div>
+        <div className="spawnlabel">Folder</div>
+        <div className="spawnfolder">
+          <span className="spawncwd" title={spawn.cwd}>
+            {spawn.cwd}
+          </span>
+          <button
+            className="rbtn"
+            onClick={async () => {
+              const p = await window.cc.pickFolder()
+              if (p) setSpawn({ ...spawn, cwd: p })
+            }}
+          >
+            Change…
+          </button>
+        </div>
+        <div className="spawnlabel">
+          Handoff note <span className="spawnopt">optional — sent as the child’s first message</span>
+        </div>
+        <textarea
+          className="spawnnote"
+          autoFocus
+          value={spawn.note}
+          placeholder="What should the child pick up? The gap to fill, context, links…"
+          onChange={(e) => setSpawn({ ...spawn, note: e.target.value })}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit()
+            if (e.key === 'Escape') setSpawn(null)
+          }}
+        />
+        <div className="spawnactions">
+          <button className="rbtn" onClick={() => setSpawn(null)}>
+            Cancel
+          </button>
+          <button className="rbtn primary" onClick={submit}>
+            Spawn {isBlocking ? 'blocking child' : 'offshoot'}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 

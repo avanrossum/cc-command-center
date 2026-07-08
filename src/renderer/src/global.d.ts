@@ -30,6 +30,13 @@ declare global {
       sessionNew: () => Promise<{ pid: number; cwd: string } | null>
       sessionStartFresh: (cwd: string) => Promise<{ pid: number; cwd: string } | null>
       sessionRemove: (sessionId: string) => Promise<boolean>
+      sessionSpawnChild: (
+        parentSessionId: string,
+        cwd: string,
+        type: 'blocking' | 'tangential',
+        note?: string,
+      ) => Promise<{ pid: number; cwd: string } | null>
+      pickFolder: () => Promise<string | null>
       stateGet: (key: string) => Promise<string | null>
       stateSet: (key: string, value: string) => void
       termOpen: (key: string, opts: OpenOpts) => Promise<boolean>

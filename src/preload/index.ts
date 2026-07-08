@@ -47,6 +47,13 @@ contextBridge.exposeInMainWorld('cc', {
   sessionNew: () => ipcRenderer.invoke('session:new'),
   sessionStartFresh: (cwd: string) => ipcRenderer.invoke('session:startFresh', cwd),
   sessionRemove: (sessionId: string) => ipcRenderer.invoke('session:remove', sessionId),
+  sessionSpawnChild: (
+    parentSessionId: string,
+    cwd: string,
+    type: 'blocking' | 'tangential',
+    note?: string,
+  ) => ipcRenderer.invoke('session:spawnChild', parentSessionId, cwd, type, note),
+  pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
 
   // workspace state (resume-on-restart)
   stateGet: (key: string) => ipcRenderer.invoke('state:get', key),

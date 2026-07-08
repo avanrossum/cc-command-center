@@ -65,6 +65,7 @@ function snapshot(): Snapshot {
   for (const s of sessions) {
     if (s.sessionId) ensureNode(s.sessionId, { cwd: s.cwd, name: s.name, origin: 'adopted' })
   }
+  reconcilePendingChildren(sessions)
   const nodes = getNodeMap()
   const enriched: EnrichedSession[] = sessions.map((s) => ({
     ...s,
@@ -260,6 +261,54 @@ function launchSession(cwd: string, args: string[] = []): number {
   return p.pid
 }
 
+// Children spawned from an active session. The typed edge can't be set until the
+// new session gets its own Claude session id (written on adoption ~1.5s later),
+// so we stash the intent keyed by the child's pid and resolve it in the scan.
+interface PendingChild {
+  parentSessionId: string
+  type: 'blocking' | 'tangential'
+  note?: string
+}
+const pendingChildren = new Map<number, PendingChild>()
+
+function spawnChild(
+  parentSessionId: string,
+  cwd: string,
+  type: 'blocking' | 'tangential',
+  note?: string,
+): number {
+  const pid = launchSession(cwd)
+  pendingChildren.set(pid, { parentSessionId, type, note: note?.trim() || undefined })
+  return pid
+}
+
+// Once a pending child has been adopted (has a session id), wire the typed edge
+// to its parent and best-effort deliver the handoff note as its first message.
+function reconcilePendingChildren(sessions: LiveSession[]): void {
+  if (pendingChildren.size === 0) return
+  for (const s of sessions) {
+    if (!s.sessionId) continue
+    const pend = pendingChildren.get(s.pid)
+    if (!pend) continue
+    ensureNode(s.sessionId, { cwd: s.cwd, name: s.name })
+    setParent(s.sessionId, pend.parentSessionId, pend.type)
+    const term = terminals.get(`new:${s.pid}`) || terminals.get(s.sessionId)
+    if (pend.note && term && !term.exited) {
+      // Bracketed paste, then a separate CR to submit (Claude's Ink input needs
+      // the paste envelope; a raw CR alone does not submit).
+      term.pty.write(`\x1b[200~${pend.note}\x1b[201~`)
+      setTimeout(() => {
+        try {
+          term.pty.write('\r')
+        } catch {
+          /* terminal gone */
+        }
+      }, 150)
+    }
+    pendingChildren.delete(s.pid)
+  }
+}
+
 ipcMain.handle('term:open', (_e, key: string, opts: OpenOpts) => {
   openTerminal(key, opts)
   return true
@@ -406,6 +455,24 @@ ipcMain.handle('session:new', async () => {
 ipcMain.handle('session:startFresh', (_e, cwd: string) => {
   if (!cwd) return null
   return { pid: launchSession(cwd), cwd }
+})
+// Spawn a child session from an active one, auto-linking the typed edge (and an
+// optional handoff note) once the child is adopted.
+ipcMain.handle(
+  'session:spawnChild',
+  (_e, parentSessionId: string, cwd: string, type: 'blocking' | 'tangential', note?: string) => {
+    if (!parentSessionId || !cwd) return null
+    return { pid: spawnChild(parentSessionId, cwd, type, note), cwd }
+  },
+)
+// Pick a folder without launching anything (used by the spawn-child composer).
+ipcMain.handle('dialog:pickFolder', async () => {
+  if (!win) return null
+  const r = await dialog.showOpenDialog(win, {
+    properties: ['openDirectory', 'createDirectory'],
+    title: 'Folder for the new session…',
+  })
+  return r.canceled ? null : (r.filePaths[0] ?? null)
 })
 // Remove a terminated session from the list: kill any managed terminal, purge
 // its dead ~/.claude/sessions files, and drop the registry node.

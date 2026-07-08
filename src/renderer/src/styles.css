@@ -493,6 +493,92 @@ body {
   max-width: 440px;
 }
 
+/* ---- spawn-a-child composer ---- */
+.spawnscrim {
+  position: fixed;
+  inset: 0;
+  z-index: 46;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(11, 13, 18, 0.6);
+  padding: 24px;
+}
+.spawnmodal {
+  width: 460px;
+  max-width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 22px 18px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+}
+.spawntitle {
+  font-size: 15px;
+  font-weight: 650;
+}
+.spawnsub {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+.spawnlabel {
+  margin-top: 16px;
+  margin-bottom: 6px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--dim2);
+  font-weight: 600;
+}
+.spawnopt {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--dim2);
+}
+.spawnfolder {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.spawncwd {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--dim);
+  background: #0e1118;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spawnnote {
+  width: 100%;
+  min-height: 76px;
+  resize: vertical;
+  background: #0e1118;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font: 12.5px/1.5 -apple-system, system-ui, sans-serif;
+  outline: none;
+}
+.spawnnote:focus {
+  border-color: #3355aa;
+}
+.spawnactions {
+  margin-top: 16px;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 /* ---- context menu ---- */
 .menuscrim {
   position: fixed;
