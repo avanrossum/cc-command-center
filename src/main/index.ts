@@ -290,22 +290,32 @@ function reconcilePendingChildren(sessions: LiveSession[]): void {
     if (!s.sessionId) continue
     const pend = pendingChildren.get(s.pid)
     if (!pend) continue
-    ensureNode(s.sessionId, { cwd: s.cwd, name: s.name })
-    setParent(s.sessionId, pend.parentSessionId, pend.type)
+    pendingChildren.delete(s.pid)
+    try {
+      ensureNode(s.sessionId, { cwd: s.cwd, name: s.name })
+      setParent(s.sessionId, pend.parentSessionId, pend.type)
+    } catch (e) {
+      // e.g. the parent was removed between spawn and adoption — leave the child
+      // unlinked rather than letting the poll throw.
+      console.error('[main] link spawned child failed', e)
+    }
     const term = terminals.get(`new:${s.pid}`) || terminals.get(s.sessionId)
     if (pend.note && term && !term.exited) {
       // Bracketed paste, then a separate CR to submit (Claude's Ink input needs
       // the paste envelope; a raw CR alone does not submit).
-      term.pty.write(`\x1b[200~${pend.note}\x1b[201~`)
-      setTimeout(() => {
-        try {
-          term.pty.write('\r')
-        } catch {
-          /* terminal gone */
-        }
-      }, 150)
+      try {
+        term.pty.write(`\x1b[200~${pend.note}\x1b[201~`)
+        setTimeout(() => {
+          try {
+            term.pty.write('\r')
+          } catch {
+            /* terminal gone */
+          }
+        }, 150)
+      } catch {
+        /* terminal gone */
+      }
     }
-    pendingChildren.delete(s.pid)
   }
 }
 
