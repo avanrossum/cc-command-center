@@ -163,6 +163,7 @@ Riskiest-first. The two biggest unknowns (does the Claude TUI render cleanly thr
 **Deliverables.**
 - Login-item registration via `SMAppService`.
 - Startup ABI self-check with a clear remediation message.
+- **Auto-updater** — `electron-updater` (or Electron `autoUpdater`) against signed/notarized release artifacts, wired to the "Check for Updates…" menu item (currently a disabled placeholder) and a background update check. Requires code signing + notarization and a release-artifact host (GitHub Releases on the private repo, or an S3/generic feed). The versioning system (`gen-version.mjs` / `bump.mjs` / git tags, shipped pre-Phase-8) already produces the `MAJOR.MINOR.PATCH-<hash>` build identity the updater compares against.
 - Broadcast/handoff audit surfaces (delivered/undelivered), COPY/SHARE ergonomics.
 - Performance pass at 19+ nodes: memory, WebGL context churn, DB write cadence.
 - Error surfaces for degraded sessions, unreachable send targets, and format-drift UNKNOWN nodes.
@@ -170,6 +171,7 @@ Riskiest-first. The two biggest unknowns (does the Claude TUI render cleanly thr
 **Definition of done.**
 - The app registers as a Login Item and relaunches cleanly to the restored layout after a reboot.
 - A native-module ABI mismatch produces a readable remediation message rather than a silent crash.
+- The app checks for updates, surfaces an available update, and applies it on relaunch against a signed/notarized artifact; the "Check for Updates…" menu item is live.
 - At 19+ nodes the app stays responsive and within the WebGL context cap, and no send silently no-ops.
 
 ---
