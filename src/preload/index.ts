@@ -19,6 +19,13 @@ contextBridge.exposeInMainWorld('cc', {
   getSessions: () => ipcRenderer.invoke('cc:getSessions'),
   onSessions: (cb: (snapshot: unknown) => void) => sub('cc:sessions', cb),
 
+  // categories
+  catCreate: (name: string) => ipcRenderer.invoke('cat:create', name),
+  catRename: (id: number, name: string) => ipcRenderer.invoke('cat:rename', id, name),
+  catDelete: (id: number) => ipcRenderer.invoke('cat:delete', id),
+  catAssign: (sessionId: string, categoryId: number | null) =>
+    ipcRenderer.invoke('cat:assign', sessionId, categoryId),
+
   // terminals
   termOpen: (pid: number, opts: OpenOpts) => ipcRenderer.invoke('term:open', pid, opts),
   termAttach: (pid: number) => ipcRenderer.send('term:attach', pid),

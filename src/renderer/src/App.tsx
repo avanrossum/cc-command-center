@@ -9,17 +9,25 @@ interface Session {
   cwd: string
   name?: string
   version?: string
-  registryStatus?: string
   state: CoarseState
   stateReason: string
   transcriptMtimeMs?: number
   isSpare: boolean
+  categoryId: number | null
+}
+
+interface Category {
+  id: number
+  name: string
+  color: string
+  sort: number
 }
 
 interface Snapshot {
   home: string
   scannedAt: number
   sessions: Session[]
+  categories: Category[]
 }
 
 interface Selected {
@@ -28,6 +36,12 @@ interface Selected {
   cwd: string
   name: string
   resume: boolean
+}
+
+interface Menu {
+  x: number
+  y: number
+  session: Session
 }
 
 const STATE: Record<CoarseState, { label: string; color: string; order: number }> = {
@@ -49,8 +63,11 @@ function fmtAge(ms: number | undefined, now: number): string {
 }
 
 export function App() {
-  const [snap, setSnap] = useState<Snapshot>({ home: '', scannedAt: 0, sessions: [] })
+  const [snap, setSnap] = useState<Snapshot>({ home: '', scannedAt: 0, sessions: [], categories: [] })
   const [selected, setSelected] = useState<Selected | null>(null)
+  const [menu, setMenu] = useState<Menu | null>(null)
+  const [newCat, setNewCat] = useState(false)
+  const [newCatName, setNewCatName] = useState('')
 
   useEffect(() => {
     window.cc.getSessions().then((s) => setSnap(s as Snapshot))
@@ -72,26 +89,36 @@ export function App() {
     return c
   }, [live])
 
+  const short = (cwd: string) => (snap.home ? cwd.replace(snap.home, '~') : cwd)
+
   const groups = useMemo(() => {
-    const byCwd = new Map<string, Session[]>()
+    const byCat = new Map<number | null, Session[]>()
     for (const s of live) {
-      const arr = byCwd.get(s.cwd) ?? []
+      const k = s.categoryId ?? null
+      const arr = byCat.get(k) ?? []
       arr.push(s)
-      byCwd.set(s.cwd, arr)
+      byCat.set(k, arr)
     }
-    const short = (cwd: string) => (snap.home ? cwd.replace(snap.home, '~') : cwd)
-    return [...byCwd.entries()]
-      .map(([cwd, sessions]) => {
-        sessions.sort(
-          (a, b) =>
-            STATE[a.state].order - STATE[b.state].order ||
-            (a.name ?? '').localeCompare(b.name ?? ''),
-        )
-        const active = sessions.some((s) => s.state === 'working' || s.state === 'waiting')
-        return { cwd, short: short(cwd), sessions, active }
-      })
-      .sort((a, b) => Number(b.active) - Number(a.active) || a.short.localeCompare(b.short))
-  }, [live, snap.home])
+    const sortSessions = (arr: Session[]) =>
+      arr.sort(
+        (a, b) =>
+          STATE[a.state].order - STATE[b.state].order || (a.name ?? '').localeCompare(b.name ?? ''),
+      )
+    const cats = snap.categories.map((c) => ({
+      id: c.id as number | null,
+      name: c.name,
+      color: c.color,
+      sessions: sortSessions(byCat.get(c.id) ?? []),
+    }))
+    const uncat = {
+      id: null as number | null,
+      name: 'Uncategorized',
+      color: '#5b6474',
+      sessions: sortSessions(byCat.get(null) ?? []),
+    }
+    // Keep real categories visible even when empty; drop Uncategorized when empty.
+    return [...cats, uncat].filter((g) => g.id !== null || g.sessions.length > 0)
+  }, [live, snap.categories])
 
   const openSession = (s: Session) =>
     setSelected({
@@ -105,6 +132,18 @@ export function App() {
   const closeTerminal = () => {
     if (selected) window.cc.termClose(selected.pid)
     setSelected(null)
+  }
+
+  const assign = (s: Session, categoryId: number | null) => {
+    window.cc.catAssign(s.sessionId, categoryId)
+    setMenu(null)
+  }
+
+  const createCategory = async () => {
+    const name = newCatName.trim()
+    if (name) await window.cc.catCreate(name)
+    setNewCatName('')
+    setNewCat(false)
   }
 
   return (
@@ -124,26 +163,56 @@ export function App() {
 
       <div className="body">
         <aside className="sidebar">
-          {groups.length === 0 && <div className="empty">No live sessions.</div>}
+          <div className="sidehead">
+            <span className="sidetitle">CATEGORIES</span>
+            {newCat ? (
+              <input
+                className="newcatinput"
+                autoFocus
+                placeholder="Category name…"
+                value={newCatName}
+                onChange={(e) => setNewCatName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') createCategory()
+                  if (e.key === 'Escape') {
+                    setNewCat(false)
+                    setNewCatName('')
+                  }
+                }}
+                onBlur={createCategory}
+              />
+            ) : (
+              <button className="addcat" onClick={() => setNewCat(true)} title="New category">
+                + Category
+              </button>
+            )}
+          </div>
+
           {groups.map((g) => (
-            <section key={g.cwd} className={`group${g.active ? ' active' : ''}`}>
+            <section key={g.id ?? 'uncat'} className="group">
               <div className="grouphead">
-                <span className="path" title={g.cwd}>
-                  {g.short}
-                </span>
+                <span className="cdot" style={{ background: g.color }} />
+                <span className="cname">{g.name}</span>
                 <span className="gcount">{g.sessions.length}</span>
               </div>
               <ul className="rows">
+                {g.sessions.length === 0 && <li className="emptycat">drag or right-click a session here</li>}
                 {g.sessions.map((s) => (
                   <li
                     key={s.pid}
                     className={`row state-${s.state}${selected?.pid === s.pid ? ' sel' : ''}`}
                     title={s.stateReason}
                     onClick={() => openSession(s)}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      setMenu({ x: e.clientX, y: e.clientY, session: s })
+                    }}
                   >
                     <span className="dot" style={{ background: STATE[s.state].color }} />
-                    <span className="name">{s.name ?? <em>pid {s.pid}</em>}</span>
-                    <span className="grow" />
+                    <span className="rowmain">
+                      <span className="name">{s.name ?? <em>pid {s.pid}</em>}</span>
+                      <span className="rowcwd">{short(s.cwd)}</span>
+                    </span>
                     <span className="meta">{fmtAge(s.transcriptMtimeMs, snap.scannedAt)}</span>
                   </li>
                 ))}
@@ -158,7 +227,7 @@ export function App() {
               <div className="termbar">
                 <span className="tname">{selected.name}</span>
                 <span className="tcwd" title={selected.cwd}>
-                  {snap.home ? selected.cwd.replace(snap.home, '~') : selected.cwd}
+                  {short(selected.cwd)}
                 </span>
                 {selected.resume && (
                   <span className="tnote">resumed copy — original keeps running</span>
@@ -180,13 +249,51 @@ export function App() {
             <div className="placeholder">
               <p>Select a session to open its terminal.</p>
               <p className="sub">
-                Opening a session running in iTerm resumes a managed copy here — the original keeps
-                running until you close it.
+                Right-click a session to move it into a category. Opening a session running in iTerm
+                resumes a managed copy here — the original keeps running until you close it.
               </p>
             </div>
           )}
         </main>
       </div>
+
+      {menu && (
+        <>
+          <div
+            className="menuscrim"
+            onClick={() => setMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              setMenu(null)
+            }}
+          />
+          <div className="menu" style={{ left: menu.x, top: menu.y }}>
+            <div className="menuhead">Move “{menu.session.name ?? `pid ${menu.session.pid}`}” to</div>
+            {snap.categories.map((c) => (
+              <button key={c.id} className="menuitem" onClick={() => assign(menu.session, c.id)}>
+                <span className="cdot" style={{ background: c.color }} />
+                <span className="grow">{c.name}</span>
+                {menu.session.categoryId === c.id && <span className="check">✓</span>}
+              </button>
+            ))}
+            <button className="menuitem" onClick={() => assign(menu.session, null)}>
+              <span className="cdot" style={{ background: '#5b6474' }} />
+              <span className="grow">Uncategorized</span>
+              {menu.session.categoryId == null && <span className="check">✓</span>}
+            </button>
+            <div className="menusep" />
+            <button
+              className="menuitem"
+              onClick={() => {
+                setMenu(null)
+                setNewCat(true)
+              }}
+            >
+              + New category…
+            </button>
+          </div>
+        </>
+      )}
     </div>
   )
 }

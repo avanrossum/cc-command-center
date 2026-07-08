@@ -5,15 +5,28 @@ import { existsSync } from 'node:fs'
 import * as pty from 'node-pty'
 import { scanLiveSessions } from './engine/sessions'
 import type { LiveSession } from './engine/types'
+import {
+  initRegistry,
+  listCategories,
+  createCategory,
+  renameCategory,
+  deleteCategory,
+  ensureNode,
+  assignCategory,
+  getNodeMap,
+  type Category,
+} from './registry'
 
 let win: BrowserWindow | null = null
 let pollTimer: NodeJS.Timeout | null = null
 
 // ---------- session polling (status board) ----------
+type EnrichedSession = LiveSession & { categoryId: number | null }
 interface Snapshot {
   home: string
   scannedAt: number
-  sessions: LiveSession[]
+  sessions: EnrichedSession[]
+  categories: Category[]
 }
 
 function snapshot(): Snapshot {
@@ -23,7 +36,40 @@ function snapshot(): Snapshot {
   } catch (e) {
     console.error('[main] scan error', e)
   }
-  return { home: os.homedir(), scannedAt: Date.now(), sessions }
+  for (const s of sessions) {
+    if (s.sessionId) ensureNode(s.sessionId, { cwd: s.cwd, name: s.name, origin: 'adopted' })
+  }
+  const nodes = getNodeMap()
+  const enriched: EnrichedSession[] = sessions.map((s) => ({
+    ...s,
+    categoryId: nodes.get(s.sessionId)?.category_id ?? null,
+  }))
+  return {
+    home: os.homedir(),
+    scannedAt: Date.now(),
+    sessions: enriched,
+    categories: listCategories(),
+  }
+}
+
+// Demo only: seed a few categories and bucket current sessions by cwd so the
+// grouping is visible without hand-assigning. Real use starts empty.
+function maybeSeed(): void {
+  if (!process.env.CCC_SEED || listCategories().length > 0) return
+  const sf = createCategory('Salesforce · Client')
+  const exp = createCategory('Experiments')
+  const proj = createCategory('Command Center')
+  try {
+    for (const s of scanLiveSessions()) {
+      if (!s.sessionId) continue
+      ensureNode(s.sessionId, { cwd: s.cwd, name: s.name })
+      if (s.cwd.includes('client')) assignCategory(s.sessionId, sf.id)
+      else if (s.cwd.includes('/experiments/')) assignCategory(s.sessionId, exp.id)
+      else if (s.cwd.includes('claude-command-center')) assignCategory(s.sessionId, proj.id)
+    }
+  } catch (e) {
+    console.error('[main] seed error', e)
+  }
 }
 
 function pushSessions(): void {
@@ -189,8 +235,27 @@ function createWindow(): void {
 }
 
 ipcMain.handle('cc:getSessions', () => snapshot())
+ipcMain.handle('cat:list', () => listCategories())
+ipcMain.handle('cat:create', (_e, name: string) => createCategory(name))
+ipcMain.handle('cat:rename', (_e, id: number, name: string) => {
+  renameCategory(id, name)
+  pushSessions()
+  return true
+})
+ipcMain.handle('cat:delete', (_e, id: number) => {
+  deleteCategory(id)
+  pushSessions()
+  return true
+})
+ipcMain.handle('cat:assign', (_e, sessionId: string, categoryId: number | null) => {
+  assignCategory(sessionId, categoryId)
+  pushSessions()
+  return true
+})
 
 app.whenReady().then(() => {
+  initRegistry(join(app.getPath('userData'), 'registry.db'))
+  maybeSeed()
   createWindow()
   pollTimer = setInterval(pushSessions, 1500)
   app.on('activate', () => {

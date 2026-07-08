@@ -13,6 +13,10 @@ declare global {
     cc: {
       getSessions: () => Promise<unknown>
       onSessions: (cb: (snapshot: unknown) => void) => () => void
+      catCreate: (name: string) => Promise<{ id: number; name: string; color: string }>
+      catRename: (id: number, name: string) => Promise<boolean>
+      catDelete: (id: number) => Promise<boolean>
+      catAssign: (sessionId: string, categoryId: number | null) => Promise<boolean>
       termOpen: (pid: number, opts: OpenOpts) => Promise<boolean>
       termAttach: (pid: number) => void
       termInput: (pid: number, data: string) => void
