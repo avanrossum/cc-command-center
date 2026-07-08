@@ -215,6 +215,18 @@ Today only the *last-active* session auto-restores and every not-live node is tr
 
 ---
 
+## Future direction (discussion, not scheduled) — Control agent (fleet conductor)
+
+**Idea (user, 2026-07-08).** Wire a **control agent** into the app itself — an agent that can help make decisions, read the output of sessions, act as an arbiter / control surface for the whole fleet. It's "the bus, with a brain": the apex of the awareness work, driving the same primitives (read any session's transcript, inject into any managed session, route by the edge graph, query state, spawn/resume) that Phases 5/9 expose.
+
+**What it could do.** Triage the beacon bar ("who actually needs you, and why"), arbitrate/route messages between sessions, perform the Phase-10 context extraction (read a parent's transcript → produce the bounded brief for a tangent), summarize long-running sessions, and be a single natural-language control surface ("resume the schema-fix and tell it the migration path changed").
+
+**Hard requirement — transparency (the user flagged this).** The control agent's activity MUST be viewable: it lives as its own **visible** session (terminal + transcript) plus an **activity log of every tool-call/action it takes**, never a hidden actor. This is both the trust story and the acceptable-use story — human-viewable, human-approvable (an approve-gate on consequential actions), no covert automation, no rate-limit end-run.
+
+**How it wires in.** The app exposes its fleet primitives to the agent as tools (an MCP surface or the app's own tool API): `list_sessions` / `read_session` / `send_to_session` / `spawn` / `set_edge` / `get_status`. Same capabilities the UI uses, so the agent can only do what a user could do here — and every action is surfaced. Depends on Phases 5 + 9 being solid first (reliable send + read + routing).
+
+---
+
 ## v0 task breakdown (Phase 0 + first usable milestone)
 
 v0 = Phase 0 spike proven, then the smallest usable app: adopted sessions visible with correct coarse status, resumable on restart. This spans Phase 0 through Phase 4 with a minimal read-only UI.
