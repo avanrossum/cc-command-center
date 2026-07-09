@@ -1,5 +1,37 @@
 # Backlog — next features (specs)
 
+## Settings menu + "Trust children by default" (user, 2026-07-08)
+
+**Motivation.** The explicit Trust-link (bless) step is friction for a link you deliberately
+created. Make autonomous messaging on a spawned link the DEFAULT, with an opt-out for the
+cautious.
+
+**New surface: a settings menu.** The app has none yet; `app_state` (registry kv,
+`getAppState`/`setAppState`) already exists to persist settings. Entry point: a gear in the
+beacon bar (or an app-menu item) → a modal/panel that accumulates settings over time. Future
+homes: awareness-pause default, the prompt-composer toggle, theme defaults, etc.
+
+**First setting: "Trust children by default" — default ON.**
+- **ON**: a child you spawn is trusted at creation (`edge.trusted = 1`). Autonomous messaging
+  flows immediately, both ways — no manual bless.
+  - Implication: the parent bless-note (how to `@name` the child) fires at **spawn/adoption**,
+    not on a manual trust. And the child's up-messages flow immediately (not held-until-bless).
+- **OFF**: spawned children start untrusted; you must right-click → **Trust link** to enable
+  messaging (current behavior). Show the hint text — "you'll need to manually trust children
+  by right-clicking → Trust link" — under the unchecked toggle, and optionally as a one-time
+  reminder toast at spawn.
+
+**Scope (open decision).** Does "trust children" cover only app-**spawned** children, or also
+manual re-parents ("make blocking child of…")? Recommend: auto-trust applies to **spawned**
+children (deliberate creation); wiring two pre-existing sessions still warrants an explicit
+trust. Revisit.
+
+**Safety note.** With auto-trust, the **kill switch** becomes the primary "stop everything"
+control (no per-link human gate in the default path). The combined per-link rate guard,
+only-when-free delivery, and the preamble's "only on genuine need" remain the containment.
+Defensible because you spawned the child deliberately — but it raises the importance of the
+kill switch being prominent and obvious.
+
 ## Spawn a child from a terminal selection — frictionless tangent (user, 2026-07-08)
 
 **The idea.** Select text in a session's terminal, then right-click → menu item OR press a
