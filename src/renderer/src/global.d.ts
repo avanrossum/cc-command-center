@@ -42,7 +42,7 @@ declare global {
         instructions?: string
       }) => Promise<{ pid: number; cwd: string } | null>
       sessionStartFresh: (cwd: string) => Promise<{ pid: number; cwd: string } | null>
-      sessionRemove: (sessionId: string) => Promise<boolean>
+      sessionRemove: (sessionId: string) => Promise<{ removed: string[] }>
       sessionSpawnChild: (
         parentSessionId: string,
         cwd: string,

@@ -59,6 +59,7 @@ interface Snapshot {
   messages?: MsgLogEntry[]
   awarenessPaused?: boolean
   settings?: AppSettings
+  recentFolders?: string[]
 }
 interface Selected {
   key: string
@@ -105,6 +106,25 @@ function fmtAge(ms: number | undefined, now: number): string {
 
 const bySort = (a: Session, b: Session) =>
   STATE[a.state].order - STATE[b.state].order || (a.name ?? '').localeCompare(b.name ?? '')
+
+// All descendant session ids of a node, via the edge graph (for remove-subtree
+// confirmations). Matches the main-process descendantsOf.
+function descendantIds(sessionId: string, edges: Edge[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>([sessionId])
+  const stack = [sessionId]
+  while (stack.length) {
+    const cur = stack.pop()!
+    for (const e of edges) {
+      if (e.parent_id === cur && !seen.has(e.child_id)) {
+        seen.add(e.child_id)
+        out.push(e.child_id)
+        stack.push(e.child_id)
+      }
+    }
+  }
+  return out
+}
 
 // Rail tag: initials from the name — one word → first 2 letters, multi-word →
 // first letters of the first two words. "Test"→TE, "Test 2"→T2, "A · B"→AB.
@@ -748,9 +768,38 @@ export function App() {
               .copyOutput(s.sessionId, s.cwd)
               .then((r) => showFlash(r.ok ? `copied ${r.chars} chars` : 'no output to copy'))
           }}
+          onRemove={async (s) => {
+            setMenu(null)
+            if (!s.sessionId) return
+            const kids = descendantIds(s.sessionId, snap.edges)
+            const live = !!s.managed && !s.dormant
+            if (kids.length || live) {
+              const also = kids.length
+                ? ` and its ${kids.length} descendant session${kids.length > 1 ? 's' : ''}`
+                : ''
+              const label = s.name ?? `pid ${s.pid}`
+              if (!window.confirm(`Remove “${label}”${also}? Their terminal${kids.length ? 's' : ''} will be ended.`))
+                return
+            }
+            const r = await window.cc.sessionRemove(s.sessionId)
+            const removed = new Set(r?.removed ?? [s.sessionId])
+            if (selected?.sessionId && removed.has(selected.sessionId)) {
+              setSelected(null)
+              window.cc.stateSet('activeSessionId', '')
+            }
+          }}
         />
       )}
-      {spawn && <SpawnComposer spawn={spawn} setSpawn={setSpawn} />}
+      {spawn && (
+        <SpawnComposer
+          spawn={spawn}
+          setSpawn={setSpawn}
+          siblingNames={live
+            .filter((s) => edgeByChild.get(s.sessionId ?? '')?.parent_id === spawn.parent.sessionId)
+            .map((s) => (s.name ?? '').toLowerCase())
+            .filter(Boolean)}
+        />
+      )}
       {send && (
         <SendComposer
           origin={send}
@@ -763,6 +812,7 @@ export function App() {
           categories={snap.categories}
           defaultCat={selectedCat}
           home={snap.home}
+          recent={snap.recentFolders ?? []}
           close={() => setNewSessionOpen(false)}
         />
       )}
@@ -906,6 +956,7 @@ function ContextMenu({
   onSpawn,
   onSend,
   onCopy,
+  onRemove,
 }: {
   menu: Menu
   snap: Snapshot
@@ -918,6 +969,7 @@ function ContextMenu({
   onSpawn: (s: Session, type: 'blocking' | 'tangential') => void
   onSend: (s: Session) => void
   onCopy: (s: Session) => void
+  onRemove: (s: Session) => void
 }) {
   const s = menu.session
   const hasParent = edgeByChild.has(s.sessionId)
@@ -1001,20 +1053,10 @@ function ContextMenu({
                 Clear parent
               </button>
             )}
-            {s.dormant && (
-              <>
-                <div className="menusep" />
-                <button
-                  className="menuitem danger"
-                  onClick={() => {
-                    window.cc.sessionRemove(s.sessionId)
-                    setMenu(null)
-                  }}
-                >
-                  Remove from list
-                </button>
-              </>
-            )}
+            <div className="menusep" />
+            <button className="menuitem danger" onClick={() => onRemove(s)}>
+              Remove from list{s.dormant ? '' : ' (ends terminal)'}
+            </button>
             <div className="menusep" />
             <button className="menuitem" onClick={onNewCat}>
               + New category…
@@ -1056,13 +1098,18 @@ type SpawnState = {
 function SpawnComposer({
   spawn,
   setSpawn,
+  siblingNames,
 }: {
   spawn: SpawnState
   setSpawn: (s: SpawnState | null) => void
+  siblingNames: string[]
 }) {
   const isBlocking = spawn.type === 'blocking'
   const parentName = spawn.parent.name ?? `pid ${spawn.parent.pid}`
+  // Duplicate child name → ambiguous @-addressing on the bus; block it.
+  const dupName = !!spawn.name.trim() && siblingNames.includes(spawn.name.trim().toLowerCase())
   const submit = () => {
+    if (dupName) return
     window.cc.sessionSpawnChild(
       spawn.parent.sessionId,
       spawn.cwd,
@@ -1109,6 +1156,9 @@ function SpawnComposer({
             if (e.key === 'Escape') setSpawn(null)
           }}
         />
+        {dupName && (
+          <div className="spawnwarn">“{spawn.name.trim()}” already names a child of this parent — pick another.</div>
+        )}
         <div className="spawnlabel">Folder</div>
         <div className="spawnfolder">
           <span className="spawncwd" title={spawn.cwd}>
@@ -1142,7 +1192,7 @@ function SpawnComposer({
           <button className="rbtn" onClick={() => setSpawn(null)}>
             Cancel
           </button>
-          <button className="rbtn primary" onClick={submit}>
+          <button className="rbtn primary" onClick={submit} disabled={dupName}>
             Spawn {isBlocking ? 'blocking child' : 'offshoot'}
           </button>
         </div>
@@ -1155,11 +1205,13 @@ function NewSessionComposer({
   categories,
   defaultCat,
   home,
+  recent,
   close,
 }: {
   categories: Category[]
   defaultCat: number | null
   home: string
+  recent: string[]
   close: () => void
 }) {
   const [name, setName] = useState('')
@@ -1223,6 +1275,25 @@ function NewSessionComposer({
             Choose…
           </button>
         </div>
+        {recent.length > 0 && (
+          <>
+            <div className="spawnlabel">
+              Recent <span className="spawnopt">click to reuse</span>
+            </div>
+            <div className="recentfolders">
+              {recent.map((f) => (
+                <button
+                  key={f}
+                  className="recentfolder"
+                  title={f}
+                  onClick={() => setCwd(f)}
+                >
+                  {home && f.startsWith(home) ? f.replace(home, '~') : f}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
 
         <div className="spawnlabel">
           Flags <span className="spawnopt">optional CLI args</span>

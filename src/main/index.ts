@@ -67,6 +67,7 @@ interface Snapshot {
   messages: MsgLogEntry[]
   awarenessPaused: boolean
   settings: AppSettings
+  recentFolders: string[]
 }
 interface AppSettings {
   trustChildrenByDefault: boolean
@@ -207,6 +208,7 @@ function snapshot(): Snapshot {
     messages: messageLog.slice(-40),
     awarenessPaused,
     settings: getSettings(),
+    recentFolders: getRecentFolders(),
   }
 }
 
@@ -393,8 +395,26 @@ function openTerminal(key: string, opts: OpenOpts): void {
 // Launch a brand-new managed Claude session in a folder. Keyed by `new:<pid>`
 // until the next scan adopts it (Claude writes ~/.claude/sessions/<pid>.json,
 // so the sidebar row appears and, once opened, reconciles by session id).
+// Most-recently-used folders (for the New-session picker). Pushed on every launch.
+function pushRecentFolder(cwd: string): void {
+  try {
+    const cur = JSON.parse(getAppState('recentFolders') || '[]') as string[]
+    setAppState('recentFolders', JSON.stringify([cwd, ...cur.filter((f) => f !== cwd)].slice(0, 8)))
+  } catch {
+    /* ignore */
+  }
+}
+function getRecentFolders(): string[] {
+  try {
+    return JSON.parse(getAppState('recentFolders') || '[]') as string[]
+  } catch {
+    return []
+  }
+}
+
 function launchSession(cwd: string, args: string[] = [], extraEnv: Record<string, string> = {}): number {
   const cmd = resolveClaude()
+  pushRecentFolder(cwd)
   // Every app-spawned session gets an outbox so it can take part in the awareness
   // bus in BOTH directions — message its parent (plain text) or a named child
   // (@name). The file is created lazily when the session first writes to it.
@@ -1307,26 +1327,51 @@ ipcMain.handle(
 )
 // Remove a terminated session from the list: kill any managed terminal, purge
 // its dead ~/.claude/sessions files, and drop the registry node.
-ipcMain.handle('session:remove', (_e, sessionId: string) => {
-  if (!sessionId) return false
-  const t = terminals.get(sessionId)
-  if (t) {
-    try {
-      t.pty.kill()
-    } catch {
-      /* already gone */
+// All descendants of a session (its whole subtree), via the edge graph.
+function descendantsOf(sessionId: string): string[] {
+  const edges = getEdges()
+  const out: string[] = []
+  const seen = new Set<string>([sessionId])
+  const stack = [sessionId]
+  while (stack.length) {
+    const cur = stack.pop()!
+    for (const e of edges) {
+      if (e.parent_id === cur && !seen.has(e.child_id)) {
+        seen.add(e.child_id)
+        out.push(e.child_id)
+        stack.push(e.child_id)
+      }
     }
-    terminals.delete(sessionId)
   }
-  if (attachedKey === sessionId) attachedKey = null
-  purgeDeadSessionFiles(sessionId)
-  deleteNode(sessionId)
-  // Also deny-list it so an alive-but-transcript-gone ghost can't be re-adopted.
+  return out
+}
+
+// Remove a session AND its whole subtree: kill each managed terminal (no hanging
+// PTYs), purge dead session files, drop the registry node, deny-list it. Returns
+// every removed session id so the UI can drop the active terminal if it was one.
+ipcMain.handle('session:remove', (_e, sessionId: string) => {
+  if (!sessionId) return { removed: [] as string[] }
+  const ids = [sessionId, ...descendantsOf(sessionId)]
   const set = getRemovedSet()
-  set.add(sessionId)
+  for (const id of ids) {
+    const t = findManagedTerm(id) // robust: matches the term key OR the sessionId
+    if (t) {
+      try {
+        t.pty.kill()
+      } catch {
+        /* already gone */
+      }
+      terminals.delete(t.key)
+      if (attachedKey === t.key) attachedKey = null
+    }
+    if (attachedKey === id) attachedKey = null
+    purgeDeadSessionFiles(id)
+    deleteNode(id)
+    set.add(id) // deny-list so an alive-but-transcript-gone ghost can't re-adopt
+  }
   setAppState('removedSessions', JSON.stringify([...set]))
   pushSessions()
-  return true
+  return { removed: ids }
 })
 // Workspace state (last-active session for restore-on-launch, etc.)
 ipcMain.handle('state:get', (_e, key: string) => getAppState(key))
