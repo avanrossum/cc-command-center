@@ -975,7 +975,13 @@ ipcMain.handle('session:remove', (_e, sessionId: string) => {
 ipcMain.handle('state:get', (_e, key: string) => getAppState(key))
 ipcMain.on('state:set', (_e, key: string, value: string) => setAppState(key, value))
 
-app.setName('CC Command Center')
+// Dev and the signed/stable build must NOT share a data dir: dev churn (killing
+// terminals, DB migrations, session removal) would corrupt the real sessions you
+// keep in the stable app. Packaged → "CC Command Center" (your data); dev → an
+// isolated "CC Command Center Dev" sandbox. Electron derives userData from the app
+// name, so this one line separates their registries. (MAIL_DIR is split the same
+// way above, so two running instances never consume each other's messages.)
+app.setName(app.isPackaged ? 'CC Command Center' : 'CC Command Center Dev')
 
 // Electron derives userData from the app name, so a rename would point at a
 // fresh empty dir. Carry the existing registry across: if the new location has
