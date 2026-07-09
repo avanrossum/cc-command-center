@@ -12,9 +12,27 @@
   (v0.9.0): gear in the beacon bar; auto-trust spawned links; one-time offer (and a Settings button)
   to add `Write(~/.claude/ccc/**)` to `~/.claude/settings.json` (safe merge, backed up).
 
-Still OPEN in this area: handle/purpose **purpose-subtitle + immutability** (fast-follow). The
-**terminal-UX** cluster (Cmd+Click file-open, status bar) + the **prompt composer** (blocked on the
-interactive-Q/A design) + the **README** remain below.
+## SHIPPED — terminal-UX + spawn/lifecycle batch (v0.9.1 → v0.9.4, 2026-07-09)
+
+- ✅ **Selection → blocking too** (v0.9.1): spawn composer has a Tangential/Blocking toggle;
+  selection spawn is Cmd+K (tangent) / Cmd+Shift+K (blocking); right-click → composer.
+- ✅ **Self-terminate** (v0.9.1): a session writes exactly `[[CCC:EXIT]]` to its outbox → the app
+  kills that PTY (drainOutboxes; onExit prunes). Taught in the preamble. Gives a parent a real lever
+  to end a child (vs "ack and idle").
+- ✅ **Cmd+Click a file path** (v0.9.2): opens with the OS default app, relative to the session cwd.
+  Hardened (v0.9.4): directories / .app bundles / OS-executed types are REVEALED in Finder, not
+  launched (arbitrary-app-launch guard).
+- ✅ **Terminal status bar** (v0.9.3): ＋file/folder picker (per-session last dir; inserts path) +
+  drag-drop a file onto the terminal + composer toggle + a context-usage slot (placeholder).
+- ✅ **Prompt composer v1** (v0.9.3): togglable field, Enter=newline, ⌘↩=send. Draft cleared on
+  session switch (v0.9.4).
+- ✅ **Hardened** (v0.9.4): 5 review findings fixed (launch guard, composer session-switch,
+  path sanitize, self-exit log-after-kill, link-regex tightened).
+
+Still OPEN: handle/purpose **purpose-subtitle + immutability** (fast-follow); composer
+**paste-image/file → temp-path** + the **interactive-Q/A** integration; status-bar
+**context-usage readout** (needs a data source — is it exposed by Claude Code?); Cmd+Click
+**wide-char column** offset + **live-cwd** tracking (both minor/cosmetic); the **README** (GA).
 
 
 
