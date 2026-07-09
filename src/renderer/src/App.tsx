@@ -4,9 +4,12 @@ import { TerminalView } from './Terminal'
 import { THEMES, themeByName, DEFAULT_THEME_NAME } from './themes'
 
 type CoarseState = 'working' | 'waiting' | 'idle' | 'unknown'
-// 'blocked' is a DERIVED display state (a parent whose blocking child is
-// unfinished) — computed in the renderer, not reported by the engine.
-type DisplayState = CoarseState | 'blocked'
+// 'blocked' and 'permission' are DERIVED display states, not coarse engine states.
+// 'blocked': a parent whose blocking child is unfinished (computed in the renderer).
+// 'permission': a managed session parked on a dialog (the engine reports it via
+// s.attention, scanned from the live PTY buffer — it reads as 'working' in the
+// transcript, so this is the only way it surfaces as needing you).
+type DisplayState = CoarseState | 'blocked' | 'permission'
 
 interface Session {
   pid: number
@@ -23,6 +26,7 @@ interface Session {
   theme: string | null
   dormant?: boolean
   managed?: boolean
+  attention?: 'permission' // parked on a permission/approval dialog (buffer-scanned)
 }
 interface Category {
   id: number
@@ -89,10 +93,13 @@ interface TreeRow {
 }
 
 const STATE: Record<DisplayState, { label: string; color: string; order: number }> = {
+  // Highest urgency: the session is parked on a dialog it can't clear itself.
+  // Detected from the live PTY buffer, so it's high-signal (not a guess).
+  permission: { label: 'Needs approval', color: '#f59e0b', order: -1 },
   working: { label: 'Working', color: '#34d399', order: 0 },
   // Blue = the assistant's last turn ended recently, so structurally it's the
-  // human's move. It does NOT mean a question/permission was detected (that
-  // precision is roadmap Phase 7) — so the honest label is "Your turn".
+  // human's move. It does NOT mean a question/permission was detected (a parked
+  // dialog surfaces as 'permission' above) — so the honest label is "Your turn".
   waiting: { label: 'Your turn', color: '#60a5fa', order: 1 },
   blocked: { label: 'Blocked', color: '#e070c8', order: 2 },
   idle: { label: 'Idle', color: '#6b7280', order: 3 },
@@ -260,21 +267,39 @@ export function App() {
     }
     return blocked
   }, [live, snap.edges])
+  // Display state, most-urgent wins: a parked dialog (self needs action) beats
+  // blocked-on-child, which beats the coarse transcript state.
   const dstate = (s: Session): DisplayState =>
-    !s.dormant && blockedSet.has(s.sessionId) ? 'blocked' : s.state
+    s.dormant
+      ? s.state
+      : s.attention === 'permission'
+        ? 'permission'
+        : blockedSet.has(s.sessionId)
+          ? 'blocked'
+          : s.state
 
   const counts = useMemo(() => {
-    const c: Record<DisplayState, number> = { working: 0, waiting: 0, blocked: 0, idle: 0, unknown: 0 }
-    for (const s of live) if (!s.dormant) c[blockedSet.has(s.sessionId) ? 'blocked' : s.state]++
+    const c: Record<DisplayState, number> = {
+      permission: 0,
+      working: 0,
+      waiting: 0,
+      blocked: 0,
+      idle: 0,
+      unknown: 0,
+    }
+    for (const s of live) if (!s.dormant) c[dstate(s)]++
     return c
-  }, [live, blockedSet])
+  }, [live, blockedSet]) // eslint-disable-line react-hooks/exhaustive-deps
   const liveCount = useMemo(() => live.filter((s) => !s.dormant).length, [live])
   const dormantCount = useMemo(() => live.filter((s) => s.dormant).length, [live])
-  // The "NEEDS YOU" ledger: every waiting or blocked session, most-urgent first.
+  // The "NEEDS YOU" ledger: only sessions that genuinely can't proceed without
+  // you — parked on a dialog, or blocked on an unfinished blocking child. Plain
+  // 'waiting' (a turn that just ended) is NOT included: it's usually a session
+  // that replied and went idle, which was the old over-flagging noise.
   const needsYou = useMemo(
     () =>
       live
-        .filter((s) => !s.dormant && (blockedSet.has(s.sessionId) || s.state === 'waiting'))
+        .filter((s) => !s.dormant && (s.attention === 'permission' || blockedSet.has(s.sessionId)))
         .sort((a, b) => STATE[dstate(a)].order - STATE[dstate(b)].order),
     [live, blockedSet], // eslint-disable-line react-hooks/exhaustive-deps
   )
@@ -446,6 +471,13 @@ export function App() {
           {version && <span className="ver" title="version · build">{version}</span>}
         </div>
         <div className="tally">
+          {counts.permission > 0 && (
+            <TallyItem
+              n={counts.permission}
+              label="needs approval"
+              color={STATE.permission.color}
+            />
+          )}
           <TallyItem n={counts.working} label="working" color={STATE.working.color} />
           <TallyItem n={counts.waiting} label="your turn" color={STATE.waiting.color} />
           <TallyItem n={counts.blocked} label="blocked" color={STATE.blocked.color} />
@@ -511,8 +543,10 @@ export function App() {
         <nav className="rail">
           {groups.map((g) => {
             const tag = g.id === null ? '·' : g.label || autoTag(g.name)
+            // Category dot lights when something in it needs you — same rule as
+            // the beacon ledger (a parked dialog or a blocked parent).
             const hasWaiting = g.rows.some(
-              ({ s }) => !s.dormant && (blockedSet.has(s.sessionId) || s.state === 'waiting'),
+              ({ s }) => !s.dormant && (s.attention === 'permission' || blockedSet.has(s.sessionId)),
             )
             return (
               <button

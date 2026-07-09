@@ -152,15 +152,14 @@ Today only the *last-active* session auto-restores and every not-live node is tr
 **Goal.** Split `WAITING_PERMISSION` out of `WAITING`, and add confirm-only out-of-tool parent inference. Additive, no state-machine rewrite.
 
 **Deliverables.**
-- `WAITING_PERMISSION` split from `WAITING` via `Notification:permission_prompt` fast edges plus an on-demand PTY-scrape tie-breaker.
-- A versioned config for the M2 PTY-scrape pattern table (permission-dialog / elicitation glyphs), captured from real dialogs across the 2.1.x spread.
-- Out-of-tool ppid-chain parent inference surfaced as confirm-only suggestions (never auto-applied).
-- **Beacon "NEEDS YOU" triage (user, 2026-07-09).** The beacon flag must be high-signal, not "any idle session." A session blocked on a **permission prompt** (`WAITING_PERMISSION`, e.g. the "allow Claude to edit its own settings" gate) or a genuine question (`WAITING_INPUT`) = **needs you**. A child that just **replied to its parent and went idle**, or is merely idle/working, does **not**. This is the mechanistic version; the control agent (Future) can layer smarter triage on top, consuming the same signal.
+- ✅ **Mechanistic permission detection + beacon de-noise (v0.9.8, 2026-07-09).** Managed sessions parked on a dialog now surface as `permission` ("Needs approval", amber). Implemented by scanning the live PTY buffer (`detectPrompt` in `src/main/index.ts`) — the transcript can't see a dialog, and in fact reports a permission-blocked session as `working` (its last record is a mid-turn `tool_use`), so buffer scanning is the only way it surfaces. The beacon "NEEDS YOU" ledger now includes **only** `permission` + `blocked`; plain `waiting` (a just-ended turn / replied-and-idle) was dropped — that was the over-flag. `PROMPT_SIGNATURES` is the version-gated text table (tool/edit/create/bash permission, folder trust, plan approval); a tail-window scan (`PROMPT_TAIL_CHARS`) keeps an already-answered dialog in scrollback from false-positiving. Degrades safely: unrecognized dialog text → no flag → falls back to coarse state.
+- Out-of-tool ppid-chain parent inference surfaced as confirm-only suggestions (never auto-applied). _(still pending)_
+- Fast-edge `Notification:permission_prompt` hook to complement the PTY scan (lower latency, no tail-window staleness). _(pending — the buffer scan covers v1)_
 
 **Definition of done.**
-- A session blocked on a permission dialog reads `WAITING_PERMISSION`, distinct from `WAITING_INPUT` and `IDLE`.
-- The PTY-scrape pattern table is version-gated and degrades to coarse `WAITING` when a glyph is unrecognized.
-- A child launched from within another session outside the tool produces a confirm-only parent suggestion the user can accept or dismiss.
+- ✅ A session blocked on a permission dialog reads as `permission`, distinct from `waiting` and `idle` (and no longer mis-shown as `working`).
+- ✅ The PTY-scrape pattern table is version-gated and degrades to coarse state when the dialog text is unrecognized.
+- A child launched from within another session outside the tool produces a confirm-only parent suggestion the user can accept or dismiss. _(pending)_
 
 ---
 

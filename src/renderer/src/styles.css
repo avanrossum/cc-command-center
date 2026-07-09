@@ -24,7 +24,7 @@
   /* status (primary channel; always paired with shape/motion) */
   --cc-working: #34d399;
   --cc-waiting: #60a5fa;
-  --cc-waiting-perm: #60a5fa;
+  --cc-permission: #f59e0b; /* parked on a dialog — high-signal "needs approval" */
   --cc-idle: #6b7280;
   --cc-unknown: #a78bfa;
   --cc-blocked: #e070c8;
@@ -273,6 +273,10 @@ body {
   font-size: 11px;
   -webkit-app-region: no-drag; /* the only interactive leaf — rest of the bar drags */
 }
+.needs-item.ns-permission {
+  border-left-color: var(--cc-permission);
+  background: rgba(245, 158, 11, 0.1);
+}
 .needs-item.ns-waiting {
   border-left-color: var(--cc-waiting);
   background: rgba(96, 165, 250, 0.07);
@@ -504,6 +508,7 @@ body {
   width: 3px;
   background: var(--cat-color, var(--cc-cat-terracotta));
 }
+/* Fires when a session in this category needs you (parked dialog or blocked). */
 .rail-cell.waiting::after {
   content: '';
   position: absolute;
@@ -512,7 +517,7 @@ body {
   bottom: 9px;
   width: 3px;
   border-radius: 2px 0 0 2px;
-  background: var(--cc-waiting);
+  background: var(--cc-permission);
 }
 .rail-add {
   margin-top: auto;
@@ -628,6 +633,10 @@ body {
   border-bottom: 0;
 }
 /* Status = 2.5px inset left bar; selection = neutral fill (separate channels). */
+.row.state-permission {
+  box-shadow: inset 2.5px 0 0 var(--cc-permission);
+  background: rgba(245, 158, 11, 0.06);
+}
 .row.state-waiting {
   box-shadow: inset 2.5px 0 0 var(--cc-waiting);
 }
@@ -657,6 +666,13 @@ body {
 .cc-dot--working {
   border-radius: 50%;
   background: var(--cc-working);
+  animation: cc-pulse var(--cc-pulse) var(--cc-ease-out) infinite;
+}
+/* Amber, pulsing, squared — reads as an active summons, not a passive state. */
+.cc-dot--permission {
+  border-radius: 2px;
+  background: var(--cc-permission);
+  box-shadow: 0 0 0 0 var(--cc-permission);
   animation: cc-pulse var(--cc-pulse) var(--cc-ease-out) infinite;
 }
 .cc-dot--waiting {

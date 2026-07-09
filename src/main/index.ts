@@ -52,11 +52,16 @@ let pollTimer: NodeJS.Timeout | null = null
 const DORMANT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000 // dormant/resumable sessions age out after a week
 
 // ---------- session polling (status board) ----------
+// A managed session parked on an interactive dialog (tool permission, folder
+// trust, plan approval). This is derived from the live PTY buffer, NOT the
+// transcript — see detectPrompt(). 'permission' covers every current dialog kind.
+type AttentionKind = 'permission'
 type EnrichedSession = LiveSession & {
   categoryId: number | null
   theme: string | null
   dormant?: boolean // registry node with no live process — resumable, survives restart
   managed?: boolean // the app owns this session's PTY, so it can receive injected prompts
+  attention?: AttentionKind // parked on a dialog waiting for the human (high-signal)
 }
 interface Snapshot {
   home: string
@@ -122,6 +127,49 @@ function parseArgs(s: string): string[] {
   return out
 }
 
+// ---------- interactive-prompt detection (mechanistic "needs you") ----------
+// A session parked on a permission / trust / plan-approval dialog reads as
+// 'working' in the transcript — its last record is a mid-turn tool_use with no
+// result yet — so it would show green and stay hidden from the beacon. The
+// transcript can't see the dialog (it's a live TUI element), so we scan the
+// managed terminal's raw PTY buffer for the dialog's stable text instead.
+//
+// Version-gated pattern table: these are the prompt/option lines Claude Code
+// renders in its selection dialogs. If Claude changes them, detection degrades
+// safely — the session just falls back to its coarse transcript state (no false
+// "needs approval"). Keep this list tight and text-based, not glyph-based.
+const PROMPT_SIGNATURES: RegExp[] = [
+  /No, and tell Claude what to do differently/i, // tool / edit / create / bash permission menu
+  /Do you want to (?:proceed|make this edit|create|run)\b/i,
+  /Do you trust the files in this folder\?/i, // folder-trust dialog
+  /Would you like to proceed\?/i, // plan approval (ExitPlanMode)
+  /No, keep planning/i, // plan approval menu
+]
+// How much of the rendered tail to consider "on screen right now". The live
+// dialog is always the most-recent paint, so an already-answered dialog still
+// sitting in scrollback is pushed past this window by the output that follows it.
+const PROMPT_TAIL_CHARS = 1800
+
+// Strip CSI/OSC escapes and stray C0 control bytes, keeping \n and \t so the
+// tail's line structure survives. Signature phrases are single-line prose Claude
+// renders in one color, so no escape ever lands mid-phrase to break a match.
+function stripAnsi(s: string): string {
+  return s
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC … BEL/ST
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '') // CSI … final byte
+    .replace(/\x1b[()][0-9A-Za-z]/g, '') // charset select
+    .replace(/\x1b[@-Z\\-_]/g, '') // 2-char C1
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '') // other C0 (keeps \t=09, \n=0a)
+}
+
+// True if the managed terminal is currently showing an interactive dialog. Slice
+// the raw tail first (cheap) before stripping the whole 256KB buffer each poll.
+function detectPrompt(buffer: string): boolean {
+  if (!buffer) return false
+  const tail = stripAnsi(buffer.slice(-16000)).slice(-PROMPT_TAIL_CHARS)
+  return PROMPT_SIGNATURES.some((re) => re.test(tail))
+}
+
 function snapshot(): Snapshot {
   let sessions: LiveSession[] = []
   try {
@@ -164,13 +212,22 @@ function snapshot(): Snapshot {
 
   const managedIds = managedSessionIds()
   const names = getSessionNames()
-  const enriched: EnrichedSession[] = sessions.map((s) => ({
-    ...s,
-    name: names[s.sessionId] || s.name,
-    categoryId: categoryOf(s.sessionId),
-    theme: nodes.get(s.sessionId)?.theme ?? null,
-    managed: managedIds.has(s.sessionId),
-  }))
+  const enriched: EnrichedSession[] = sessions.map((s) => {
+    const managed = managedIds.has(s.sessionId)
+    // Only managed sessions have a live PTY buffer to scan; adopted/external
+    // sessions keep their transcript-derived coarse state.
+    const term = managed ? findManagedTerm(s.sessionId) : undefined
+    const attention: AttentionKind | undefined =
+      term && detectPrompt(term.buffer) ? 'permission' : undefined
+    return {
+      ...s,
+      name: names[s.sessionId] || s.name,
+      categoryId: categoryOf(s.sessionId),
+      theme: nodes.get(s.sessionId)?.theme ?? null,
+      managed,
+      attention,
+    }
+  })
 
   // Dormant nodes: sessions the user gave meaning to (categorized or placed in a
   // task tree) that aren't currently running. Keep them in the list so they
