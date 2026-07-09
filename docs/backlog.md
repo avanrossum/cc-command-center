@@ -1,5 +1,40 @@
 # Backlog — next features (specs)
 
+## Spawn a child from a terminal selection — frictionless tangent (user, 2026-07-08)
+
+**The idea.** Select text in a session's terminal, then right-click → menu item OR press a
+shortcut (e.g. Cmd+K) → **auto-spawn a child seeded with that selection as its context.** You
+spot something in a session's output, grab it, and it becomes a new session's starting brief
+without derailing the current one. This is the [tangent concept](concepts.md) made instant —
+the exact "idea mid-flow, seed a separate context, don't stain this one" workflow, triggered
+straight from what you're reading.
+
+**Mechanism (small — reuses existing machinery).**
+- xterm gives us the selection directly: `term.getSelection()` (no clipboard needed;
+  auto-copy-on-select is a separate nicety).
+- Parent = the focused/attached session (whose terminal holds the selection).
+- Reuse `spawnChild(parentSessionId, cwd, type, note)` — the selection becomes the `note`
+  (handoff/seed), delivered as the child's first message after the awareness preamble. cwd
+  defaults to the parent's cwd.
+- Edge type: default **tangential offshoot** (non-blocking — this IS the tangent case; the
+  parent keeps going).
+
+**Triggers (offer both):**
+- **Right-click** a terminal with a selection → context items: "Spawn tangent with selection"
+  (instant) and "Spawn child with selection…" (opens SpawnComposer pre-filled, to tweak
+  folder/category/name/type first).
+- **Keyboard shortcut** while text is selected — candidate Cmd+K (verify it doesn't collide
+  with a terminal/menu shortcut; may need Cmd+Shift+K). Instant tangential spawn. NB: the
+  terminal returns false for Cmd combos so the menu handles them — this shortcut needs a home
+  that doesn't fight the editMenu / kitty path.
+
+**Instant vs. composer:** the ask is "auto-spawn" (instant). Recommend shortcut / first menu
+item = **instant tangential spawn**; second menu item = **pre-filled composer** for when you
+want to adjust. Best of both.
+
+**Nice-to-haves:** a toast confirming "spawned tangent from selection" + the child name; cap
+or trim a huge selection so the seed stays manageable.
+
 ## Terminal status bar + file insertion (user, 2026-07-08)
 
 A status bar under the terminal pane. Contents:
