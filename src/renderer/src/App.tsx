@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { insertablePath } from './util'
 import { TerminalView } from './Terminal'
 import { THEMES, themeByName, DEFAULT_THEME_NAME } from './themes'
 
@@ -175,11 +176,15 @@ export function App() {
   const [composerOpen, setComposerOpen] = useState(false)
   const [composerText, setComposerText] = useState('')
   // Transient confirmation toast (copy-out, etc.).
+  // (composer draft is cleared on session switch below, so A's draft can't be sent to B)
   const [flash, setFlash] = useState<string | null>(null)
   const showFlash = (msg: string) => {
     setFlash(msg)
     window.setTimeout(() => setFlash((f) => (f === msg ? null : f)), 1600)
   }
+  // Clear the composer draft when the open session changes — a prompt typed for
+  // one session must never be sent to another.
+  useEffect(() => setComposerText(''), [selected?.sessionId])
 
   useEffect(() => {
     window.cc.appVersion().then((v) => setVersion(v.full))
@@ -685,7 +690,7 @@ export function App() {
                   title="Add a file or folder — inserts its path into the terminal"
                   onClick={async () => {
                     const p = await window.cc.pickPath(selected.sessionId)
-                    if (p) window.cc.termInput(selected.key, `${p} `)
+                    if (p) window.cc.termInput(selected.key, `${insertablePath(p)} `)
                   }}
                 >
                   ＋ file/folder

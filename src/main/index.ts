@@ -1,8 +1,9 @@
 import { app, BrowserWindow, ipcMain, dialog, nativeImage, clipboard, shell } from 'electron'
-import { join, isAbsolute, dirname } from 'node:path'
+import { join, isAbsolute, dirname, extname } from 'node:path'
 import os from 'node:os'
 import {
   existsSync,
+  statSync,
   copyFileSync,
   mkdirSync,
   readdirSync,
@@ -547,14 +548,16 @@ function drainOutboxes(): void {
       const pid = outboxOwner.get(token)
       const term = pid ? findTermByPid(pid) : undefined
       const nm = (term?.sessionId && getSessionNames()[term.sessionId]) || `pid ${pid ?? '?'}`
-      logMsg(nm, 'self', content, 'terminated: self-exit')
+      let status = 'self-exit ignored: session not found'
       if (term) {
         try {
           term.pty.kill()
+          status = 'terminated: self-exit'
         } catch {
-          /* already gone */
+          status = 'self-exit failed'
         }
       }
+      logMsg(nm, 'self', content, status) // log the OUTCOME, after the kill attempt
       continue
     }
     const arr = heldMessages.get(token) ?? []
@@ -924,11 +927,23 @@ ipcMain.handle('term:openPath', (_e, key: string, raw: string) => {
   let p = raw.replace(/:\d+(?::\d+)?$/, '').trim() // drop :line[:col]
   if (p.startsWith('~/')) p = join(os.homedir(), p.slice(2))
   const full = isAbsolute(p) ? p : join(cwd, p)
-  if (existsSync(full)) {
-    shell.openPath(full)
-    return { ok: true }
+  if (!existsSync(full)) return { ok: false }
+  // Guard against a crafted terminal-output path launching an app: directories,
+  // macOS bundles, and OS-executed types are REVEALED in Finder, never opened
+  // (shell.openPath would launch them via Launch Services). Plain files open.
+  const DANGER = new Set([
+    '.app', '.command', '.tool', '.webloc', '.terminal', '.workflow', '.scpt', '.applescript',
+  ])
+  try {
+    if (statSync(full).isDirectory() || DANGER.has(extname(full).toLowerCase())) {
+      shell.showItemInFolder(full)
+      return { ok: true, revealed: true }
+    }
+  } catch {
+    /* fall through to openPath */
   }
-  return { ok: false }
+  shell.openPath(full)
+  return { ok: true }
 })
 ipcMain.on('term:resize', (_e, key: string, cols: number, rows: number) => {
   try {

@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { themeByName } from './themes'
+import { insertablePath } from './util'
 import '@xterm/xterm/css/xterm.css'
 
 interface Props {
@@ -154,6 +155,7 @@ export function TerminalView({
       const paths = Array.from(files)
         .map((f) => window.cc.getPathForFile(f))
         .filter(Boolean)
+        .map(insertablePath)
       if (paths.length) window.cc.termInput(termKey, `${paths.join(' ')} `)
     }
     host.addEventListener('dragover', onDragOver)
@@ -174,6 +176,15 @@ export function TerminalView({
         while ((m = pathRe.exec(text))) {
           const s = m.index
           const str = m[0]
+          // Reduce false positives: skip URL fragments (preceded by ':' or '/', e.g.
+          // "https://…") and bare "word/word" (fractions like 2/3, refs like a/HEAD).
+          // Keep it only if it has a path anchor (/, ./, ../, ~/) or a file extension.
+          const before = text[s - 1]
+          if (before === ':' || before === '/') continue
+          const lastSeg = str.split('/').pop() ?? ''
+          const hasAnchor = /^(?:~\/|\.\.?\/|\/)/.test(str)
+          const hasExt = /\.[A-Za-z0-9]{1,8}(?::\d+)*$/.test(lastSeg)
+          if (!hasAnchor && !hasExt) continue
           links.push({
             text: str,
             range: { start: { x: s + 1, y }, end: { x: s + str.length, y } },
