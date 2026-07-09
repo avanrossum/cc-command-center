@@ -165,8 +165,9 @@ or trim a huge selection so the seed stays manageable.
 A status bar under the terminal pane. Contents:
 - **Context usage** for the currently-loaded session — % of the context window used
   (this is per-session context, distinct from the 5h/7d rate gauge in `open-questions.md`
-  Q1). Source needs finding: Claude Code shows it in its own statusline; likely derivable
-  from the transcript or a hook.
+  Q1). SOURCE (user, 2026-07-09): the user's own statusline plugin/hook already computes
+  this — check that config (`~/.claude/statusline.*` / the statusline command) for how it
+  derives context% per session, then read the same source rather than re-deriving.
 - **At least one more useful readout** (TBD — user wants ≥1 more, unsure what). Candidates:
   model, session cost/tokens, cwd, git branch of the cwd, last-activity, coarse state.
 - **"Add file/folder" button** → a Finder open dialog that opens to the **last location used

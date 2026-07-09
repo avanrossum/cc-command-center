@@ -115,15 +115,21 @@ export function TerminalView({
     // pastes the clipboard image on it. So no extra image handling belongs here —
     // an explicit Ctrl+V injection here just double-pasted the image. Non-Cmd keys
     // fall through (return true) so kitty Shift+Enter and Ctrl+V still work.
-    // Special case: Cmd+K with a selection spawns a tangent seeded with that text
-    // (instant). Cmd+K isn't a menu/terminal shortcut here, so it's free to claim.
+    // Special case: Cmd+K with a selection instant-spawns a tangent seeded with it.
+    // (Blocking-from-selection is offered via the right-click composer instead — a
+    // Cmd+Shift+K shortcut collides with global apps like Notion.)
     term.attachCustomKeyEventHandler((e) => {
       if (e.metaKey) {
-        if (e.type === 'keydown' && !e.ctrlKey && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+        if (
+          e.type === 'keydown' &&
+          !e.ctrlKey &&
+          !e.altKey &&
+          !e.shiftKey &&
+          (e.key === 'k' || e.key === 'K')
+        ) {
           const sel = term.getSelection().trim()
           if (sel) {
-            // Cmd+K → tangent; Cmd+Shift+K → blocking child.
-            spawnCbRef.current?.(sel, true, e.shiftKey ? 'blocking' : 'tangential')
+            spawnCbRef.current?.(sel, true, 'tangential')
             return false
           }
         }
@@ -132,15 +138,21 @@ export function TerminalView({
       return true
     })
 
-    // Right-click with a selection → spawn a tangent, but via the composer so you
-    // can adjust folder/name/type first. No selection → leave the default alone.
+    // Right-click with a selection → spawn via the composer (pick tangent/blocking,
+    // adjust folder/name). The right-click clears/re-selects under the cursor before
+    // the contextmenu fires, so capture the selection at right-MOUSEDOWN (capture
+    // phase, before xterm handles it) — otherwise we'd get one word, or nothing.
+    let ctxSel = ''
+    const onMouseDown = (ev: MouseEvent): void => {
+      if (ev.button === 2) ctxSel = term.getSelection().trim()
+    }
     const onCtx = (ev: MouseEvent): void => {
-      const sel = term.getSelection().trim()
-      if (sel) {
+      if (ctxSel) {
         ev.preventDefault()
-        spawnCbRef.current?.(sel, false, 'tangential') // composer default; toggle in it
+        spawnCbRef.current?.(ctxSel, false, 'tangential') // composer default; toggle in it
       }
     }
+    host.addEventListener('mousedown', onMouseDown, true)
     host.addEventListener('contextmenu', onCtx)
 
     // Drag a file/folder onto the terminal → insert its full path at the cursor
@@ -215,6 +227,7 @@ export function TerminalView({
       if (saveTimer) clearTimeout(saveTimer)
       saveSnapshot() // flush a final snapshot before tearing down the xterm
       ro.disconnect()
+      host.removeEventListener('mousedown', onMouseDown, true)
       host.removeEventListener('contextmenu', onCtx)
       host.removeEventListener('dragover', onDragOver)
       host.removeEventListener('drop', onDrop)
