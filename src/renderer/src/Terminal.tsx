@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Terminal as XTerm } from '@xterm/xterm'
+import { Terminal as XTerm, type ILink } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { SerializeAddon } from '@xterm/addon-serialize'
@@ -142,6 +142,34 @@ export function TerminalView({
     }
     host.addEventListener('contextmenu', onCtx)
 
+    // Cmd+Click a file path to open it (iTerm Semantic History parity). Detect
+    // path-like tokens (a token with at least one "/", optional :line:col); main
+    // resolves relatives against the session cwd and opens if the file exists.
+    const pathRe = /(?:~\/|\.{1,2}\/|\/)?[\w.\-]+(?:\/[\w.\-]+)+(?::\d+){0,2}/g
+    const linkProv = term.registerLinkProvider({
+      provideLinks(y, cb) {
+        const line = term.buffer.active.getLine(y - 1)
+        if (!line) return cb(undefined)
+        const text = line.translateToString(true)
+        const links: ILink[] = []
+        pathRe.lastIndex = 0
+        let m: RegExpExecArray | null
+        while ((m = pathRe.exec(text))) {
+          const s = m.index
+          const str = m[0]
+          links.push({
+            text: str,
+            range: { start: { x: s + 1, y }, end: { x: s + str.length, y } },
+            decorations: { pointerCursor: true, underline: true },
+            activate: (ev, t) => {
+              if (ev.metaKey) window.cc.termOpenPath(termKey, t).catch(() => {})
+            },
+          })
+        }
+        cb(links.length ? links : undefined)
+      },
+    })
+
     window.cc
       .termOpen(termKey, { sessionId, pid, cwd, resume, cols: term.cols, rows: term.rows })
       .then(() => {
@@ -160,6 +188,7 @@ export function TerminalView({
       saveSnapshot() // flush a final snapshot before tearing down the xterm
       ro.disconnect()
       host.removeEventListener('contextmenu', onCtx)
+      linkProv.dispose()
       offData()
       offExit()
       onData.dispose()

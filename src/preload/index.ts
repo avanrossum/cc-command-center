@@ -85,6 +85,7 @@ contextBridge.exposeInMainWorld('cc', {
   termOpen: (key: string, opts: OpenOpts) => ipcRenderer.invoke('term:open', key, opts),
   termAttach: (key: string) => ipcRenderer.send('term:attach', key),
   termInput: (key: string, data: string) => ipcRenderer.send('term:input', key, data),
+  termOpenPath: (key: string, path: string) => ipcRenderer.invoke('term:openPath', key, path),
   termResize: (key: string, cols: number, rows: number) =>
     ipcRenderer.send('term:resize', key, cols, rows),
   termClose: (key: string) => ipcRenderer.send('term:close', key),

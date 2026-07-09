@@ -1,5 +1,5 @@
-import { app, BrowserWindow, ipcMain, dialog, nativeImage, clipboard } from 'electron'
-import { join } from 'node:path'
+import { app, BrowserWindow, ipcMain, dialog, nativeImage, clipboard, shell } from 'electron'
+import { join, isAbsolute } from 'node:path'
 import os from 'node:os'
 import {
   existsSync,
@@ -915,6 +915,20 @@ ipcMain.on('term:attach', (_e, key: string) => {
 })
 ipcMain.on('term:input', (_e, key: string, data: string) => {
   terminals.get(key)?.pty.write(data)
+})
+// Cmd+Click a file path in the terminal → open it. Resolve relative paths against
+// the session's cwd (which we track), strip a :line:col suffix, open with the OS
+// default app if the file exists. iTerm Semantic History parity (docs/backlog.md).
+ipcMain.handle('term:openPath', (_e, key: string, raw: string) => {
+  const cwd = terminals.get(key)?.cwd ?? os.homedir()
+  let p = raw.replace(/:\d+(?::\d+)?$/, '').trim() // drop :line[:col]
+  if (p.startsWith('~/')) p = join(os.homedir(), p.slice(2))
+  const full = isAbsolute(p) ? p : join(cwd, p)
+  if (existsSync(full)) {
+    shell.openPath(full)
+    return { ok: true }
+  }
+  return { ok: false }
 })
 ipcMain.on('term:resize', (_e, key: string, cols: number, rows: number) => {
   try {
