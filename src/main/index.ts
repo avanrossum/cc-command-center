@@ -1021,12 +1021,31 @@ ipcMain.on('term:input', (_e, key: string, data: string) => {
 // Cmd+Click a file path in the terminal → open it. Resolve relative paths against
 // the session's cwd (which we track), strip a :line:col suffix, open with the OS
 // default app if the file exists. iTerm Semantic History parity (docs/backlog.md).
+// Resolve a clicked path candidate to an existing file/dir. The candidate may
+// carry a :line[:col] suffix and — because a path with spaces can't be told from
+// a path followed by prose without checking disk — may have over-captured
+// trailing words. Try the whole thing, then peel off trailing space-separated
+// tokens until something exists (longest match wins). Returns the absolute path
+// or null.
+function resolveClickedPath(raw: string, cwd: string): string | null {
+  const expand = (s: string): string => {
+    s = s.replace(/:\d+(?::\d+)?$/, '').trim() // drop :line[:col]
+    if (s.startsWith('~/')) s = join(os.homedir(), s.slice(2))
+    return isAbsolute(s) ? s : join(cwd, s)
+  }
+  const tokens = raw.split(' ')
+  for (let n = tokens.length; n >= 1; n--) {
+    const cand = tokens.slice(0, n).join(' ').trim()
+    if (!cand) continue
+    const full = expand(cand)
+    if (full && existsSync(full)) return full
+  }
+  return null
+}
 ipcMain.handle('term:openPath', (_e, key: string, raw: string) => {
   const cwd = terminals.get(key)?.cwd ?? os.homedir()
-  let p = raw.replace(/:\d+(?::\d+)?$/, '').trim() // drop :line[:col]
-  if (p.startsWith('~/')) p = join(os.homedir(), p.slice(2))
-  const full = isAbsolute(p) ? p : join(cwd, p)
-  if (!existsSync(full)) return { ok: false }
+  const full = resolveClickedPath(raw, cwd)
+  if (!full) return { ok: false }
   // Guard against a crafted terminal-output path launching an app: directories,
   // macOS bundles, and OS-executed types are REVEALED in Finder, never opened
   // (shell.openPath would launch them via Launch Services). Plain files open.

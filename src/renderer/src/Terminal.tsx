@@ -173,10 +173,15 @@ export function TerminalView({
     host.addEventListener('dragover', onDragOver)
     host.addEventListener('drop', onDrop)
 
-    // Cmd+Click a file path to open it (iTerm Semantic History parity). Detect
-    // path-like tokens (a token with at least one "/", optional :line:col); main
-    // resolves relatives against the session cwd and opens if the file exists.
-    const pathRe = /(?:~\/|\.{1,2}\/|\/)?[\w.\-]+(?:\/[\w.\-]+)+(?::\d+){0,2}/g
+    // Cmd+Click a file path to open it (iTerm Semantic History parity). Two
+    // shapes: (1) an ANCHORED path (~/, /, ./, ../) whose segments may contain
+    // single spaces — macOS paths like "Test 1/file.md" — so a space no longer
+    // splits the link; (2) an UNANCHORED multi-segment path with NO spaces (kept
+    // prose-safe). Optional :line[:col] suffix. Shape (1) can over-capture
+    // trailing words when a path sits mid-sentence; main corrects that by
+    // resolving to the longest existing prefix, so the click still opens the file.
+    const pathRe =
+      /(?:~\/|\.{1,2}\/|\/)[\w.\-]+(?:[ /][\w.\-]+)*(?::\d+){0,2}|[\w.\-]+(?:\/[\w.\-]+)+(?::\d+){0,2}/g
     const linkProv = term.registerLinkProvider({
       provideLinks(y, cb) {
         const line = term.buffer.active.getLine(y - 1)
