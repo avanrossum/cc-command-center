@@ -1,5 +1,54 @@
 # Backlog — next features (specs)
 
+## Cmd+Click a file path to open it — iTerm Semantic History parity (user, 2026-07-08)
+
+**Goal.** Cmd+Click a file path in the terminal to open it (default app or editor),
+the way iTerm2 does. Concretely: the paths Claude Code prints (e.g. a report at
+`tasks/2026-07-08_.../MOE2-ARCH-HAG-V1.0.pdf`, or `src/main/index.ts:42`) become
+clickable and open.
+
+**Research verdict (2026-07-08, verified both ends).** This is a **terminal** feature,
+not a Claude Code one:
+- iTerm2's **Semantic History** detects path-like text with its own regex, resolves
+  it against the cwd it tracks per line, and opens on Cmd+Click.
+- Claude Code (binary inspection, v2.1.205) emits file paths as **plain text** in agent
+  output — the OSC 8 `link()` helper exists but is wired only into statusline/formatting
+  contexts, not the response pipeline (open FRs: anthropics/claude-code #13008, #27889,
+  #48652). It also does **not** emit OSC 7 (cwd). So iTerm resolving relative paths is
+  100% iTerm inferring the cwd (shell integration / proc inspection).
+- **We have an advantage:** we already track each session's cwd (`termOpen` opts.cwd /
+  registry `node.cwd`), so relative-path resolution is trivial — no OSC 7 needed.
+
+**Mechanism (xterm 6.1 has the exact API).**
+- `term.registerLinkProvider(ILinkProvider)`: `provideLinks(lineNumber, cb)` scans the
+  buffer line, regex-matches path-like tokens (with optional `:line:col`), returns
+  `ILink[]` with `range`, `text`, `decorations {underline, pointerCursor}`, and
+  `activate(event, text)`.
+- `activate(event, text)`: gate on `event.metaKey` (Cmd+Click only); strip a trailing
+  `:line:col`; call a new IPC `term:openPath(termKey, cleanPath)`.
+- Main `term:openPath`: resolve `isAbsolute(p) ? p : join(session.cwd, p)` (cwd from
+  `terminals.get(key).cwd`); if `existsSync` → `shell.openPath(full)` (default app —
+  opens PDFs/images/docs, which is the common case); else flash "not found".
+
+**Details / decisions.**
+- **Path regex** is the fiddly part — match `/abs`, `./rel`, `a/b.ext`, `dir/dir/file`,
+  with optional `:\d+(:\d+)?`, without lighting up every word. iTerm's trick is to
+  **verify existence** before decorating. MVP: check-on-click (simplest). Cleaner:
+  check-at-provide-time (only real files underline) at the cost of more IPC.
+- **`:line:col`**: strip for the existence check; pass to an editor if opening in one
+  (`code -g file:line:col`) vs. `shell.openPath` for the default app.
+- **Bonus (cheap, future-proof):** also set xterm's `linkHandler` (OSC 8) with
+  `allowNonHttpProtocols: true`, so if/when Claude Code wires up file hyperlinks, or any
+  program emits real OSC 8, those Just Work. Add `@xterm/addon-web-links` (not currently
+  installed) so `http(s)://` URLs open in the browser.
+- **Polish (optional):** underline-only-while-Cmd-held (track Meta keydown/keyup, toggle
+  link decorations) to match iTerm exactly; default is underline-on-hover +
+  open-on-Cmd+Click (VS Code style).
+
+**Effort:** small-to-medium; lands cleanly because we own the cwd. Files touched:
+`Terminal.tsx` (registerLinkProvider), `index.ts` (`term:openPath` handler),
+`preload` + `global.d.ts` (bridge).
+
 ## Right-click "New session from here" variants (user, 2026-07-08)
 
 1. **New session in this folder (+ optional context).** Right-click a session → "New session here" spawns an INDEPENDENT new session in the *same cwd* (no typed edge — unlike Spawn child), pre-filling the New-session modal's folder from the source and letting the user type initial context/instructions. Small: reuses the New-session modal + `session:create`; just seed the folder from the right-clicked session.
