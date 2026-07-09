@@ -306,15 +306,6 @@ body {
   font-size: 11px;
   color: var(--cc-dim);
 }
-.cmdk {
-  align-self: center;
-  font: 11px var(--cc-font-mono);
-  color: var(--cc-meta);
-  border: 1px solid var(--cc-border);
-  border-radius: var(--cc-r-sm);
-  padding: 4px 8px;
-  -webkit-app-region: no-drag;
-}
 .msgbtn {
   align-self: center;
   margin-left: auto;

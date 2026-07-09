@@ -534,9 +534,7 @@ export function App() {
         <button className="gearbtn" onClick={() => setSettingsOpen(true)} title="Settings">
           ⚙
         </button>
-        <div className="cmdk" title="Command palette — coming soon">
-          ⌘K
-        </div>
+        {/* Command-palette entry point — hidden until there's a real palette behind it. */}
       </header>
 
       <div className="body">
