@@ -1106,6 +1106,34 @@ function createWindow(): void {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
+  // External links (a terminal OSC 8 hyperlink, or any window.open) must open in
+  // the system browser, never inside an Electron window. Allowlist web/mail
+  // schemes so a crafted link can't hand shell.openExternal an arbitrary URL.
+  const openExternal = (url: string): void => {
+    try {
+      const proto = new URL(url).protocol
+      if (proto === 'http:' || proto === 'https:' || proto === 'mailto:') shell.openExternal(url)
+    } catch {
+      /* not a parseable URL — ignore */
+    }
+  }
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    openExternal(url)
+    return { action: 'deny' } // never spawn a child Electron window
+  })
+  // Defense in depth: the app frame itself must never navigate away. Let
+  // same-origin (the renderer's own) navigations through; send anything else out.
+  win.webContents.on('will-navigate', (e, url) => {
+    try {
+      if (new URL(url).origin !== new URL(win?.webContents.getURL() ?? '').origin) {
+        e.preventDefault()
+        openExternal(url)
+      }
+    } catch {
+      /* ignore */
+    }
+  })
+
   win.webContents.on('did-finish-load', () => {
     pushSessions()
 
