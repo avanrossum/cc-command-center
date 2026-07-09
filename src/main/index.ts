@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, nativeImage, clipboard, shell } from 'electron'
-import { join, isAbsolute } from 'node:path'
+import { join, isAbsolute, dirname } from 'node:path'
 import os from 'node:os'
 import {
   existsSync,
@@ -1243,6 +1243,26 @@ ipcMain.handle('dialog:pickFolder', async () => {
   if (r.canceled || !r.filePaths[0]) return null
   setAppState('lastFolder', r.filePaths[0])
   return r.filePaths[0]
+})
+// Pick a file OR folder to reference in a prompt. Opens to the last location used
+// FOR THIS SESSION (per-session, not the app-global lastFolder), then remembers it.
+ipcMain.handle('dialog:pickPath', async (_e, sessionId?: string) => {
+  if (!win) return null
+  const key = sessionId ? `pickDir:${sessionId}` : 'lastFolder'
+  const last =
+    getAppState(key) ||
+    (sessionId ? findManagedTerm(sessionId)?.cwd : undefined) ||
+    getAppState('lastFolder') ||
+    undefined
+  const r = await dialog.showOpenDialog(win, {
+    properties: ['openFile', 'openDirectory'],
+    title: 'Add a file or folder…',
+    defaultPath: last,
+  })
+  if (r.canceled || !r.filePaths[0]) return null
+  const picked = r.filePaths[0]
+  setAppState(key, dirname(picked))
+  return picked
 })
 
 // Create a session from the New-session modal: launch in cwd with flags, then

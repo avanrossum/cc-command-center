@@ -142,6 +142,23 @@ export function TerminalView({
     }
     host.addEventListener('contextmenu', onCtx)
 
+    // Drag a file/folder onto the terminal → insert its full path at the cursor
+    // (no enter), so you can weave it into a prompt.
+    const onDragOver = (ev: DragEvent): void => {
+      if (ev.dataTransfer?.types.includes('Files')) ev.preventDefault()
+    }
+    const onDrop = (ev: DragEvent): void => {
+      const files = ev.dataTransfer?.files
+      if (!files || !files.length) return
+      ev.preventDefault()
+      const paths = Array.from(files)
+        .map((f) => window.cc.getPathForFile(f))
+        .filter(Boolean)
+      if (paths.length) window.cc.termInput(termKey, `${paths.join(' ')} `)
+    }
+    host.addEventListener('dragover', onDragOver)
+    host.addEventListener('drop', onDrop)
+
     // Cmd+Click a file path to open it (iTerm Semantic History parity). Detect
     // path-like tokens (a token with at least one "/", optional :line:col); main
     // resolves relatives against the session cwd and opens if the file exists.
@@ -188,6 +205,8 @@ export function TerminalView({
       saveSnapshot() // flush a final snapshot before tearing down the xterm
       ro.disconnect()
       host.removeEventListener('contextmenu', onCtx)
+      host.removeEventListener('dragover', onDragOver)
+      host.removeEventListener('drop', onDrop)
       linkProv.dispose()
       offData()
       offExit()

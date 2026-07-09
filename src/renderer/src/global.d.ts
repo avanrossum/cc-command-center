@@ -51,6 +51,8 @@ declare global {
         name?: string,
       ) => Promise<{ pid: number; cwd: string } | null>
       pickFolder: () => Promise<string | null>
+      pickPath: (sessionId?: string) => Promise<string | null>
+      getPathForFile: (file: File) => string
       sessionSend: (sessionId: string, text: string) => Promise<{ ok: boolean; reason?: string }>
       copyOutput: (sessionId: string, cwd: string) => Promise<{ ok: boolean; chars?: number }>
       stateGet: (key: string) => Promise<string | null>

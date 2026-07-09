@@ -171,6 +171,9 @@ export function App() {
   // The cross-session message log (awareness bus transparency).
   const [logOpen, setLogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Optional prompt composer under the terminal (Enter = newline, ⌘↩ = send).
+  const [composerOpen, setComposerOpen] = useState(false)
+  const [composerText, setComposerText] = useState('')
   // Transient confirmation toast (copy-out, etc.).
   const [flash, setFlash] = useState<string | null>(null)
   const showFlash = (msg: string) => {
@@ -653,6 +656,53 @@ export function App() {
                   </div>
                 </div>
               )}
+              {composerOpen && (
+                <div className="composer">
+                  <textarea
+                    className="composerinput"
+                    value={composerText}
+                    placeholder="Type a prompt — Enter for a newline, ⌘↩ to send"
+                    onChange={(e) => setComposerText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault()
+                        const t = composerText.trim()
+                        if (!t || !selected.sessionId) return
+                        window.cc.sessionSend(selected.sessionId, t).then((r) => {
+                          if (r.ok) {
+                            setComposerText('')
+                            showFlash('sent')
+                          } else showFlash(r.reason ? `not sent: ${r.reason}` : 'not sent')
+                        })
+                      }
+                    }}
+                  />
+                </div>
+              )}
+              <div className="termstatus">
+                <button
+                  className="tsbtn"
+                  title="Add a file or folder — inserts its path into the terminal"
+                  onClick={async () => {
+                    const p = await window.cc.pickPath(selected.sessionId)
+                    if (p) window.cc.termInput(selected.key, `${p} `)
+                  }}
+                >
+                  ＋ file/folder
+                </button>
+                <button
+                  className={`tsbtn${composerOpen ? ' on' : ''}`}
+                  title="Toggle the prompt composer (Enter = newline, ⌘↩ = send)"
+                  onClick={() => setComposerOpen((v) => !v)}
+                >
+                  ⌨ composer
+                </button>
+                <span className="tsgrow" />
+                <span className="tshint">drag a file onto the terminal to insert its path</span>
+                <span className="tsctx" title="Context usage — pending a data source">
+                  ctx&nbsp;—
+                </span>
+              </div>
             </>
           ) : (
             <div className="placeholder">

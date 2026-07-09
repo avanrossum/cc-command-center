@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 interface OpenOpts {
   sessionId?: string
@@ -69,6 +69,10 @@ contextBridge.exposeInMainWorld('cc', {
     name?: string,
   ) => ipcRenderer.invoke('session:spawnChild', parentSessionId, cwd, type, note, name),
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
+  pickPath: (sessionId?: string) => ipcRenderer.invoke('dialog:pickPath', sessionId),
+  // Electron 43 removed File.path; this is the supported way to resolve a dropped
+  // file's absolute path.
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   sessionSend: (sessionId: string, text: string) =>
     ipcRenderer.invoke('session:send', sessionId, text) as Promise<{ ok: boolean; reason?: string }>,
   copyOutput: (sessionId: string, cwd: string) =>

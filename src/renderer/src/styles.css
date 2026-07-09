@@ -929,6 +929,68 @@ body {
   height: 100%;
 }
 
+/* ---- terminal status bar + prompt composer ---- */
+.termstatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--cc-hairline);
+  font: 11px var(--cc-font-mono);
+  color: var(--cc-dim);
+  background: var(--term-bg);
+}
+.tsbtn {
+  font: 11px var(--cc-font-mono);
+  color: var(--cc-dim);
+  background: transparent;
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-r-sm);
+  padding: 3px 8px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.tsbtn:hover {
+  color: var(--cc-text);
+  border-color: var(--cc-dim2);
+}
+.tsbtn.on {
+  color: var(--cc-text);
+  border-color: #3355aa;
+  background: rgba(51, 85, 170, 0.15);
+}
+.tsgrow {
+  flex: 1;
+}
+.tshint {
+  color: var(--cc-dim2);
+  font-size: 10.5px;
+}
+.tsctx {
+  color: var(--cc-dim);
+}
+.composer {
+  padding: 6px 8px;
+  border-top: 1px solid var(--cc-hairline);
+  background: var(--term-bg);
+}
+.composerinput {
+  width: 100%;
+  min-height: 58px;
+  max-height: 180px;
+  resize: vertical;
+  background: var(--cc-surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font: 12.5px/1.5 -apple-system, system-ui, sans-serif;
+  outline: none;
+}
+.composerinput:focus {
+  border-color: #3355aa;
+}
+
 .placeholder {
   flex: 1;
   display: flex;
