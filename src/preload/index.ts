@@ -39,6 +39,8 @@ contextBridge.exposeInMainWorld('cc', {
   edgeTrust: (childId: string, trusted: boolean) =>
     ipcRenderer.invoke('edge:trust', childId, trusted),
   awarenessPause: (paused: boolean) => ipcRenderer.invoke('awareness:pause', paused),
+  settingsSet: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
+  settingsGrantMail: () => ipcRenderer.invoke('settings:grantMail'),
 
   // per-terminal theme
   themeSet: (sessionId: string, theme: string | null) =>

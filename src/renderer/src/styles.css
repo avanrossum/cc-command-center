@@ -332,6 +332,44 @@ body {
   color: #f0c05a;
   border-color: #f0c05a;
 }
+.gearbtn {
+  align-self: center;
+  font: 14px var(--cc-font-mono);
+  color: var(--cc-dim);
+  background: transparent;
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-r-sm);
+  padding: 2px 8px;
+  margin-right: 8px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.gearbtn:hover {
+  color: var(--cc-text);
+  border-color: var(--cc-dim2);
+}
+.setrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--cc-hairline);
+  font-size: 13px;
+  color: var(--cc-text);
+}
+.setrow input[type='checkbox'] {
+  margin-top: 2px;
+}
+.setrow > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+}
+.setsub {
+  font-size: 11.5px;
+  color: var(--cc-dim);
+}
 
 /* ---- message log ---- */
 .msglog {

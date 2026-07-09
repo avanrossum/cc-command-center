@@ -29,6 +29,8 @@ declare global {
       edgeClear: (childId: string) => Promise<boolean>
       edgeTrust: (childId: string, trusted: boolean) => Promise<boolean>
       awarenessPause: (paused: boolean) => Promise<boolean>
+      settingsSet: (key: string, value: string) => Promise<boolean>
+      settingsGrantMail: () => Promise<{ ok: boolean; reason?: string }>
       themeSet: (sessionId: string, theme: string | null) => Promise<boolean>
       snapshotSave: (sessionId: string, data: string) => void
       sessionNew: () => Promise<{ pid: number; cwd: string } | null>

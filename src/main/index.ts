@@ -65,6 +65,20 @@ interface Snapshot {
   edges: Edge[]
   messages: MsgLogEntry[]
   awarenessPaused: boolean
+  settings: AppSettings
+}
+interface AppSettings {
+  trustChildrenByDefault: boolean
+  mailAllowGranted: boolean
+  firstRunSeen: boolean
+}
+// App settings persist in app_state (registry kv). Defaults applied here.
+function getSettings(): AppSettings {
+  return {
+    trustChildrenByDefault: getAppState('trustChildrenByDefault') !== 'false', // default ON
+    mailAllowGranted: getAppState('mailAllowGranted') === 'true',
+    firstRunSeen: getAppState('firstRunSeen') === 'true',
+  }
 }
 
 // Sessions the user explicitly removed. A ghost that is still "alive" but has no
@@ -191,6 +205,7 @@ function snapshot(): Snapshot {
     edges,
     messages: messageLog.slice(-40),
     awarenessPaused,
+    settings: getSettings(),
   }
 }
 
@@ -827,6 +842,13 @@ function reconcilePendingChildren(sessions: LiveSession[]): void {
       // A user-set name is the child's stable, @-addressable handle (the bus
       // resolves @name on the user name before Claude's drifting auto-title).
       if (pend.name) setSessionName(s.sessionId, pend.name)
+      // Trust the link automatically unless the user opted out — a child you
+      // deliberately spawned is one you meant to talk to. The parent then gets the
+      // "you can @message this child" note (deferred until it's free).
+      if (getSettings().trustChildrenByDefault) {
+        setEdgeTrust(s.sessionId, true)
+        notifyParentOfTrustedChild(s.sessionId)
+      }
     } catch (e) {
       // e.g. the parent was removed between spawn and adoption — leave the child
       // unlinked rather than letting the poll throw.
@@ -992,6 +1014,58 @@ ipcMain.handle('edge:trust', (_e, childId: string, trusted: boolean) => {
   pushSessions()
   return true
 })
+ipcMain.handle('settings:set', (_e, key: string, value: string) => {
+  setAppState(key, value)
+  pushSessions()
+  return true
+})
+ipcMain.handle('settings:grantMail', () => {
+  const r = grantMailPermission()
+  pushSessions()
+  return r
+})
+
+// Pre-authorize the awareness mailbox in the user's GLOBAL Claude Code settings,
+// so managed sessions can write their outbox without a per-write permission prompt.
+// Safe read-merge-write: preserve every other key, back up first, refuse to touch a
+// malformed file. Rule scoped to the app's own ~/.claude/ccc tree (covers mail +
+// mail-dev). Verified rule syntax via claude-code-guide (Write(~/path/**), the ~
+// form; permissions.allow is an array of strings in ~/.claude/settings.json).
+function grantMailPermission(): { ok: boolean; reason?: string } {
+  const rule = 'Write(~/.claude/ccc/**)'
+  const dir = join(os.homedir(), '.claude')
+  const settingsPath = join(dir, 'settings.json')
+  try {
+    let settings: Record<string, unknown> = {}
+    if (existsSync(settingsPath)) {
+      const raw = readFileSync(settingsPath, 'utf8')
+      if (raw.trim()) {
+        try {
+          settings = JSON.parse(raw)
+        } catch {
+          return { ok: false, reason: '~/.claude/settings.json is not valid JSON — left untouched' }
+        }
+      }
+      try {
+        copyFileSync(settingsPath, `${settingsPath}.ccc-bak`) // backup before writing
+      } catch {
+        /* best-effort */
+      }
+    } else {
+      mkdirSync(dir, { recursive: true })
+    }
+    const perms = (settings.permissions ??= {}) as Record<string, unknown>
+    const allow = (perms.allow ??= []) as unknown
+    if (!Array.isArray(allow)) return { ok: false, reason: 'permissions.allow is not an array — left untouched' }
+    if (!allow.includes(rule)) allow.push(rule)
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`)
+    setAppState('mailAllowGranted', 'true')
+    setAppState('firstRunSeen', 'true')
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, reason: String(e) }
+  }
+}
 
 // When a link is blessed, tell the (app-managed) parent it can now message this
 // child down the link. Parent→child needs the parent to have an outbox, which

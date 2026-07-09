@@ -44,6 +44,11 @@ interface MsgLogEntry {
   status: string
   at: number
 }
+interface AppSettings {
+  trustChildrenByDefault: boolean
+  mailAllowGranted: boolean
+  firstRunSeen: boolean
+}
 interface Snapshot {
   home: string
   scannedAt: number
@@ -52,6 +57,7 @@ interface Snapshot {
   edges: Edge[]
   messages?: MsgLogEntry[]
   awarenessPaused?: boolean
+  settings?: AppSettings
 }
 interface Selected {
   key: string
@@ -164,6 +170,7 @@ export function App() {
   const [newSessionOpen, setNewSessionOpen] = useState(false)
   // The cross-session message log (awareness bus transparency).
   const [logOpen, setLogOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   // Transient confirmation toast (copy-out, etc.).
   const [flash, setFlash] = useState<string | null>(null)
   const showFlash = (msg: string) => {
@@ -456,6 +463,9 @@ export function App() {
             {snap.awarenessPaused ? '⏸' : '✉'} {snap.messages?.length ?? 0}
           </button>
         )}
+        <button className="gearbtn" onClick={() => setSettingsOpen(true)} title="Settings">
+          ⚙
+        </button>
         <div className="cmdk" title="Command palette — coming soon">
           ⌘K
         </div>
@@ -708,7 +718,122 @@ export function App() {
           close={() => setLogOpen(false)}
         />
       )}
+      {settingsOpen && (
+        <SettingsModal settings={snap.settings} showFlash={showFlash} close={() => setSettingsOpen(false)} />
+      )}
+      {snap.settings && !snap.settings.firstRunSeen && (
+        <FirstRunMail settings={snap.settings} showFlash={showFlash} />
+      )}
       {flash && <div className="flash">{flash}</div>}
+    </div>
+  )
+}
+
+// Settings menu. Backed by app_state via settingsSet; the mail-permission grant
+// edits ~/.claude/settings.json (see main). Grows as more settings are added.
+function SettingsModal({
+  settings,
+  showFlash,
+  close,
+}: {
+  settings?: AppSettings
+  showFlash: (m: string) => void
+  close: () => void
+}) {
+  const trust = settings?.trustChildrenByDefault ?? true
+  const mailGranted = settings?.mailAllowGranted ?? false
+  return (
+    <div className="spawnscrim" onClick={close}>
+      <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
+        <div className="spawntitle">Settings</div>
+
+        <label className="setrow">
+          <input
+            type="checkbox"
+            checked={trust}
+            onChange={(e) => window.cc.settingsSet('trustChildrenByDefault', String(e.target.checked))}
+          />
+          <span>
+            <b>Trust children by default</b>
+            <span className="setsub">
+              {trust
+                ? 'A child you spawn can message its parent (and be messaged) automatically.'
+                : 'You’ll manually trust each child: right-click it → Trust link.'}
+            </span>
+          </span>
+        </label>
+
+        <div className="setrow">
+          <span>
+            <b>Awareness mailbox write permission</b>
+            <span className="setsub">
+              {mailGranted
+                ? 'Granted — sessions write their outbox without a permission prompt.'
+                : 'Pre-authorize writes to ~/.claude/ccc/ in your global Claude settings so sessions don’t get prompted on every message.'}
+            </span>
+          </span>
+          <button
+            className="rbtn"
+            disabled={mailGranted}
+            onClick={async () => {
+              const r = await window.cc.settingsGrantMail()
+              showFlash(r.ok ? 'mailbox writes pre-authorized' : `couldn’t grant: ${r.reason ?? 'error'}`)
+            }}
+          >
+            {mailGranted ? 'Granted ✓' : 'Grant…'}
+          </button>
+        </div>
+
+        <div className="spawnactions">
+          <button className="rbtn" onClick={close}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// First-run offer to pre-authorize the mailbox path (with the why). Opt-out just
+// records firstRunSeen; you can grant later in Settings.
+function FirstRunMail({
+  settings,
+  showFlash,
+}: {
+  settings: AppSettings
+  showFlash: (m: string) => void
+}) {
+  if (settings.mailAllowGranted) return null
+  return (
+    <div className="spawnscrim">
+      <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
+        <div className="spawntitle">Let sessions message each other without prompts?</div>
+        <div className="spawnsub">
+          The awareness bus lets your sessions message each other by writing tiny files to{' '}
+          <code>~/.claude/ccc/</code>. By default, Claude Code asks permission every time a session
+          writes there. With your OK, CC Command Center will add one narrowly-scoped rule —{' '}
+          <code>Write(~/.claude/ccc/**)</code> — to your global <code>~/.claude/settings.json</code>{' '}
+          (backed up first) so those writes just work. Nothing else is changed. You can undo it there
+          anytime, or turn it on later in Settings.
+        </div>
+        <div className="spawnactions">
+          <button
+            className="rbtn"
+            onClick={() => window.cc.settingsSet('firstRunSeen', 'true')}
+          >
+            Not now
+          </button>
+          <button
+            className="rbtn primary"
+            onClick={async () => {
+              const r = await window.cc.settingsGrantMail()
+              showFlash(r.ok ? 'mailbox writes pre-authorized' : `couldn’t grant: ${r.reason ?? 'error'}`)
+            }}
+          >
+            Allow mailbox writes
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
