@@ -357,13 +357,20 @@ function openTerminal(key: string, opts: OpenOpts): void {
 // so the sidebar row appears and, once opened, reconciles by session id).
 function launchSession(cwd: string, args: string[] = [], extraEnv: Record<string, string> = {}): number {
   const cmd = resolveClaude()
+  // Every app-spawned session gets an outbox so it can take part in the awareness
+  // bus in BOTH directions — message its parent (plain text) or a named child
+  // (@name). The file is created lazily when the session first writes to it.
+  const token = `cc-${Date.now()}-${outboxCounter++}`
+  const outboxPath = join(MAIL_DIR, `${token}.msg`)
   const p = pty.spawn(cmd, args, {
     name: 'xterm-256color',
     cols: 120,
     rows: 30,
     cwd,
-    env: { ...buildEnv(), ...extraEnv },
+    env: { ...buildEnv(), ...extraEnv, CC_OUTBOX: outboxPath },
   })
+  outboxOwner.set(token, p.pid)
+  outboxByPid.set(p.pid, { token, path: outboxPath })
   const key = `new:${p.pid}`
   console.log(`[main] new session: spawned ${cmd} ${args.join(' ')} in ${cwd} pid=${p.pid}`)
   wireTerm(key, p, { cwd })
@@ -384,11 +391,13 @@ const RATE_MAX = 6
 const HELD_TTL_MS = 30 * 60_000 // a message that never becomes routable expires
 let outboxCounter = 0
 let awarenessPaused = false // global kill switch — hold all routing + delivery
-const outboxOwner = new Map<string, number>() // outbox token -> child pid
+const outboxOwner = new Map<string, number>() // outbox token -> owning session pid
+const outboxByPid = new Map<number, { token: string; path: string }>() // pid -> its outbox
 
 interface Delivery {
-  to: string
-  childSessionId: string // stable id — used to re-check trust + key the rate guard
+  to: string // target session id
+  fromSessionId: string // sender session id — rate key + edge-pair validation
+  edgeChildId: string // child_id of the governing edge — for the trust re-check
   fromName: string
   text: string
   hops: number
@@ -411,10 +420,43 @@ const heldMessages = new Map<string, { text: string; at: number; logged: boolean
 
 function awarenessPreamble(outbox: string): string {
   return (
-    `[CC Command Center — fleet] You are a child session in a managed fleet. When your ` +
-    `PARENT session needs to know something, message it by writing plain text to this file:\n${outbox}\n` +
-    `It is delivered to your parent when they are free. Message your parent only when they genuinely need the update.`
+    `[CC Command Center — fleet] You are a session in a managed fleet. To message a linked ` +
+    `session, write to this file:\n${outbox}\n` +
+    `• Plain text goes to your PARENT session.\n` +
+    `• A message starting with "@<name> " goes to your child session named <name>.\n` +
+    `Delivered when the recipient is free. Message only on a genuine need — a real update, ` +
+    `question, or instruction. (No acknowledgement needed for this note.)`
   )
+}
+
+// Self-contained note injected into a PARENT when a link is blessed, so it learns
+// it can now message that specific child down the link (a top-level parent may
+// never have seen a spawn preamble).
+function parentBlessNote(childName: string, outbox: string): string {
+  return (
+    `[CC Command Center — fleet] The link with your child session "${childName}" is now trusted. ` +
+    `To message it, write to this file:\n${outbox}\n` +
+    `Start the message with "@${childName} " to send it to that child (plain text without an @ goes ` +
+    `to YOUR parent). Delivered when the child is free. Only message on a genuine need. ` +
+    `(No acknowledgement needed for this note.)`
+  )
+}
+
+// The display name a human sees for a session (user override, else Claude's title,
+// else the pid) — used for @-addressing resolution and the message log.
+function displayName(s: LiveSession): string {
+  const named = s.sessionId ? getSessionNames()[s.sessionId] : undefined
+  return named ?? s.name ?? `pid ${s.pid}`
+}
+
+// A directed message targets a child: it starts with "@". Returns the text after
+// the "@" (the child name is resolved by prefix-match against the sender's
+// children) plus a first-word hint for logging. Plain messages return null (→ up).
+function parseDirective(text: string): { rest: string; handleHint: string } | null {
+  const t = text.trimStart()
+  if (!t.startsWith('@')) return null
+  const rest = t.slice(1)
+  return { rest, handleHint: rest.split(/[\s:,]/, 1)[0] ?? '' }
 }
 
 function logMsg(from: string, to: string, text: string, status: string): void {
@@ -470,14 +512,66 @@ function routeHeld(sessions: LiveSession[]): void {
       logMsg('?', '?', held.text, 'expired: never routable')
       continue
     }
-    const childPid = outboxOwner.get(token)
-    const child = childPid ? sessions.find((s) => s.pid === childPid && s.sessionId) : undefined
-    if (!child) continue // sender not adopted yet — keep held
-    const edge = getEdges().find((e) => e.child_id === child.sessionId)
+    const senderPid = outboxOwner.get(token)
+    const sender = senderPid
+      ? sessions.find((s) => s.pid === senderPid && s.sessionId)
+      : undefined
+    if (!sender || !sender.sessionId) continue // sender not adopted yet — keep held
+    const senderId = sender.sessionId
+    const edges = getEdges()
+
+    // Directed "@name …" → route DOWN to the sender's named child.
+    const directed = parseDirective(held.text)
+    if (directed) {
+      let best: { child: LiveSession; body: string; trusted: boolean } | undefined
+      for (const e of edges) {
+        if (e.parent_id !== senderId) continue
+        const child = sessions.find((s) => s.sessionId === e.child_id)
+        if (!child) continue
+        const nm = displayName(child)
+        if (nm && directed.rest.toLowerCase().startsWith(nm.toLowerCase())) {
+          if (!best || nm.length > displayName(best.child).length) {
+            best = {
+              child,
+              body: directed.rest.slice(nm.length).replace(/^[\s:,-]+/, '').trim(),
+              trusted: !!e.trusted,
+            }
+          }
+        }
+      }
+      if (!best) {
+        if (!held.logged) {
+          logMsg(displayName(sender), `@${directed.handleHint}`, held.text, 'held: no such child')
+          held.logged = true
+        }
+        continue // keep held; a matching child may appear, else TTL cleans up
+      }
+      if (!best.trusted) {
+        if (!held.logged) {
+          logMsg(displayName(sender), displayName(best.child), held.text, 'held: link not trusted')
+          held.logged = true
+        }
+        continue
+      }
+      deliveryQueue.push({
+        to: best.child.sessionId!,
+        fromSessionId: senderId,
+        edgeChildId: best.child.sessionId!,
+        fromName: displayName(sender),
+        text: best.body || held.text,
+        hops: 1,
+        at: now,
+      })
+      heldMessages.delete(token)
+      continue
+    }
+
+    // Plain text → route UP to the sender's parent.
+    const edge = edges.find((e) => e.child_id === senderId)
     if (!edge || !edge.trusted) {
       if (!held.logged) {
         logMsg(
-          child.name ?? child.sessionId,
+          displayName(sender),
           edge ? 'parent' : '?',
           held.text,
           edge ? 'held: link not trusted' : 'held: no parent link',
@@ -488,8 +582,9 @@ function routeHeld(sessions: LiveSession[]): void {
     }
     deliveryQueue.push({
       to: edge.parent_id,
-      childSessionId: child.sessionId,
-      fromName: child.name ?? `pid ${child.pid}`,
+      fromSessionId: senderId,
+      edgeChildId: senderId,
+      fromName: displayName(sender),
       text: held.text,
       hops: 1,
       at: now,
@@ -527,9 +622,15 @@ function tryDeliveries(sessions: LiveSession[]): void {
       } else i++
       continue
     }
-    // re-check trust at delivery: an untrust (or re-parent) drops in-flight
-    const edge = getEdges().find((e) => e.child_id === d.childSessionId)
-    if (!edge || edge.parent_id !== d.to || !edge.trusted) {
+    // re-check trust at delivery: an untrust (or re-parent) drops in-flight. Find
+    // the governing edge by edgeChildId; it must still be trusted AND connect
+    // sender↔target (either direction — parent→child or child→parent).
+    const edge = getEdges().find((e) => e.child_id === d.edgeChildId)
+    const connectsPair =
+      !!edge &&
+      ((edge.child_id === d.fromSessionId && edge.parent_id === d.to) ||
+        (edge.parent_id === d.fromSessionId && edge.child_id === d.to))
+    if (!edge || !edge.trusted || !connectsPair) {
       deliveryQueue.splice(i, 1)
       logMsg(d.fromName, target.name ?? d.to, d.text, 'dropped: link no longer trusted')
       continue
@@ -539,7 +640,7 @@ function tryDeliveries(sessions: LiveSession[]): void {
       i++
       continue
     }
-    const key = `${d.childSessionId}->${d.to}`
+    const key = `${d.fromSessionId}->${d.to}`
     const stamps = (linkRate.get(key) ?? []).filter((t) => now - t < RATE_WINDOW_MS)
     if (d.hops > HOP_MAX || stamps.length >= RATE_MAX) {
       deliveryQueue.splice(i, 1)
@@ -590,10 +691,8 @@ function spawnChild(
   type: 'blocking' | 'tangential',
   note?: string,
 ): number {
-  const token = `cc-${Date.now()}-${outboxCounter++}`
-  const outbox = join(MAIL_DIR, `${token}.msg`)
-  const pid = launchSession(cwd, [], { CC_OUTBOX: outbox, CC_ROLE: 'child' })
-  outboxOwner.set(token, pid)
+  const pid = launchSession(cwd, [], { CC_ROLE: 'child' })
+  const outbox = outboxByPid.get(pid)?.path ?? ''
   const userNote = note?.trim()
   const preamble = awarenessPreamble(outbox)
   pendingChildren.set(pid, {
@@ -833,9 +932,28 @@ ipcMain.handle('edge:clear', (_e, childId: string) => {
 })
 ipcMain.handle('edge:trust', (_e, childId: string, trusted: boolean) => {
   setEdgeTrust(childId, trusted)
+  if (trusted) notifyParentOfTrustedChild(childId)
   pushSessions()
   return true
 })
+
+// When a link is blessed, tell the (app-managed) parent it can now message this
+// child down the link. Parent→child needs the parent to have an outbox, which
+// only app-spawned sessions do — adopted parents keep child→parent only.
+function notifyParentOfTrustedChild(childId: string): void {
+  try {
+    const edge = getEdges().find((e) => e.child_id === childId)
+    if (!edge) return
+    const parentTerm = findManagedTerm(edge.parent_id)
+    if (!parentTerm || parentTerm.exited) return
+    const outbox = outboxByPid.get(parentTerm.pty.pid)?.path
+    if (!outbox) return
+    const childName = getSessionNames()[childId] ?? getNodeMap().get(childId)?.name ?? childId
+    injectPrompt(parentTerm, parentBlessNote(childName, outbox), 400)
+  } catch (e) {
+    console.error('[main] notify parent of trusted child failed', e)
+  }
+}
 // Global kill switch for autonomous messaging. When paused, outboxes are still
 // drained into the held buffer (nothing is lost) but nothing is routed or
 // delivered until the operator resumes.
