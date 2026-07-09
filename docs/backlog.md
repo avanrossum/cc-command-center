@@ -1,5 +1,39 @@
 # Backlog — next features (specs)
 
+## Session handles vs. purpose labels — stable identity + visible purpose (user, 2026-07-08)
+
+**Diagnosis (what's happening now).** The spawn-child dialog (`SpawnComposer`) has NO name field —
+only Folder + Handoff note — so spawned children can't be named at spawn. Their sidebar names are
+**Claude's own auto-titles** (`node.name`, derived from each session's conversation, updated via
+`ensureNode`); they can **drift** as the conversation grows. Only sessions named via the New-session
+modal (or a manual rename → `sessionNames` app_state) have a stable user name (e.g. "Parent-01").
+The real problem: `@`-addressing in the awareness bus resolves against `displayName` = that drifting
+auto-title, so a child's callsign can change out from under the router (this also caused the phantom
+"child-of-child" 4th-level in the multi-hop relay test — an ambiguous name read as real structure).
+
+**Design — split identity from purpose:**
+- **Handle** — a short, **fixed-at-spawn, immutable** identifier; the ONLY thing `@name` resolves
+  against. Settable in the spawn dialog (add the field), or auto-assigned a short slug (`c1`, `c2`…)
+  if blank. Never drifts → hardens bus addressing AND gives children clear, non-renamable identities.
+- **Purpose** — an **editable** subtitle showing what the child was spawned to do, sourced from the
+  handoff-note gist (or a dedicated field). Never used for addressing.
+- Sidebar row: **`c1`** · *investigate the fms module*. Stop resolving `@name`/`displayName` on
+  Claude's auto-title; resolve on the handle.
+
+**Recommended default:** handle settable-at-spawn + immutable; purpose from the handoff note, freely
+editable. Pairs with the awareness bus (stable @handles) and the settings/trust work above.
+
+## README / landing narrative with screenshots (user, 2026-07-08)
+
+The bidirectional bus + multi-hop relay + HITM frame is the significant, sellable story and needs a
+real writeup — README / landing narrative / marketing — built around **pictures**. No such doc exists
+yet. Structure it on three shots the user already has: (1) the bidirectional round-trip, (2) the
+multi-hop relay transcript (grandchild status rolled up through a child that only sees its own
+children), (3) the sidebar tree. Anchor the narrative on the HITM frame (see `docs/concepts.md`):
+Human-In-The-Middle multi-agent orchestration, with read/drop/inject over an autonomous agent bus.
+Emphasize: local-knowledge + relay scales to arbitrary depth; the human stays the middle node;
+everything is observable + killable. (Claude can draft the narrative; the user supplies the images.)
+
 ## Settings menu + "Trust children by default" (user, 2026-07-08)
 
 **Motivation.** The explicit Trust-link (bless) step is friction for a link you deliberately
