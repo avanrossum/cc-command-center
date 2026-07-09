@@ -377,7 +377,7 @@ function launchSession(cwd: string, args: string[] = [], extraEnv: Record<string
 // each scan the app reads it, routes to the parent via the edge graph, and — if
 // the link is trusted — injects it into the parent as a new turn when the parent
 // is free. Every hop is logged; a rate/hop guard stops runaway loops.
-const MAIL_DIR = join(os.homedir(), '.claude', 'ccc', 'mail')
+const MAIL_DIR = join(os.homedir(), '.claude', 'ccc', app.isPackaged ? 'mail' : 'mail-dev')
 const HOP_MAX = 6
 const RATE_WINDOW_MS = 60_000
 const RATE_MAX = 6

@@ -1,0 +1,43 @@
+appId: com.mipyip.cc-command-center
+productName: CC Command Center
+copyright: © 2026 MipYip, LLC
+
+directories:
+  output: release
+  buildResources: build
+
+# electron-vite emits the bundled app to out/; native deps (better-sqlite3,
+# node-pty) stay external and are pulled from node_modules by electron-builder.
+files:
+  - out/**/*
+  - package.json
+
+extraResources:
+  - from: resources/icon.png
+    to: icon.png
+
+# Native .node addons must live outside the asar so they can be dlopen'd.
+asarUnpack:
+  - "**/node_modules/better-sqlite3/**"
+  - "**/node_modules/node-pty/**"
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+  icon: resources/icon.icns
+  darkModeSupport: true
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Notarize via APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID (env).
+  notarize: true
+
+dmg:
+  title: ${productName}
+  iconSize: 80
+  window:
+    width: 540
+    height: 380
