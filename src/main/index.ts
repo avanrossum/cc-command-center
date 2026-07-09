@@ -73,6 +73,8 @@ interface AppSettings {
   trustChildrenByDefault: boolean
   mailAllowGranted: boolean
   firstRunSeen: boolean
+  lastModel: string // remembered New-session model choice ('' = default)
+  lastEffort: string // remembered reasoning effort ('' = default)
 }
 // App settings persist in app_state (registry kv). Defaults applied here.
 function getSettings(): AppSettings {
@@ -80,6 +82,8 @@ function getSettings(): AppSettings {
     trustChildrenByDefault: getAppState('trustChildrenByDefault') !== 'false', // default ON
     mailAllowGranted: getAppState('mailAllowGranted') === 'true',
     firstRunSeen: getAppState('firstRunSeen') === 'true',
+    lastModel: getAppState('lastModel') || '',
+    lastEffort: getAppState('lastEffort') || '',
   }
 }
 

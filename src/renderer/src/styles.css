@@ -1136,6 +1136,14 @@ body {
   color: var(--cc-text);
   border-color: var(--cc-dim2);
 }
+.nsrow {
+  display: flex;
+  gap: 10px;
+}
+.nscol {
+  flex: 1;
+  min-width: 0;
+}
 .spawntype {
   display: flex;
   gap: 6px;

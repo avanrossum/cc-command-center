@@ -49,6 +49,8 @@ interface AppSettings {
   trustChildrenByDefault: boolean
   mailAllowGranted: boolean
   firstRunSeen: boolean
+  lastModel: string
+  lastEffort: string
 }
 interface Snapshot {
   home: string
@@ -824,6 +826,8 @@ export function App() {
           defaultCat={selectedCat}
           home={snap.home}
           recent={snap.recentFolders ?? []}
+          lastModel={snap.settings?.lastModel ?? ''}
+          lastEffort={snap.settings?.lastEffort ?? ''}
           close={() => setNewSessionOpen(false)}
         />
       )}
@@ -1212,17 +1216,31 @@ function SpawnComposer({
   )
 }
 
+const MODEL_OPTS = [
+  { v: '', label: 'Default' },
+  { v: 'opus', label: 'Opus' },
+  { v: 'sonnet', label: 'Sonnet' },
+  { v: 'haiku', label: 'Haiku' },
+  { v: 'fable', label: 'Fable' },
+  { v: '__custom__', label: 'Custom…' },
+]
+const EFFORT_OPTS = ['', 'low', 'medium', 'high', 'xhigh', 'max']
+
 function NewSessionComposer({
   categories,
   defaultCat,
   home,
   recent,
+  lastModel,
+  lastEffort,
   close,
 }: {
   categories: Category[]
   defaultCat: number | null
   home: string
   recent: string[]
+  lastModel: string
+  lastEffort: string
   close: () => void
 }) {
   const [name, setName] = useState('')
@@ -1230,15 +1248,31 @@ function NewSessionComposer({
   const [cwd, setCwd] = useState('')
   const [flags, setFlags] = useState('')
   const [instructions, setInstructions] = useState('')
+  // Remember the last model/effort. A custom id restores as the "Custom…" choice.
+  const knownModel = MODEL_OPTS.some((o) => o.v === lastModel)
+  const [model, setModel] = useState(knownModel ? lastModel : lastModel ? '__custom__' : '')
+  const [customModel, setCustomModel] = useState(knownModel ? '' : lastModel)
+  const [effort, setEffort] = useState(lastEffort)
   const pick = async () => {
     const p = await window.cc.pickFolder()
     if (p) setCwd(p)
   }
   const create = () => {
     if (!cwd) return
+    const chosenModel = model === '__custom__' ? customModel.trim() : model
+    // Prepend --model / --effort to whatever the user typed in Flags.
+    const allFlags = [
+      chosenModel && `--model ${chosenModel}`,
+      effort && `--effort ${effort}`,
+      flags.trim(),
+    ]
+      .filter(Boolean)
+      .join(' ')
+    window.cc.settingsSet('lastModel', model === '__custom__' ? customModel.trim() : model)
+    window.cc.settingsSet('lastEffort', effort)
     window.cc.sessionCreate({
       cwd,
-      flags: flags.trim() || undefined,
+      flags: allFlags || undefined,
       categoryId: cat,
       name: name.trim() || undefined,
       instructions: instructions.trim() || undefined,
@@ -1306,13 +1340,44 @@ function NewSessionComposer({
           </>
         )}
 
+        <div className="nsrow">
+          <div className="nscol">
+            <div className="spawnlabel">Model</div>
+            <select className="cat-in" value={model} onChange={(e) => setModel(e.target.value)}>
+              {MODEL_OPTS.map((o) => (
+                <option key={o.v} value={o.v}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="nscol">
+            <div className="spawnlabel">Effort</div>
+            <select className="cat-in" value={effort} onChange={(e) => setEffort(e.target.value)}>
+              {EFFORT_OPTS.map((v) => (
+                <option key={v} value={v}>
+                  {v === '' ? 'Default' : v}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        {model === '__custom__' && (
+          <input
+            className="cat-in"
+            value={customModel}
+            placeholder="model id, e.g. claude-opus-4-8"
+            onChange={(e) => setCustomModel(e.target.value)}
+          />
+        )}
+
         <div className="spawnlabel">
-          Flags <span className="spawnopt">optional CLI args</span>
+          Flags <span className="spawnopt">optional extra CLI args</span>
         </div>
         <input
           className="cat-in"
           value={flags}
-          placeholder="e.g. --model opus"
+          placeholder="e.g. --dangerously-skip-permissions"
           onChange={(e) => setFlags(e.target.value)}
         />
 
