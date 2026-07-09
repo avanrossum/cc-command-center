@@ -155,6 +155,7 @@ Today only the *last-active* session auto-restores and every not-live node is tr
 - `WAITING_PERMISSION` split from `WAITING` via `Notification:permission_prompt` fast edges plus an on-demand PTY-scrape tie-breaker.
 - A versioned config for the M2 PTY-scrape pattern table (permission-dialog / elicitation glyphs), captured from real dialogs across the 2.1.x spread.
 - Out-of-tool ppid-chain parent inference surfaced as confirm-only suggestions (never auto-applied).
+- **Beacon "NEEDS YOU" triage (user, 2026-07-09).** The beacon flag must be high-signal, not "any idle session." A session blocked on a **permission prompt** (`WAITING_PERMISSION`, e.g. the "allow Claude to edit its own settings" gate) or a genuine question (`WAITING_INPUT`) = **needs you**. A child that just **replied to its parent and went idle**, or is merely idle/working, does **not**. This is the mechanistic version; the control agent (Future) can layer smarter triage on top, consuming the same signal.
 
 **Definition of done.**
 - A session blocked on a permission dialog reads `WAITING_PERMISSION`, distinct from `WAITING_INPUT` and `IDLE`.
@@ -226,6 +227,19 @@ Today only the *last-active* session auto-restores and every not-live node is tr
 **It's a control surface, not a chat partner (user, 2026-07-08).** The user should be **discouraged, or outright prevented, from conversing with the control agent directly.** Interaction is by *directing and approving its actions on the fleet* — not a freeform chat box. This keeps it from degrading into an unmonitored "shadow assistant" the user offloads general work to (which would undercut the transparency/AUP story and blur it with just another session). The user talks to their *sessions*; the control agent is infrastructure that helps orchestrate them, surfaced and gated, not a Claude you chat with.
 
 **How it wires in.** The app exposes its fleet primitives to the agent as tools (an MCP surface or the app's own tool API): `list_sessions` / `read_session` / `send_to_session` / `spawn` / `set_edge` / `get_status`. Same capabilities the UI uses, so the agent can only do what a user could do here — and every action is surfaced. Depends on Phases 5 + 9 being solid first (reliable send + read + routing).
+
+**Not-a-harness structuring (user flagged 2026-07-09; must get right).** Anthropic is cracking down on automated harnesses that drive Claude Code CLI headlessly to bypass API metering. The control agent must be clearly on the right side of that line:
+- It is a **real, interactive, supervised session the human is present for** — surfaced prominently, transcript + action log always viewable — NOT a headless background loop that runs the fleet while the human is away. Human-in-the-loop is exactly what separates a legitimate operator tool from a prohibited harness.
+- It should **pause when unattended** and require the human present for consequential actions (the approve-gate). No covert, always-on autonomous operation.
+- Model: **Haiku** for the conductor/triage role (cheap, fast classification), but the legitimacy comes from supervision + transparency, not the tier.
+- **Triage-first (answers the Phase-7 beacon-bar noise).** Its first job is attention-routing: watch session states + the ✉ log and classify who *genuinely* needs the human — blocked on a **permission prompt** = yes; **replied and went idle** = no. Assists the human's oversight, doesn't replace it. Safe first slice, directly reduces flag noise.
+- Uses the same read/drop/inject primitives as the human, transparently — a co-pilot for the middle seat (`docs/concepts.md`). The model breaks the moment the human leaves the middle.
+
+## Fleet activity view — workflows / subagents / loops (user, 2026-07-09)
+
+**Goal.** With several working sessions, background activity (subagents, workflows, loops, long tool runs) gets out of hand fast. A view — reachable from the rail/sidebar — showing, across ALL sessions, what's running and its status.
+
+**Approach.** Same no-daemon file-scan the state engine uses, extended to `~/.claude/projects/*/` subagent/task artifacts + workflow journals (they carry per-agent progress). Aggregate into a live list grouped by session: spawned / running / done / stalled. This is `open-questions.md` Q2 promoted to a build item — it pairs with Phase 7 and the control agent (which would consume the same signal). Slot alongside Phase 7/8 for pre-share readiness.
 
 ---
 
