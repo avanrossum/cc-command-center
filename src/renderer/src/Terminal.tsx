@@ -13,9 +13,10 @@ interface Props {
   cwd: string
   resume: boolean
   themeName?: string | null
-  // Spawn a tangent seeded with the current terminal selection. instant=true →
-  // spawn immediately (Cmd+K); instant=false → open the composer pre-filled (right-click).
-  onSpawnFromSelection?: (text: string, instant: boolean) => void
+  // Spawn a child seeded with the current terminal selection. instant=true →
+  // spawn immediately (Cmd+K tangent / Cmd+Shift+K blocking); instant=false → open
+  // the composer pre-filled with the given type as default (right-click).
+  onSpawnFromSelection?: (text: string, instant: boolean, type: 'blocking' | 'tangential') => void
 }
 
 // Hosts one live terminal. The PTY lives in the main process and keeps running
@@ -117,16 +118,11 @@ export function TerminalView({
     // (instant). Cmd+K isn't a menu/terminal shortcut here, so it's free to claim.
     term.attachCustomKeyEventHandler((e) => {
       if (e.metaKey) {
-        if (
-          e.type === 'keydown' &&
-          !e.ctrlKey &&
-          !e.altKey &&
-          !e.shiftKey &&
-          (e.key === 'k' || e.key === 'K')
-        ) {
+        if (e.type === 'keydown' && !e.ctrlKey && !e.altKey && (e.key === 'k' || e.key === 'K')) {
           const sel = term.getSelection().trim()
           if (sel) {
-            spawnCbRef.current?.(sel, true)
+            // Cmd+K → tangent; Cmd+Shift+K → blocking child.
+            spawnCbRef.current?.(sel, true, e.shiftKey ? 'blocking' : 'tangential')
             return false
           }
         }
@@ -141,7 +137,7 @@ export function TerminalView({
       const sel = term.getSelection().trim()
       if (sel) {
         ev.preventDefault()
-        spawnCbRef.current?.(sel, false)
+        spawnCbRef.current?.(sel, false, 'tangential') // composer default; toggle in it
       }
     }
     host.addEventListener('contextmenu', onCtx)

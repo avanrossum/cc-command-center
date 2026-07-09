@@ -594,21 +594,22 @@ export function App() {
                 cwd={selected.cwd}
                 resume={selected.resume}
                 themeName={selThemeName}
-                onSpawnFromSelection={(text, instant) => {
+                onSpawnFromSelection={(text, instant, type) => {
                   if (!selected.sessionId) {
                     showFlash('session not ready to spawn from')
                     return
                   }
+                  const label = type === 'blocking' ? 'blocking child' : 'tangent'
                   if (instant) {
-                    window.cc.sessionSpawnChild(selected.sessionId, selected.cwd, 'tangential', text)
-                    showFlash('spawned tangent from selection')
+                    window.cc.sessionSpawnChild(selected.sessionId, selected.cwd, type, text)
+                    showFlash(`spawned ${label} from selection`)
                     return
                   }
                   const parent = live.find((s) => s.sessionId === selected.sessionId)
-                  if (parent) setSpawn({ parent, type: 'tangential', cwd: selected.cwd, note: text, name: '' })
+                  if (parent) setSpawn({ parent, type, cwd: selected.cwd, note: text, name: '' })
                   else {
-                    window.cc.sessionSpawnChild(selected.sessionId, selected.cwd, 'tangential', text)
-                    showFlash('spawned tangent from selection')
+                    window.cc.sessionSpawnChild(selected.sessionId, selected.cwd, type, text)
+                    showFlash(`spawned ${label} from selection`)
                   }
                 }}
               />
@@ -1025,6 +1026,20 @@ function SpawnComposer({
           {isBlocking
             ? 'blocks the parent until it’s done; the parent rolls back to it.'
             : 'spun off with context; does not block the parent.'}
+        </div>
+        <div className="spawntype">
+          <button
+            className={spawn.type === 'tangential' ? 'on' : ''}
+            onClick={() => setSpawn({ ...spawn, type: 'tangential' })}
+          >
+            Tangential offshoot
+          </button>
+          <button
+            className={spawn.type === 'blocking' ? 'on' : ''}
+            onClick={() => setSpawn({ ...spawn, type: 'blocking' })}
+          >
+            Blocking child
+          </button>
         </div>
         <div className="spawnlabel">
           Name <span className="spawnopt">optional — how you’ll @message it; stays fixed</span>

@@ -426,6 +426,12 @@ const HOP_MAX = 6
 const RATE_WINDOW_MS = 60_000
 const RATE_MAX = 6
 const HELD_TTL_MS = 30 * 60_000 // a message that never becomes routable expires
+// A session ends its OWN process by writing exactly this to its outbox — the app
+// sees it on drain and kills that PTY. (Conversationally asking a child to "exit"
+// only makes it idle; it can't terminate its own process. This gives it a lever.)
+// Detected in the outbox FILE, not terminal output, so the teaching text in the
+// preamble can't false-trigger it.
+const EXIT_SENTINEL = '[[CCC:EXIT]]'
 let outboxCounter = 0
 let awarenessPaused = false // global kill switch — hold all routing + delivery
 const outboxOwner = new Map<string, number>() // outbox token -> owning session pid
@@ -464,6 +470,8 @@ function awarenessPreamble(outbox: string): string {
     `session, write to this file:\n${outbox}\n` +
     `• Plain text goes to your PARENT session.\n` +
     `• A message starting with "@<name> " goes to your child session named <name>.\n` +
+    `• To END YOUR OWN session (e.g. your parent asked you to exit and your work is done), ` +
+    `write exactly ${EXIT_SENTINEL} to that file — the app will close this session.\n` +
     `Delivered when the recipient is free. Message only on a genuine need — a real update, ` +
     `question, or instruction. (No acknowledgement needed for this note.)`
   )
@@ -533,6 +541,22 @@ function drainOutboxes(): void {
       /* ignore */
     }
     const token = f.replace(/\.msg$/, '')
+    // Self-termination: an exact exit sentinel kills the owning session's PTY
+    // (onExit then prunes its outbox). Exact-match so it's always deliberate.
+    if (content === EXIT_SENTINEL) {
+      const pid = outboxOwner.get(token)
+      const term = pid ? findTermByPid(pid) : undefined
+      const nm = (term?.sessionId && getSessionNames()[term.sessionId]) || `pid ${pid ?? '?'}`
+      logMsg(nm, 'self', content, 'terminated: self-exit')
+      if (term) {
+        try {
+          term.pty.kill()
+        } catch {
+          /* already gone */
+        }
+      }
+      continue
+    }
     const arr = heldMessages.get(token) ?? []
     arr.push({ text: content.slice(-4000), at: Date.now(), logged: false })
     if (arr.length > 30) arr.splice(0, arr.length - 30) // bound a runaway writer

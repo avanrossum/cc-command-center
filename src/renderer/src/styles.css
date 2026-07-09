@@ -1038,6 +1038,26 @@ body {
 .spawnname:focus {
   border-color: #3355aa;
 }
+.spawntype {
+  display: flex;
+  gap: 6px;
+  margin: 10px 0 4px;
+}
+.spawntype button {
+  flex: 1;
+  font: 11.5px -apple-system, system-ui, sans-serif;
+  color: var(--cc-dim);
+  background: var(--cc-surface-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+.spawntype button.on {
+  color: var(--text);
+  border-color: #3355aa;
+  background: rgba(51, 85, 170, 0.15);
+}
 .spawnactions {
   margin-top: 16px;
   display: flex;
