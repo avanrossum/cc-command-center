@@ -1,5 +1,27 @@
 # Backlog — next features (specs)
 
+## Known issues, deferred (user, 2026-07-09 — not critical now)
+
+- **Mailbox write still prompts on file CREATE.** Despite the working `Write(~/.claude/ccc/**)`
+  rule, a session CREATING its outbox `.msg` for the first time still shows a "Create file"
+  permission prompt (the one whose option 2 is "allow Claude to edit its own settings"). It's a
+  write to the same folder, so the rule *should* cover it. Leading hypothesis: Claude Code matches
+  the rule against the path AS CALLED — and Claude expresses the outbox as a RELATIVE path
+  (`../../../.claude/ccc/mail-dev/x.msg`) since it's outside cwd — so an absolute/`~` rule misses
+  it. Candidate fixes to TEST empirically: add a leading-`**` glob `Write(**/.claude/ccc/**)`
+  (matches the relative form too, still scoped to .claude/ccc), and/or make the child write via the
+  absolute path, and/or inspect the actual permission matcher (docs say it resolves to absolute —
+  empirics disagree). This blocks a beat of the parent/child relationship (the write pauses for
+  approval), so resolve before wide use.
+- **Selection → spawn (Cmd+K / right-click) not reliably firing.** Even after capturing the
+  selection at right-mousedown, it still doesn't work in practice. Likely cause: Claude Code enables
+  terminal mouse tracking, so xterm doesn't own the DOM text selection (`term.getSelection()` is
+  empty) — the "selection" the user sees may be the OS/CC layer, not xterm's. Needs a different
+  capture path (track xterm `onSelectionChange`, or detect/relax mouse mode, or a dedicated
+  "spawn from selection" affordance). NTH for later; parked.
+
+
+
 ## Robust tree termination (user, 2026-07-09)
 
 Asking the root session to "end the whole tree" didn't reliably execute — the parent argued
