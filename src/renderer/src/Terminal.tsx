@@ -13,14 +13,31 @@ interface Props {
   cwd: string
   resume: boolean
   themeName?: string | null
+  // Spawn a tangent seeded with the current terminal selection. instant=true →
+  // spawn immediately (Cmd+K); instant=false → open the composer pre-filled (right-click).
+  onSpawnFromSelection?: (text: string, instant: boolean) => void
 }
 
 // Hosts one live terminal. The PTY lives in the main process and keeps running
 // when this component unmounts (switching sessions) — main replays its buffered
 // scrollback on reattach, so we just create a fresh xterm and let main feed it.
-export function TerminalView({ termKey, sessionId, pid, cwd, resume, themeName }: Props) {
+export function TerminalView({
+  termKey,
+  sessionId,
+  pid,
+  cwd,
+  resume,
+  themeName,
+  onSpawnFromSelection,
+}: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
+  // Held in a ref so the terminal setup effect (which captures it) doesn't need to
+  // re-run — and always calls the latest callback.
+  const spawnCbRef = useRef(onSpawnFromSelection)
+  useEffect(() => {
+    spawnCbRef.current = onSpawnFromSelection
+  }, [onSpawnFromSelection])
 
   useEffect(() => {
     const host = hostRef.current!
@@ -96,7 +113,38 @@ export function TerminalView({ termKey, sessionId, pid, cwd, resume, themeName }
     // pastes the clipboard image on it. So no extra image handling belongs here —
     // an explicit Ctrl+V injection here just double-pasted the image. Non-Cmd keys
     // fall through (return true) so kitty Shift+Enter and Ctrl+V still work.
-    term.attachCustomKeyEventHandler((e) => !e.metaKey)
+    // Special case: Cmd+K with a selection spawns a tangent seeded with that text
+    // (instant). Cmd+K isn't a menu/terminal shortcut here, so it's free to claim.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.metaKey) {
+        if (
+          e.type === 'keydown' &&
+          !e.ctrlKey &&
+          !e.altKey &&
+          !e.shiftKey &&
+          (e.key === 'k' || e.key === 'K')
+        ) {
+          const sel = term.getSelection().trim()
+          if (sel) {
+            spawnCbRef.current?.(sel, true)
+            return false
+          }
+        }
+        return false
+      }
+      return true
+    })
+
+    // Right-click with a selection → spawn a tangent, but via the composer so you
+    // can adjust folder/name/type first. No selection → leave the default alone.
+    const onCtx = (ev: MouseEvent): void => {
+      const sel = term.getSelection().trim()
+      if (sel) {
+        ev.preventDefault()
+        spawnCbRef.current?.(sel, false)
+      }
+    }
+    host.addEventListener('contextmenu', onCtx)
 
     window.cc
       .termOpen(termKey, { sessionId, pid, cwd, resume, cols: term.cols, rows: term.rows })
@@ -115,6 +163,7 @@ export function TerminalView({ termKey, sessionId, pid, cwd, resume, themeName }
       if (saveTimer) clearTimeout(saveTimer)
       saveSnapshot() // flush a final snapshot before tearing down the xterm
       ro.disconnect()
+      host.removeEventListener('contextmenu', onCtx)
       offData()
       offExit()
       onData.dispose()

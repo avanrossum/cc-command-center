@@ -583,6 +583,23 @@ export function App() {
                 cwd={selected.cwd}
                 resume={selected.resume}
                 themeName={selThemeName}
+                onSpawnFromSelection={(text, instant) => {
+                  if (!selected.sessionId) {
+                    showFlash('session not ready to spawn from')
+                    return
+                  }
+                  if (instant) {
+                    window.cc.sessionSpawnChild(selected.sessionId, selected.cwd, 'tangential', text)
+                    showFlash('spawned tangent from selection')
+                    return
+                  }
+                  const parent = live.find((s) => s.sessionId === selected.sessionId)
+                  if (parent) setSpawn({ parent, type: 'tangential', cwd: selected.cwd, note: text })
+                  else {
+                    window.cc.sessionSpawnChild(selected.sessionId, selected.cwd, 'tangential', text)
+                    showFlash('spawned tangent from selection')
+                  }
+                }}
               />
               {recover && recover.key === selected.key && (
                 <div
