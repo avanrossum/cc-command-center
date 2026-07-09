@@ -1,7 +1,15 @@
 import { app, BrowserWindow, ipcMain, dialog, nativeImage, clipboard } from 'electron'
 import { join } from 'node:path'
 import os from 'node:os'
-import { existsSync, copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  copyFileSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+} from 'node:fs'
 import * as pty from 'node-pty'
 import {
   scanLiveSessions,
@@ -112,6 +120,7 @@ function snapshot(): Snapshot {
   reconcilePendingNew(sessions)
   processMailbox(sessions)
   tryDeliveries(sessions)
+  deliverPendingNotes(sessions)
   const nodes = getNodeMap()
   const edges = getEdges()
   const now = Date.now()
@@ -290,6 +299,19 @@ function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: str
   p.onExit(({ exitCode }) => {
     term.exited = true
     pendingChildren.delete(p.pid) // a child that died before adoption: drop its intent
+    // Prune this session's outbox so a later process reusing its pid can't inherit
+    // stale, unrouted messages (and remove the file + any held segments).
+    const ob = outboxByPid.get(p.pid)
+    if (ob) {
+      outboxOwner.delete(ob.token)
+      outboxByPid.delete(p.pid)
+      heldMessages.delete(ob.token)
+      try {
+        unlinkSync(ob.path)
+      } catch {
+        /* already gone */
+      }
+    }
     win?.webContents.send('term:exit', { key: term.key, code: exitCode })
   })
   return term
@@ -416,7 +438,10 @@ const linkRate = new Map<string, number[]>()
 // Messages drained from a child outbox but not yet routable (link unblessed, or
 // child not yet adopted). Buffered here — NOT dropped on read — so they survive
 // until the link is trusted / the child is adopted, then flush. Keyed by token.
-const heldMessages = new Map<string, { text: string; at: number; logged: boolean }>()
+// Per-token FIFO of pending messages. Each outbox write is its own segment —
+// never concatenated — so a directed and a plain message written back to back are
+// classified and routed independently rather than merged in one direction.
+const heldMessages = new Map<string, { text: string; at: number; logged: boolean }[]>()
 
 function awarenessPreamble(outbox: string): string {
   return (
@@ -493,103 +518,124 @@ function drainOutboxes(): void {
       /* ignore */
     }
     const token = f.replace(/\.msg$/, '')
-    const prev = heldMessages.get(token)
-    heldMessages.set(token, {
-      text: ((prev ? `${prev.text}\n` : '') + content).slice(-4000),
-      at: Date.now(),
-      logged: false,
-    })
+    const arr = heldMessages.get(token) ?? []
+    arr.push({ text: content.slice(-4000), at: Date.now(), logged: false })
+    if (arr.length > 30) arr.splice(0, arr.length - 30) // bound a runaway writer
+    heldMessages.set(token, arr)
   }
 }
 
-// Route held messages whose link is now known + trusted onto the delivery queue;
-// leave the rest held (retried next scan, flushed the moment the link is blessed).
+// Resolve an "@name …" directive against the sender's children by display-name
+// prefix, requiring a word boundary after the name (so "@apidoc" can't match a
+// child named "a"); longest match wins. Returns undefined if no child matches.
+function matchDirectedChild(
+  sessions: LiveSession[],
+  edges: Edge[],
+  senderId: string,
+  rest: string,
+): { child: LiveSession; body: string; trusted: boolean } | undefined {
+  let best: { child: LiveSession; body: string; trusted: boolean } | undefined
+  const lower = rest.toLowerCase()
+  for (const e of edges) {
+    if (e.parent_id !== senderId) continue
+    const child = sessions.find((s) => s.sessionId === e.child_id)
+    if (!child) continue
+    const nm = displayName(child)
+    if (!nm || !lower.startsWith(nm.toLowerCase())) continue
+    const after = rest.charAt(nm.length) // '' at end-of-string is fine (exact match)
+    if (after && !/[\s:,]/.test(after)) continue // reject mid-word prefix hits
+    if (!best || nm.length > displayName(best.child).length) {
+      best = {
+        child,
+        body: rest.slice(nm.length).replace(/^[\s:,-]+/, '').trim(),
+        trusted: !!e.trusted,
+      }
+    }
+  }
+  return best
+}
+
+// Route each held segment independently: "@name …" DOWN to the named child (if one
+// matches AND the link is trusted), everything else UP to the sender's parent — so
+// an "@scoped/pkg" that matches no child still reaches the parent instead of being
+// lost. Routed/expired segments are removed; the rest stay held for the next scan.
 function routeHeld(sessions: LiveSession[]): void {
   const now = Date.now()
-  for (const [token, held] of heldMessages) {
-    if (now - held.at > HELD_TTL_MS) {
-      heldMessages.delete(token)
-      logMsg('?', '?', held.text, 'expired: never routable')
-      continue
-    }
+  for (const [token, arr] of heldMessages) {
     const senderPid = outboxOwner.get(token)
     const sender = senderPid
       ? sessions.find((s) => s.pid === senderPid && s.sessionId)
       : undefined
-    if (!sender || !sender.sessionId) continue // sender not adopted yet — keep held
-    const senderId = sender.sessionId
     const edges = getEdges()
+    for (let i = 0; i < arr.length; ) {
+      const held = arr[i]
+      if (now - held.at > HELD_TTL_MS) {
+        logMsg('?', '?', held.text, 'expired: never routable')
+        arr.splice(i, 1)
+        continue
+      }
+      if (!sender || !sender.sessionId) {
+        i++
+        continue
+      } // sender not adopted yet — keep held
+      const senderId = sender.sessionId
 
-    // Directed "@name …" → route DOWN to the sender's named child.
-    const directed = parseDirective(held.text)
-    if (directed) {
-      let best: { child: LiveSession; body: string; trusted: boolean } | undefined
-      for (const e of edges) {
-        if (e.parent_id !== senderId) continue
-        const child = sessions.find((s) => s.sessionId === e.child_id)
-        if (!child) continue
-        const nm = displayName(child)
-        if (nm && directed.rest.toLowerCase().startsWith(nm.toLowerCase())) {
-          if (!best || nm.length > displayName(best.child).length) {
-            best = {
-              child,
-              body: directed.rest.slice(nm.length).replace(/^[\s:,-]+/, '').trim(),
-              trusted: !!e.trusted,
-            }
+      const directed = parseDirective(held.text)
+      const match = directed ? matchDirectedChild(sessions, edges, senderId, directed.rest) : undefined
+      if (match) {
+        if (!match.trusted) {
+          if (!held.logged) {
+            logMsg(displayName(sender), displayName(match.child), held.text, 'held: link not trusted')
+            held.logged = true
           }
+          i++
+          continue
         }
+        if (!match.body) {
+          logMsg(displayName(sender), displayName(match.child), held.text, 'dropped: empty directed message')
+          arr.splice(i, 1)
+          continue
+        }
+        deliveryQueue.push({
+          to: match.child.sessionId!,
+          fromSessionId: senderId,
+          edgeChildId: match.child.sessionId!,
+          fromName: displayName(sender),
+          text: match.body,
+          hops: 1,
+          at: now,
+        })
+        arr.splice(i, 1)
+        continue
       }
-      if (!best) {
+
+      // Plain, or a directive that matched no child → UP to the sender's parent.
+      const edge = edges.find((e) => e.child_id === senderId)
+      if (!edge || !edge.trusted) {
         if (!held.logged) {
-          logMsg(displayName(sender), `@${directed.handleHint}`, held.text, 'held: no such child')
+          logMsg(
+            displayName(sender),
+            edge ? 'parent' : '?',
+            held.text,
+            edge ? 'held: link not trusted' : 'held: no parent link',
+          )
           held.logged = true
         }
-        continue // keep held; a matching child may appear, else TTL cleans up
-      }
-      if (!best.trusted) {
-        if (!held.logged) {
-          logMsg(displayName(sender), displayName(best.child), held.text, 'held: link not trusted')
-          held.logged = true
-        }
+        i++
         continue
       }
       deliveryQueue.push({
-        to: best.child.sessionId!,
+        to: edge.parent_id,
         fromSessionId: senderId,
-        edgeChildId: best.child.sessionId!,
+        edgeChildId: senderId,
         fromName: displayName(sender),
-        text: best.body || held.text,
+        text: held.text,
         hops: 1,
         at: now,
       })
-      heldMessages.delete(token)
-      continue
+      arr.splice(i, 1)
     }
-
-    // Plain text → route UP to the sender's parent.
-    const edge = edges.find((e) => e.child_id === senderId)
-    if (!edge || !edge.trusted) {
-      if (!held.logged) {
-        logMsg(
-          displayName(sender),
-          edge ? 'parent' : '?',
-          held.text,
-          edge ? 'held: link not trusted' : 'held: no parent link',
-        )
-        held.logged = true
-      }
-      continue // keep held until blessed
-    }
-    deliveryQueue.push({
-      to: edge.parent_id,
-      fromSessionId: senderId,
-      edgeChildId: senderId,
-      fromName: displayName(sender),
-      text: held.text,
-      hops: 1,
-      at: now,
-    })
-    heldMessages.delete(token)
+    if (arr.length === 0) heldMessages.delete(token)
   }
 }
 
@@ -640,7 +686,11 @@ function tryDeliveries(sessions: LiveSession[]): void {
       i++
       continue
     }
-    const key = `${d.fromSessionId}->${d.to}`
+    // Rate guard keyed on the LINK (both directions share one budget), so a
+    // bidirectional parent↔child ping-pong is capped at RATE_MAX per window total,
+    // not RATE_MAX per direction. (The hop guard is unused in this mailbox model.)
+    const pair = [d.fromSessionId, d.to].sort()
+    const key = `${pair[0]}|${pair[1]}`
     const stamps = (linkRate.get(key) ?? []).filter((t) => now - t < RATE_WINDOW_MS)
     if (d.hops > HOP_MAX || stamps.length >= RATE_MAX) {
       deliveryQueue.splice(i, 1)
@@ -948,10 +998,39 @@ function notifyParentOfTrustedChild(childId: string): void {
     if (!parentTerm || parentTerm.exited) return
     const outbox = outboxByPid.get(parentTerm.pty.pid)?.path
     if (!outbox) return
-    const childName = getSessionNames()[childId] ?? getNodeMap().get(childId)?.name ?? childId
-    injectPrompt(parentTerm, parentBlessNote(childName, outbox), 400)
+    // Resolve the child name the SAME way routeHeld matches it (user name → registry
+    // name → "pid <pid>"), so the "@name" we tell the parent to use actually routes.
+    const childPid = findManagedTerm(childId)?.pty.pid
+    const childName =
+      getSessionNames()[childId] ??
+      getNodeMap().get(childId)?.name ??
+      (childPid ? `pid ${childPid}` : childId)
+    // Deferred, not injected now: delivered on the next scan when the parent is
+    // free, so it can't corrupt a mid-turn generation.
+    pendingParentNotes.push({ to: edge.parent_id, text: parentBlessNote(childName, outbox), at: Date.now() })
   } catch (e) {
     console.error('[main] notify parent of trusted child failed', e)
+  }
+}
+
+// One-time app→parent notes (currently the bless note). Delivered only when the
+// parent is affirmatively free, so injection never lands mid-turn.
+const pendingParentNotes: Array<{ to: string; text: string; at: number }> = []
+function deliverPendingNotes(sessions: LiveSession[]): void {
+  if (awarenessPaused || pendingParentNotes.length === 0) return
+  const now = Date.now()
+  for (let i = pendingParentNotes.length - 1; i >= 0; i--) {
+    const n = pendingParentNotes[i]
+    if (now - n.at > 120_000) {
+      pendingParentNotes.splice(i, 1)
+      continue
+    } // expired
+    const target = sessions.find((s) => s.sessionId === n.to)
+    const term = findManagedTerm(n.to)
+    if (!target || !term || term.exited) continue // parent not open yet — wait
+    if (target.state !== 'idle' && target.state !== 'waiting') continue // busy — wait
+    injectPrompt(term, n.text, 400)
+    pendingParentNotes.splice(i, 1)
   }
 }
 // Global kill switch for autonomous messaging. When paused, outboxes are still
