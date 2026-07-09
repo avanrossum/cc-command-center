@@ -1,5 +1,50 @@
 # Backlog — next features (specs)
 
+## Terminal status bar + file insertion (user, 2026-07-08)
+
+A status bar under the terminal pane. Contents:
+- **Context usage** for the currently-loaded session — % of the context window used
+  (this is per-session context, distinct from the 5h/7d rate gauge in `open-questions.md`
+  Q1). Source needs finding: Claude Code shows it in its own statusline; likely derivable
+  from the transcript or a hook.
+- **At least one more useful readout** (TBD — user wants ≥1 more, unsure what). Candidates:
+  model, session cost/tokens, cwd, git branch of the cwd, last-activity, coarse state.
+- **"Add file/folder" button** → a Finder open dialog that opens to the **last location used
+  for THIS session** (per-session last dir, NOT the app-global `lastFolder` app_state — needs
+  a per-session variant, keyed by sessionId). On pick, **insert the full path into the
+  terminal WITHOUT pressing enter**, so the user can weave it into a prompt ("adjust this per
+  the spec, file: {path}").
+- **Drag/drop**: dropping a file/folder onto the terminal pane pastes its full path (same as
+  the button — no enter).
+
+This is the baseline; it works today with no interception risk. The composer below is the
+richer version of the same intent — ship this first.
+
+## Optional prompt composer under the terminal — "type without the Shift+Enter dance" (user, 2026-07-08)
+
+An **optional, togglable** full-text prompt area beneath the terminal. Typing directly into
+the terminal stays fine; this is opt-in for when you want a real text field. When ON:
+- **Regular Enter = newline; Cmd+Enter = send.** No more Shift+Enter to add lines.
+- **Paste an image** → saved to a temp location accessible to that session; the saved path is
+  passed along with the prompt on send (so the image reaches Claude Code as a file path and
+  plain Enter stays free for newlines).
+- **Paste any other file** → same (saved/referenced by path).
+- The **"add file/folder" button** (from the status-bar spec) TAGS items for inclusion with
+  the prompt on send, instead of inserting a path inline.
+- When the composer is toggled **OFF**, that button reverts to the baseline behavior (insert
+  the path as plain text into the terminal).
+- **On send**: the composer assembles prompt text + tagged file/image paths and injects it
+  into the PTY (bracketed paste + CR — the same transport as cross-session send).
+
+**Hard caveat — interactive Q/A (open, flagged, NOT solved).** Claude Code sometimes asks
+questions / shows permission prompts / menus in the TUI. If the composer is the primary input,
+we need a **durable** way to surface and answer those. The live terminal sits underneath (the
+composer injects into the same PTY), so the raw TUI is always the fallback — but a clean
+integration (route CC's question up into the composer, or detect a prompt and refocus the
+terminal) is unsolved. Candidates: hooks, PTY/screen interception, signals. Must be durable,
+not brittle screen-scraping. This is the gate on making the composer the *primary* input; the
+status-bar baseline has no such dependency.
+
 ## Cmd+Click a file path to open it — iTerm Semantic History parity (user, 2026-07-08)
 
 **Goal.** Cmd+Click a file path in the terminal to open it (default app or editor),
