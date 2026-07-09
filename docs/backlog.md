@@ -1,5 +1,23 @@
 # Backlog — next features (specs)
 
+## SHIPPED — this-phase wrap-up (v0.8.1 → v0.9.0, 2026-07-08)
+
+- ✅ **Selection → tangent** (v0.8.1): Cmd+K on a terminal selection spawns a tangential child
+  seeded with it (instant); right-click opens the composer pre-filled.
+- ✅ **Name a child at spawn** (v0.8.2): the spawn dialog now has a Name field → stable user name
+  applied on adoption → `@`-addressing resolves on it (off Claude's drifting auto-title). The
+  handle/purpose spec below is now PARTIAL — remaining fast-follow: a separate **editable purpose
+  subtitle** (from the handoff note) + **immutability** enforcement of the handle.
+- ✅ **Settings menu + trust-children-by-default (default ON) + first-run mailbox permission**
+  (v0.9.0): gear in the beacon bar; auto-trust spawned links; one-time offer (and a Settings button)
+  to add `Write(~/.claude/ccc/**)` to `~/.claude/settings.json` (safe merge, backed up).
+
+Still OPEN in this area: handle/purpose **purpose-subtitle + immutability** (fast-follow). The
+**terminal-UX** cluster (Cmd+Click file-open, status bar) + the **prompt composer** (blocked on the
+interactive-Q/A design) + the **README** remain below.
+
+
+
 ## Session handles vs. purpose labels — stable identity + visible purpose (user, 2026-07-08)
 
 **Diagnosis (what's happening now).** The spawn-child dialog (`SpawnComposer`) has NO name field —
