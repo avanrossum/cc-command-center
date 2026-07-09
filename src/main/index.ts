@@ -342,6 +342,24 @@ function buildEnv(): NodeJS.ProcessEnv {
   env.PATH = [...extra, process.env.PATH || ''].join(':')
   env.TERM = 'xterm-256color'
   env.COLORTERM = 'truecolor'
+  // Present as iTerm so Shift+Enter works. Claude Code enables the kitty
+  // keyboard protocol — the thing that reports Shift+Enter as CSI-u, which our
+  // xterm (vtExtensions.kittyKeyboard) turns into a newline — ONLY for terminals
+  // on its allowlist (verified: iTerm.app and WezTerm yes; Apple_Terminal,
+  // vscode, and unknown values no). A Finder-launched packaged app inherits NO
+  // TERM_PROGRAM (LaunchServices gives a barebones env), so Claude falls back to
+  // legacy keys and Shift+Enter breaks — while the dev build, launched from
+  // iTerm, inherits TERM_PROGRAM=iTerm.app and works. Mirror that exact identity,
+  // but only when the host provides none, so a real host terminal keeps its own.
+  if (!env.TERM_PROGRAM) {
+    env.TERM_PROGRAM = 'iTerm.app'
+    env.TERM_PROGRAM_VERSION = '3.6.6'
+    env.LC_TERMINAL = 'iTerm2'
+    env.LC_TERMINAL_VERSION = '3.6.6'
+  }
+  // A Finder-launched app also inherits no locale. Give it a UTF-8 one so box
+  // drawing / emoji in the TUI render correctly (does NOT affect the kitty gate).
+  if (!env.LANG && !env.LC_ALL && !env.LC_CTYPE) env.LANG = 'en_US.UTF-8'
   return env
 }
 
