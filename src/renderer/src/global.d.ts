@@ -61,6 +61,7 @@ declare global {
       termAttach: (key: string) => void
       termInput: (key: string, data: string) => void
       termOpenPath: (key: string, path: string) => Promise<{ ok: boolean }>
+      openExternal: (url: string) => Promise<{ ok: boolean }>
       termResize: (key: string, cols: number, rows: number) => void
       termClose: (key: string) => void
       onTermData: (cb: (p: { key: string; data: string }) => void) => () => void

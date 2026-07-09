@@ -56,6 +56,11 @@ export function TerminalView({
       // negotiation and reports Shift+Enter as CSI-u (\x1b[13;2u), which Claude
       // inserts as a newline — the correct, native path (no key-injection hack).
       vtExtensions: { kittyKeyboard: true },
+      // OSC 8 hyperlinks open in the system browser. Overriding linkHandler is
+      // REQUIRED: xterm's default shows a confirm() and then calls window.open()
+      // with no url + sets location.href — which our deny-based window-open
+      // handler can't forward, so links appeared to warn-then-do-nothing.
+      linkHandler: { activate: (_ev, uri) => void window.cc.openExternal(uri).catch(() => {}) },
     })
     termRef.current = term
     const fit = new FitAddon()

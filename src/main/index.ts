@@ -1084,6 +1084,26 @@ ipcMain.on('term:close', (_e, key: string) => {
 })
 
 // ---------- window ----------
+// Open a URL in the system browser. Scheme-allowlisted (http/https/mailto) so a
+// crafted terminal link can't hand shell.openExternal an arbitrary URL (e.g.
+// file:// or a custom app scheme).
+function openExternalUrl(url: string): void {
+  try {
+    const proto = new URL(url).protocol
+    if (proto === 'http:' || proto === 'https:' || proto === 'mailto:') shell.openExternal(url)
+  } catch {
+    /* not a parseable URL — ignore */
+  }
+}
+// Terminal OSC 8 hyperlinks route here (via the xterm linkHandler). xterm's
+// DEFAULT handler shows a confirm() then calls window.open() with no url and
+// sets location.href — which a deny-based window-open handler can't forward — so
+// we bypass it entirely and open in the system browser ourselves.
+ipcMain.handle('shell:openExternal', (_e, url: string) => {
+  openExternalUrl(url)
+  return { ok: true }
+})
+
 function createWindow(): void {
   win = new BrowserWindow({
     width: 1180,
@@ -1107,18 +1127,13 @@ function createWindow(): void {
   }
 
   // External links (a terminal OSC 8 hyperlink, or any window.open) must open in
-  // the system browser, never inside an Electron window. Allowlist web/mail
-  // schemes so a crafted link can't hand shell.openExternal an arbitrary URL.
-  const openExternal = (url: string): void => {
-    try {
-      const proto = new URL(url).protocol
-      if (proto === 'http:' || proto === 'https:' || proto === 'mailto:') shell.openExternal(url)
-    } catch {
-      /* not a parseable URL — ignore */
-    }
-  }
+  // the system browser, never inside an Electron window. setWindowOpenHandler is
+  // the safety net for any window.open; the terminal's OSC 8 links are routed
+  // explicitly via the 'shell:openExternal' IPC + xterm linkHandler, because
+  // xterm's DEFAULT handler calls window.open() with NO url (then sets
+  // location.href), which this deny-handler can't forward.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    openExternal(url)
+    openExternalUrl(url)
     return { action: 'deny' } // never spawn a child Electron window
   })
   // Defense in depth: the app frame itself must never navigate away. Let
@@ -1127,7 +1142,7 @@ function createWindow(): void {
     try {
       if (new URL(url).origin !== new URL(win?.webContents.getURL() ?? '').origin) {
         e.preventDefault()
-        openExternal(url)
+        openExternalUrl(url)
       }
     } catch {
       /* ignore */
