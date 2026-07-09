@@ -64,7 +64,8 @@ contextBridge.exposeInMainWorld('cc', {
     cwd: string,
     type: 'blocking' | 'tangential',
     note?: string,
-  ) => ipcRenderer.invoke('session:spawnChild', parentSessionId, cwd, type, note),
+    name?: string,
+  ) => ipcRenderer.invoke('session:spawnChild', parentSessionId, cwd, type, note, name),
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
   sessionSend: (sessionId: string, text: string) =>
     ipcRenderer.invoke('session:send', sessionId, text) as Promise<{ ok: boolean; reason?: string }>,

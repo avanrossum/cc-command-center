@@ -156,6 +156,7 @@ export function App() {
     type: 'blocking' | 'tangential'
     cwd: string
     note: string
+    name: string
   } | null>(null)
   // The cross-session send composer (inject a prompt into another session).
   const [send, setSend] = useState<Session | null>(null)
@@ -594,7 +595,7 @@ export function App() {
                     return
                   }
                   const parent = live.find((s) => s.sessionId === selected.sessionId)
-                  if (parent) setSpawn({ parent, type: 'tangential', cwd: selected.cwd, note: text })
+                  if (parent) setSpawn({ parent, type: 'tangential', cwd: selected.cwd, note: text, name: '' })
                   else {
                     window.cc.sessionSpawnChild(selected.sessionId, selected.cwd, 'tangential', text)
                     showFlash('spawned tangent from selection')
@@ -669,7 +670,7 @@ export function App() {
           }}
           onSpawn={(s, type) => {
             setMenu(null)
-            setSpawn({ parent: s, type, cwd: s.cwd, note: '' })
+            setSpawn({ parent: s, type, cwd: s.cwd, note: '', name: '' })
           }}
           onSend={(s) => {
             setMenu(null)
@@ -863,7 +864,13 @@ function ContextMenu({
   )
 }
 
-type SpawnState = { parent: Session; type: 'blocking' | 'tangential'; cwd: string; note: string }
+type SpawnState = {
+  parent: Session
+  type: 'blocking' | 'tangential'
+  cwd: string
+  note: string
+  name: string
+}
 
 function SpawnComposer({
   spawn,
@@ -875,7 +882,13 @@ function SpawnComposer({
   const isBlocking = spawn.type === 'blocking'
   const parentName = spawn.parent.name ?? `pid ${spawn.parent.pid}`
   const submit = () => {
-    window.cc.sessionSpawnChild(spawn.parent.sessionId, spawn.cwd, spawn.type, spawn.note.trim() || undefined)
+    window.cc.sessionSpawnChild(
+      spawn.parent.sessionId,
+      spawn.cwd,
+      spawn.type,
+      spawn.note.trim() || undefined,
+      spawn.name.trim() || undefined,
+    )
     setSpawn(null)
   }
   return (
@@ -888,6 +901,19 @@ function SpawnComposer({
             ? 'blocks the parent until it’s done; the parent rolls back to it.'
             : 'spun off with context; does not block the parent.'}
         </div>
+        <div className="spawnlabel">
+          Name <span className="spawnopt">optional — how you’ll @message it; stays fixed</span>
+        </div>
+        <input
+          className="spawnname"
+          value={spawn.name}
+          placeholder="e.g. reviewer, db-work…"
+          onChange={(e) => setSpawn({ ...spawn, name: e.target.value })}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit()
+            if (e.key === 'Escape') setSpawn(null)
+          }}
+        />
         <div className="spawnlabel">Folder</div>
         <div className="spawnfolder">
           <span className="spawncwd" title={spawn.cwd}>

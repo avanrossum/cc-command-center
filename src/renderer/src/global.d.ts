@@ -46,6 +46,7 @@ declare global {
         cwd: string,
         type: 'blocking' | 'tangential',
         note?: string,
+        name?: string,
       ) => Promise<{ pid: number; cwd: string } | null>
       pickFolder: () => Promise<string | null>
       sessionSend: (sessionId: string, text: string) => Promise<{ ok: boolean; reason?: string }>

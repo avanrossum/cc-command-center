@@ -987,6 +987,19 @@ body {
 .spawnnote:focus {
   border-color: #3355aa;
 }
+.spawnname {
+  width: 100%;
+  background: var(--cc-surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font: 12.5px -apple-system, system-ui, sans-serif;
+  outline: none;
+}
+.spawnname:focus {
+  border-color: #3355aa;
+}
 .spawnactions {
   margin-top: 16px;
   display: flex;

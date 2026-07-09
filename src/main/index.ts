@@ -713,6 +713,7 @@ interface PendingChild {
   parentSessionId: string
   type: 'blocking' | 'tangential'
   note?: string
+  name?: string // user-set name applied on adoption; stable @-handle for the bus
   at: number
 }
 // Keyed by the child's pid. Entries expire so a child that dies before adoption
@@ -740,6 +741,7 @@ function spawnChild(
   cwd: string,
   type: 'blocking' | 'tangential',
   note?: string,
+  name?: string,
 ): number {
   const pid = launchSession(cwd, [], { CC_ROLE: 'child' })
   const outbox = outboxByPid.get(pid)?.path ?? ''
@@ -749,6 +751,7 @@ function spawnChild(
     parentSessionId,
     type,
     note: userNote ? `${preamble}\n\n— — —\n\n${userNote}` : preamble,
+    name: name?.trim() || undefined,
     at: Date.now(),
   })
   return pid
@@ -821,6 +824,9 @@ function reconcilePendingChildren(sessions: LiveSession[]): void {
     try {
       ensureNode(s.sessionId, { cwd: s.cwd, name: s.name })
       setParent(s.sessionId, pend.parentSessionId, pend.type)
+      // A user-set name is the child's stable, @-addressable handle (the bus
+      // resolves @name on the user name before Claude's drifting auto-title).
+      if (pend.name) setSessionName(s.sessionId, pend.name)
     } catch (e) {
       // e.g. the parent was removed between spawn and adoption — leave the child
       // unlinked rather than letting the poll throw.
@@ -1075,9 +1081,16 @@ ipcMain.handle('session:startFresh', (_e, cwd: string) => {
 // optional handoff note) once the child is adopted.
 ipcMain.handle(
   'session:spawnChild',
-  (_e, parentSessionId: string, cwd: string, type: 'blocking' | 'tangential', note?: string) => {
+  (
+    _e,
+    parentSessionId: string,
+    cwd: string,
+    type: 'blocking' | 'tangential',
+    note?: string,
+    name?: string,
+  ) => {
     if (!parentSessionId || !cwd) return null
-    return { pid: spawnChild(parentSessionId, cwd, type, note), cwd }
+    return { pid: spawnChild(parentSessionId, cwd, type, note, name), cwd }
   },
 )
 // Copy-out: put the session's most recent assistant reply on the clipboard, so
