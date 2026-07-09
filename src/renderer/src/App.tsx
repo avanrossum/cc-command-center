@@ -68,6 +68,10 @@ interface Selected {
   cwd: string
   name: string
   resume: boolean
+  // True only when a live original existed elsewhere (alive but not app-managed) at
+  // open time — i.e. this is genuinely a second copy. A dormant/restart resume is
+  // NOT one, so the "original keeps running" notice must not claim it.
+  hadLiveOriginal: boolean
 }
 type MenuMode = 'root' | 'blocking' | 'tangential'
 interface Menu {
@@ -213,7 +217,7 @@ export function App() {
     const offSessions = window.cc.onSessions((s) => setSnap(s as Snapshot))
     const offShow = window.cc.onTermShow((p) => {
       setRecover(null)
-      setSelected({ key: p.key, pid: p.pid, cwd: p.cwd, name: p.name, resume: false })
+      setSelected({ key: p.key, pid: p.pid, cwd: p.cwd, name: p.name, resume: false, hadLiveOriginal: false })
     })
     const offRecover = window.cc.onTermRecover((p) => setRecover(p))
     return () => {
@@ -351,6 +355,7 @@ export function App() {
       cwd: s.cwd,
       name: s.name ?? `pid ${s.pid}`,
       resume: true,
+      hadLiveOriginal: !!(s.alive && !s.managed), // a real second copy only if live elsewhere
     })
   }
   const closeTerminal = () => {
@@ -374,6 +379,7 @@ export function App() {
         cwd: s.cwd,
         name: s.name ?? selected.name,
         resume: false,
+        hadLiveOriginal: false,
       })
     }
   }, [live, selected]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -607,7 +613,12 @@ export function App() {
                 <span className="tcwd" title={selected.cwd}>
                   {short(selected.cwd)}
                 </span>
-                {selected.resume && <span className="tnote">resumed copy — original keeps running</span>}
+                {selected.resume &&
+                  (selected.hadLiveOriginal ? (
+                    <span className="tnote">resumed copy — original still running elsewhere</span>
+                  ) : (
+                    <span className="tnote tnote-dim">resumed session</span>
+                  ))}
                 <span className="grow" />
                 <ThemePicker current={selThemeName} onPick={pickTheme} />
                 <button className="tclose" onClick={closeTerminal} title="Close terminal">

@@ -856,6 +856,11 @@ body {
   border-radius: 5px;
   padding: 1px 7px;
 }
+.tnote-dim {
+  color: var(--cc-dim);
+  background: transparent;
+  border-color: var(--cc-border);
+}
 
 /* ---- theme swatch + picker ---- */
 /* A rounded square, deliberately not a circle, so it never reads as a second
