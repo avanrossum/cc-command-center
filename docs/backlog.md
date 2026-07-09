@@ -1,5 +1,28 @@
 # Backlog — next features (specs)
 
+## Robust tree termination (user, 2026-07-09)
+
+Asking the root session to "end the whole tree" didn't reliably execute — the parent argued
+about the relayed request, and even when it agreed, the actual termination didn't go through
+(it messaged the child to "wind down" but nothing terminated). Two layers:
+
+- **UI path (mostly covered as of v0.9.5):** right-click a session → Remove from list now kills
+  the whole subtree's terminals + removes the nodes (with a confirm). That's a reliable operator
+  "end the tree" — but it also *removes* them from the list. Consider a distinct **"End
+  session + subtree"** action that terminates the PTYs (self-exit sentinel) *without* removing
+  the registry nodes, so the tree can be resumed later.
+- **Autonomous path (open):** a parent telling a child (via the bus) to end itself is brittle —
+  the child may argue or may not emit the `[[CCC:EXIT]]` sentinel. And there's no
+  cascade-via-messaging (a child ending doesn't tell ITS children to end). Options: a bus
+  control-directive the app interprets as "terminate this subtree" (app cascades the kill,
+  no LLM compliance needed), and/or firmer preamble wording so an exit request reliably yields
+  the sentinel. The control agent could own "wind down this branch" as a first-class operation.
+
+Not urgent (user flagged it as a tangent). The self-terminate primitive ([[CCC:EXIT]]) and the
+remove-subtree cascade are the building blocks.
+
+
+
 ## SHIPPED — this-phase wrap-up (v0.8.1 → v0.9.0, 2026-07-08)
 
 - ✅ **Selection → tangent** (v0.8.1): Cmd+K on a terminal selection spawns a tangential child
