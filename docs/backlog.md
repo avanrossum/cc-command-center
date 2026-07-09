@@ -114,6 +114,9 @@ children), (3) the sidebar tree. Anchor the narrative on the HITM frame (see `do
 Human-In-The-Middle multi-agent orchestration, with read/drop/inject over an autonomous agent bus.
 Emphasize: local-knowledge + relay scales to arbitrary depth; the human stays the middle node;
 everything is observable + killable. (Claude can draft the narrative; the user supplies the images.)
+Ready-made worked example to mock up on the page: `docs/examples/parent-child-adversarial.md` — the
+"terrible song" conflict test that shows the bus, @-addressing, and the trust model (agents hold to
+their own brief; only the human can change the plan) in one memorable story.
 
 ## Settings menu + "Trust children by default" (user, 2026-07-08)
 
