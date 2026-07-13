@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { Terminal as XTerm, type ILink } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { WebglAddon } from '@xterm/addon-webgl'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { themeByName } from './themes'
 import { insertablePath } from './util'
@@ -68,33 +67,14 @@ export function TerminalView({
     const serialize = new SerializeAddon()
     term.loadAddon(serialize)
     term.open(host)
-    // WebGL renderer WITH context-loss recovery. The GPU can reclaim the context
-    // (display sleep/wake, GPU memory pressure, many live terminals); the old code
-    // disposed the addon on loss but never re-created it, leaving the pane on a
-    // stale renderer that painted blank/garbled cells until something forced a
-    // repaint. Recreate on a fresh frame instead. `disposed` guards a pending
-    // recreate from firing after the component unmounts.
+    // Renderer: xterm's built-in DOM renderer, no GPU addon. The WebGL addon
+    // drops cell updates during rapid output (spinner/streaming) — blank/stale
+    // cells that only clear on the next full repaint (a resize forces one), which
+    // is exactly the glitch users hit. The DOM renderer repaints every dirty cell
+    // correctly and, for the single visible terminal at Claude's output rates, is
+    // plenty fast. The canvas addon isn't an option here: it has no build on this
+    // xterm 6.1 beta stream (deprecated upstream in favor of WebGL).
     let disposed = false
-    let webgl: WebglAddon | undefined
-    const loadWebgl = (): void => {
-      if (disposed) return
-      try {
-        const w = new WebglAddon()
-        w.onContextLoss(() => {
-          w.dispose()
-          if (webgl === w) webgl = undefined
-          // Retry after a beat, not on rAF — if the GPU context can't be
-          // re-established this throttles recovery to ~4Hz instead of a per-frame
-          // busy-loop. `disposed` makes a late timer a no-op after unmount.
-          if (!disposed) setTimeout(loadWebgl, 250)
-        })
-        term.loadAddon(w)
-        webgl = w
-      } catch (e) {
-        console.error('webgl addon failed to load', e)
-      }
-    }
-    loadWebgl()
     fit.fit()
 
     // Persist a scrollback snapshot (debounced) so a restart can repaint this
@@ -247,9 +227,7 @@ export function TerminalView({
       })
 
     // Coalesce resize bursts (window drag, composer open/close) to one fit per
-    // frame, and only push a PTY resize when the grid actually changed. Rebuild
-    // the glyph atlas on a real reflow so resized/DPI-changed cells don't paint
-    // blank under WebGL.
+    // frame, and only push a PTY resize when the grid actually changed.
     let roRaf: number | null = null
     const ro = new ResizeObserver(() => {
       if (roRaf != null) cancelAnimationFrame(roRaf)
@@ -259,7 +237,6 @@ export function TerminalView({
         const before = `${term.cols}x${term.rows}`
         fit.fit()
         if (`${term.cols}x${term.rows}` !== before) {
-          webgl?.clearTextureAtlas()
           window.cc.termResize(termKey, term.cols, term.rows)
         }
       })
