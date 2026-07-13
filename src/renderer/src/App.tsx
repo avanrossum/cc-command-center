@@ -170,6 +170,9 @@ export function App() {
   useEffect(() => {
     selectedRef.current = selected
   }, [selected])
+  // Most-recently-opened session per category, so clicking a category rail cell
+  // jumps back to where you left off in it. Keyed by categoryId (null = uncat).
+  const lastByCat = useRef<Map<number | null, string>>(new Map())
   const [menu, setMenu] = useState<Menu | null>(null)
   const [newCat, setNewCat] = useState(false)
   const [newCatName, setNewCatName] = useState('')
@@ -389,6 +392,7 @@ export function App() {
   }, [groups, live])
 
   const openSession = (s: Session) => {
+    lastByCat.current.set(s.categoryId, s.sessionId) // remember per category for rail jump-back
     window.cc.stateSet('activeSessionId', s.sessionId) // remember for restore-on-launch
     setSelected({
       key: s.sessionId,
@@ -566,7 +570,14 @@ export function App() {
                 key={g.id ?? 'uncat'}
                 className={`rail-cell${selectedCat === g.id ? ' active' : ''}${hasWaiting ? ' waiting' : ''}`}
                 style={{ '--cat-color': g.color } as CSSProperties}
-                onClick={() => setSelectedCat(g.id)}
+                onClick={() => {
+                  setSelectedCat(g.id)
+                  // Jump back to the last session opened in this category. Only if
+                  // it still exists — never surprise-resume a session you didn't pick.
+                  const lastId = lastByCat.current.get(g.id)
+                  const target = lastId ? live.find((s) => s.sessionId === lastId) : undefined
+                  if (target) openSession(target)
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault()
                   if (g.id !== null)
