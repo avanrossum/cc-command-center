@@ -83,7 +83,10 @@ export function TerminalView({
         w.onContextLoss(() => {
           w.dispose()
           if (webgl === w) webgl = undefined
-          if (!disposed) requestAnimationFrame(loadWebgl)
+          // Retry after a beat, not on rAF — if the GPU context can't be
+          // re-established this throttles recovery to ~4Hz instead of a per-frame
+          // busy-loop. `disposed` makes a late timer a no-op after unmount.
+          if (!disposed) setTimeout(loadWebgl, 250)
         })
         term.loadAddon(w)
         webgl = w
