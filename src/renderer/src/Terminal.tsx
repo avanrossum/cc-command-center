@@ -68,13 +68,30 @@ export function TerminalView({
     const serialize = new SerializeAddon()
     term.loadAddon(serialize)
     term.open(host)
-    try {
-      const webgl = new WebglAddon()
-      webgl.onContextLoss(() => webgl.dispose())
-      term.loadAddon(webgl)
-    } catch (e) {
-      console.error('webgl addon failed to load', e)
+    // WebGL renderer WITH context-loss recovery. The GPU can reclaim the context
+    // (display sleep/wake, GPU memory pressure, many live terminals); the old code
+    // disposed the addon on loss but never re-created it, leaving the pane on a
+    // stale renderer that painted blank/garbled cells until something forced a
+    // repaint. Recreate on a fresh frame instead. `disposed` guards a pending
+    // recreate from firing after the component unmounts.
+    let disposed = false
+    let webgl: WebglAddon | undefined
+    const loadWebgl = (): void => {
+      if (disposed) return
+      try {
+        const w = new WebglAddon()
+        w.onContextLoss(() => {
+          w.dispose()
+          if (webgl === w) webgl = undefined
+          if (!disposed) requestAnimationFrame(loadWebgl)
+        })
+        term.loadAddon(w)
+        webgl = w
+      } catch (e) {
+        console.error('webgl addon failed to load', e)
+      }
     }
+    loadWebgl()
     fit.fit()
 
     // Persist a scrollback snapshot (debounced) so a restart can repaint this
@@ -226,14 +243,30 @@ export function TerminalView({
         window.cc.termResize(termKey, term.cols, term.rows)
       })
 
+    // Coalesce resize bursts (window drag, composer open/close) to one fit per
+    // frame, and only push a PTY resize when the grid actually changed. Rebuild
+    // the glyph atlas on a real reflow so resized/DPI-changed cells don't paint
+    // blank under WebGL.
+    let roRaf: number | null = null
     const ro = new ResizeObserver(() => {
-      fit.fit()
-      window.cc.termResize(termKey, term.cols, term.rows)
+      if (roRaf != null) cancelAnimationFrame(roRaf)
+      roRaf = requestAnimationFrame(() => {
+        roRaf = null
+        if (disposed) return
+        const before = `${term.cols}x${term.rows}`
+        fit.fit()
+        if (`${term.cols}x${term.rows}` !== before) {
+          webgl?.clearTextureAtlas()
+          window.cc.termResize(termKey, term.cols, term.rows)
+        }
+      })
     })
     ro.observe(host)
     term.focus()
 
     return () => {
+      disposed = true
+      if (roRaf != null) cancelAnimationFrame(roRaf)
       if (saveTimer) clearTimeout(saveTimer)
       saveSnapshot() // flush a final snapshot before tearing down the xterm
       ro.disconnect()
