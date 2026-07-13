@@ -325,6 +325,12 @@ interface Term {
 // that is already open re-attaches instead of forking a second `claude --resume`.
 const terminals = new Map<string, Term>()
 let attachedKey: string | null = null
+// Terminal keys the app is deliberately killing, so onExit must NOT auto-remove
+// them: session:remove (which removes them itself) and the window-all-closed
+// teardown (those sessions stay resumable across a restart). A key is consumed
+// (deleted) by the onExit that follows its kill. User-typed `exit`, a crash, and
+// a self-terminate are NOT in here — those auto-remove.
+const appHandledKills = new Set<string>()
 
 function buildEnv(): NodeJS.ProcessEnv {
   const home = os.homedir()
@@ -410,8 +416,32 @@ function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: str
       }
     }
     win?.webContents.send('term:exit', { key: term.key, code: exitCode })
+
+    // A managed session whose process ended on its own (user typed `exit`, the
+    // agent self-terminated, or it crashed) is auto-removed from the list. Skip
+    // app-initiated kills (session:remove handles its own removal; teardown keeps
+    // sessions resumable) — those mark the key in appHandledKills. Only adopted
+    // sessions (with a real session id) auto-remove; an un-adopted new:<pid> that
+    // dies is handled by the pending-new cleanup.
+    if (appHandledKills.delete(term.key)) return
+    if (term.sessionId) autoRemoveExitedSession(term.sessionId, term.key)
   })
   return term
+}
+
+// Remove a session that has already exited: purge its dead session files and drop
+// the registry node so the file-scan can't re-enumerate it, then drop its terminal
+// entry and push a fresh snapshot so the row disappears. Deliberately does NOT
+// deny-list — a later `claude --resume <id>` re-adopts the session back into the
+// app (so a transient crash isn't a one-way door). The node is confirmed dead here
+// (this runs from onExit), so purge + deleteNode is enough to make it vanish.
+function autoRemoveExitedSession(sessionId: string, key: string): void {
+  purgeDeadSessionFiles(sessionId)
+  deleteNode(sessionId)
+  terminals.delete(key)
+  if (attachedKey === key) attachedKey = null
+  win?.webContents.send('session:removed', { ids: [sessionId] })
+  pushSessions()
 }
 
 function openTerminal(key: string, opts: OpenOpts): void {
@@ -1497,6 +1527,7 @@ ipcMain.handle('session:remove', (_e, sessionId: string) => {
   for (const id of ids) {
     const t = findManagedTerm(id) // robust: matches the term key OR the sessionId
     if (t) {
+      appHandledKills.add(t.key) // this removal is deliberate — don't double-remove in onExit
       try {
         t.pty.kill()
       } catch {
@@ -1577,6 +1608,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (pollTimer) clearInterval(pollTimer)
   for (const t of terminals.values()) {
+    appHandledKills.add(t.key) // teardown kills must NOT auto-remove — sessions stay resumable
     try {
       t.pty.kill()
     } catch {

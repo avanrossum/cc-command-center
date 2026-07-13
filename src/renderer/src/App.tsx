@@ -165,6 +165,11 @@ export function App() {
     edges: [],
   })
   const [selected, setSelected] = useState<Selected | null>(null)
+  // Latest selection, readable from event subscriptions without stale closures.
+  const selectedRef = useRef<Selected | null>(null)
+  useEffect(() => {
+    selectedRef.current = selected
+  }, [selected])
   const [menu, setMenu] = useState<Menu | null>(null)
   const [newCat, setNewCat] = useState(false)
   const [newCatName, setNewCatName] = useState('')
@@ -229,10 +234,20 @@ export function App() {
       setSelected({ key: p.key, pid: p.pid, cwd: p.cwd, name: p.name, resume: false, hadLiveOriginal: false })
     })
     const offRecover = window.cc.onTermRecover((p) => setRecover(p))
+    // A session that exited on its own is auto-removed in main; if it was the
+    // open terminal, close the pane so we're not left staring at a dead session.
+    const offRemoved = window.cc.onSessionsRemoved((p) => {
+      const cur = selectedRef.current
+      if (cur?.sessionId && p.ids.includes(cur.sessionId)) {
+        setSelected(null)
+        window.cc.stateSet('activeSessionId', '')
+      }
+    })
     return () => {
       offSessions()
       offShow()
       offRecover()
+      offRemoved()
     }
   }, [])
 

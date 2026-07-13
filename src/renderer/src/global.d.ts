@@ -66,6 +66,7 @@ declare global {
       termClose: (key: string) => void
       onTermData: (cb: (p: { key: string; data: string }) => void) => () => void
       onTermExit: (cb: (p: { key: string; code: number }) => void) => () => void
+      onSessionsRemoved: (cb: (p: { ids: string[] }) => void) => () => void
       onTermShow: (
         cb: (p: { key: string; pid?: number; name: string; cwd: string }) => void,
       ) => () => void
