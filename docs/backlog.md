@@ -1,5 +1,16 @@
 # Backlog — next features (specs)
 
+## Quick wins (logged)
+
+- **Rename a session from the sidebar (user, 2026-07-13).** Need to edit a session's display
+  name in the rail — e.g. a trivial original task ("Leads Assignment Check (PSG)") that surfaced
+  the REAL work should be renamable to reflect it. **Backend already exists:** `setSessionName(sessionId, name)`
+  in `src/main/index.ts` persists to the `sessionNames` app_state map, and the periodic scan honors
+  user names over Claude's generated title (won't clobber). **What's missing = a renderer entry point
+  only:** add a `session:setName` IPC (mirror the existing `cat:rename` at `src/preload/index.ts:28`)
+  + a rename affordance on the row (right-click → Rename, or double-click the name → inline edit,
+  like the category edit modal). No engine/registry change. Small.
+
 ## Known issues, deferred (user, 2026-07-09 — not critical now)
 
 - **Mailbox write still prompts on file CREATE.** Despite the working `Write(~/.claude/ccc/**)`
