@@ -93,6 +93,7 @@ contextBridge.exposeInMainWorld('cc', {
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   termResize: (key: string, cols: number, rows: number) =>
     ipcRenderer.send('term:resize', key, cols, rows),
+  termRedraw: (key: string) => ipcRenderer.send('term:redraw', key),
   termClose: (key: string) => ipcRenderer.send('term:close', key),
   onTermData: (cb: (p: { key: string; data: string }) => void) => sub('term:data', cb),
   onTermExit: (cb: (p: { key: string; code: number }) => void) => sub('term:exit', cb),

@@ -824,6 +824,13 @@ export function App() {
                 >
                   ⌨ composer
                 </button>
+                <button
+                  className="tsbtn"
+                  title="Force the terminal to repaint — fixes misaligned/stale output (a SIGWINCH redraw, same as resizing the window)"
+                  onClick={() => window.cc.termRedraw(selected.key)}
+                >
+                  ⟳ redraw
+                </button>
                 <span className="tsgrow" />
                 <span className="tshint">drag a file onto the terminal to insert its path</span>
                 <span className="tsctx" title="Context usage — pending a data source">

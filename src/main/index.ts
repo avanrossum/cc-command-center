@@ -1100,6 +1100,30 @@ ipcMain.on('term:resize', (_e, key: string, cols: number, rows: number) => {
     /* resize before spawn or after exit */
   }
 })
+// Force the focused session to fully repaint. Some Claude Code TUI states drift
+// (misaligned characters, stale regions, dropped chunks) and only a SIGWINCH
+// makes it clear + redraw — which is why manually resizing the window "fixes" it.
+// Jiggle the PTY rows by one and back (two SIGWINCHes ~50ms apart so the pty
+// layer can't coalesce them into a no-op) to trigger that redraw hands-free.
+ipcMain.on('term:redraw', (_e, key: string) => {
+  const t = terminals.get(key)
+  if (!t || t.exited) return
+  const cols = t.pty.cols
+  const rows = t.pty.rows
+  if (!cols || !rows) return
+  try {
+    t.pty.resize(cols, Math.max(1, rows - 1))
+    setTimeout(() => {
+      try {
+        if (!t.exited) t.pty.resize(cols, rows)
+      } catch {
+        /* exited between the two resizes */
+      }
+    }, 50)
+  } catch {
+    /* ignore */
+  }
+})
 ipcMain.on('term:close', (_e, key: string) => {
   const t = terminals.get(key)
   if (t) {
