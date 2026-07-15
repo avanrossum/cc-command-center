@@ -173,6 +173,10 @@ export function App() {
   // Most-recently-opened session per category, so clicking a category rail cell
   // jumps back to where you left off in it. Keyed by categoryId (null = uncat).
   const lastByCat = useRef<Map<number | null, string>>(new Map())
+  // Monotonic "user last opened this session" order, for sorting live-idle rows
+  // (higher = more recent). In-memory per run; resets to mtime order on restart.
+  const openOrder = useRef<Map<string, number>>(new Map())
+  const openSeq = useRef(0)
   const [menu, setMenu] = useState<Menu | null>(null)
   const [newCat, setNewCat] = useState(false)
   const [newCatName, setNewCatName] = useState('')
@@ -337,6 +341,32 @@ export function App() {
       arr.push(s)
       byCat.set(k, arr)
     }
+    // Sidebar order, in three tiers (so a live-idle session never sinks among the
+    // dormant "resume" rows):
+    //   0. active & attention-or-busy — needs a response (permission/waiting/blocked)
+    //      or is working. Ordered by display-state urgency.
+    //   1. active & idle — ordered by when YOU last opened it (most recent first),
+    //      then most-recently-active.
+    //   2. dormant/resume — most-recently-active first.
+    const tierOf = (s: Session): number => {
+      if (s.dormant) return 2
+      const d = dstate(s)
+      return d === 'permission' || d === 'blocked' || d === 'waiting' || d === 'working' ? 0 : 1
+    }
+    const cmp = (a: Session, b: Session): number => {
+      const ta = tierOf(a)
+      const tb = tierOf(b)
+      if (ta !== tb) return ta - tb
+      if (ta === 0) {
+        return STATE[dstate(a)].order - STATE[dstate(b)].order || (a.name ?? '').localeCompare(b.name ?? '')
+      }
+      if (ta === 1) {
+        const oa = openOrder.current.get(a.sessionId) ?? -1
+        const ob = openOrder.current.get(b.sessionId) ?? -1
+        if (oa !== ob) return ob - oa
+      }
+      return (b.transcriptMtimeMs ?? 0) - (a.transcriptMtimeMs ?? 0) || (a.name ?? '').localeCompare(b.name ?? '')
+    }
     // Flatten a category's sessions into a depth-tagged tree via the edges,
     // treating a session whose parent is outside this category as a root.
     const buildTree = (sessions: Session[]): TreeRow[] => {
@@ -356,10 +386,10 @@ export function App() {
       const out: TreeRow[] = []
       const walk = (s: Session, depth: number, edgeType: string | null) => {
         out.push({ s, depth, edgeType })
-        const kids = (childrenOf.get(s.sessionId) ?? []).sort((a, b) => bySort(a.s, b.s))
+        const kids = (childrenOf.get(s.sessionId) ?? []).sort((a, b) => cmp(a.s, b.s))
         for (const k of kids) walk(k.s, depth + 1, k.type)
       }
-      for (const r of roots.sort(bySort)) walk(r, 0, null)
+      for (const r of roots.sort(cmp)) walk(r, 0, null)
       return out
     }
     const cats = snap.categories.map((c) => ({
@@ -377,7 +407,7 @@ export function App() {
       rows: buildTree(byCat.get(null) ?? []),
     }
     return [...cats, uncat].filter((g) => g.id !== null || g.rows.length > 0)
-  }, [live, snap.categories, edgeByChild])
+  }, [live, snap.categories, edgeByChild, blockedSet]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedGroup =
     groups.find((g) => g.id === selectedCat) ??
@@ -393,6 +423,7 @@ export function App() {
 
   const openSession = (s: Session) => {
     lastByCat.current.set(s.categoryId, s.sessionId) // remember per category for rail jump-back
+    openOrder.current.set(s.sessionId, ++openSeq.current) // remember open recency for the sidebar sort
     window.cc.stateSet('activeSessionId', s.sessionId) // remember for restore-on-launch
     setSelected({
       key: s.sessionId,
