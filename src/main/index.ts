@@ -114,7 +114,7 @@ function getSessionNames(): Record<string, string> {
 }
 function setSessionName(sessionId: string, name: string): void {
   const m = getSessionNames()
-  m[sessionId] = name
+  m[sessionId] = name.trim() // trim so a stray space can't break exact @"name" routing
   setAppState('sessionNames', JSON.stringify(m))
 }
 
@@ -599,7 +599,9 @@ function awarenessPreamble(outbox: string): string {
     `[CC Command Center — fleet] You are a session in a managed fleet. To message a linked ` +
     `session, write to this file:\n${outbox}\n` +
     `• Plain text goes to your PARENT session.\n` +
-    `• A message starting with "@<name> " goes to your child session named <name>.\n` +
+    `• A message starting with @"<name>" (the child's name in double quotes) goes to that ` +
+    `child session — e.g. @"Passport Object" here is the schema. Keep the quotes; they let ` +
+    `names with spaces route correctly.\n` +
     `• To END YOUR OWN session (e.g. your parent asked you to exit and your work is done), ` +
     `write exactly ${EXIT_SENTINEL} to that file — the app will close this session.\n` +
     `Delivered when the recipient is free. Message only on a genuine need — a real update, ` +
@@ -614,9 +616,9 @@ function parentBlessNote(childName: string, outbox: string): string {
   return (
     `[CC Command Center — fleet] The link with your child session "${childName}" is now trusted. ` +
     `To message it, write to this file:\n${outbox}\n` +
-    `Start the message with "@${childName} " to send it to that child (plain text without an @ goes ` +
-    `to YOUR parent). Delivered when the child is free. Only message on a genuine need. ` +
-    `(No acknowledgement needed for this note.)`
+    `Start the message with @"${childName}" (keep the double quotes exactly) to send it to that ` +
+    `child; plain text without an @ goes to YOUR parent. Delivered when the child is free. ` +
+    `Only message on a genuine need. (No acknowledgement needed for this note.)`
   )
 }
 
@@ -705,22 +707,37 @@ function matchDirectedChild(
   senderId: string,
   rest: string,
 ): { child: LiveSession; body: string; trusted: boolean } | undefined {
-  let best: { child: LiveSession; body: string; trusted: boolean } | undefined
-  const lower = rest.toLowerCase()
+  const kids: { child: LiveSession; trusted: boolean }[] = []
   for (const e of edges) {
     if (e.parent_id !== senderId) continue
     const child = sessions.find((s) => s.sessionId === e.child_id)
-    if (!child) continue
+    if (child) kids.push({ child, trusted: !!e.trusted })
+  }
+  // Quoted form: @"Multi Word Name" body. Quotes delimit the name unambiguously,
+  // so a name with spaces routes even though a bare @name assumes a single token.
+  // This is the form we instruct parents to use (see parentBlessNote / preamble).
+  const q = rest.match(/^"([^"]+)"[\s:,-]*/)
+  if (q) {
+    const wanted = q[1].trim().toLowerCase()
+    for (const { child, trusted } of kids) {
+      if (displayName(child).toLowerCase() === wanted) {
+        return { child, body: rest.slice(q[0].length).trim(), trusted }
+      }
+    }
+    return undefined // explicit quoted name that matches nothing — don't guess; route up
+  }
+  // Bare form: longest display-name prefix, requiring a word boundary after (so
+  // "@apidoc" can't match a child named "a"). Works when the name is reproduced
+  // verbatim (incl. spaces); single-word names are the common case.
+  let best: { child: LiveSession; body: string; trusted: boolean } | undefined
+  const lower = rest.toLowerCase()
+  for (const { child, trusted } of kids) {
     const nm = displayName(child)
     if (!nm || !lower.startsWith(nm.toLowerCase())) continue
     const after = rest.charAt(nm.length) // '' at end-of-string is fine (exact match)
     if (after && !/[\s:,]/.test(after)) continue // reject mid-word prefix hits
     if (!best || nm.length > displayName(best.child).length) {
-      best = {
-        child,
-        body: rest.slice(nm.length).replace(/^[\s:,-]+/, '').trim(),
-        trusted: !!e.trusted,
-      }
+      best = { child, body: rest.slice(nm.length).replace(/^[\s:,-]+/, '').trim(), trusted }
     }
   }
   return best
