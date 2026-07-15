@@ -1007,7 +1007,12 @@ function findManagedTerm(sessionId: string): Term | undefined {
 // keeps receiving term:data — the full key rehome still happens on open.
 function tagAdoptedTerminals(sessions: LiveSession[]): void {
   for (const s of sessions) {
-    if (!s.sessionId) continue
+    // Require alive: the scan also returns DEAD records, and on OS pid reuse a
+    // stale <pid>.json (recycled pid) would otherwise tag a live child terminal
+    // with the wrong, dead session id — and the !t.sessionId guard makes that
+    // sticky, silently breaking delivery to the real child. `alive` is the
+    // startedAt-matched, pid-reuse-safe signal the rest of the engine relies on.
+    if (!s.sessionId || !s.alive) continue
     const t = terminals.get(`new:${s.pid}`)
     if (t && !t.exited && !t.sessionId) t.sessionId = s.sessionId
   }
@@ -1022,7 +1027,9 @@ function reconcilePendingChildren(sessions: LiveSession[]): void {
     if (now - pend.at > PENDING_TTL_MS) pendingChildren.delete(pid)
   }
   for (const s of sessions) {
-    if (!s.sessionId) continue
+    // Require alive so a stale dead record on a recycled pid can't consume the
+    // pending entry and mislink the edge/name/trust to the wrong session.
+    if (!s.sessionId || !s.alive) continue
     const pend = pendingChildren.get(s.pid)
     if (!pend) continue
     pendingChildren.delete(s.pid)
@@ -1055,7 +1062,9 @@ function reconcilePendingNew(sessions: LiveSession[]): void {
   const now = Date.now()
   for (const [pid, p] of pendingNew) if (now - p.at > PENDING_TTL_MS) pendingNew.delete(pid)
   for (const s of sessions) {
-    if (!s.sessionId) continue
+    // Require alive: a stale dead record on a recycled pid must not consume the
+    // pending entry and apply this config to the wrong session.
+    if (!s.sessionId || !s.alive) continue
     const p = pendingNew.get(s.pid)
     if (!p) continue
     pendingNew.delete(s.pid)
