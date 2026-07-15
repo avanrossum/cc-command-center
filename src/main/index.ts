@@ -184,6 +184,7 @@ function snapshot(): Snapshot {
     // node for one would resurface as a bogus dormant "resume" row once it dies.
     if (s.sessionId && !s.isSpare) ensureNode(s.sessionId, { cwd: s.cwd, name: s.name, origin: 'adopted' })
   }
+  tagAdoptedTerminals(sessions)
   reconcilePendingChildren(sessions)
   reconcilePendingNew(sessions)
   processMailbox(sessions)
@@ -994,6 +995,22 @@ function findManagedTerm(sessionId: string): Term | undefined {
   if (direct && !direct.exited) return direct
   for (const t of terminals.values()) if (!t.exited && t.sessionId === sessionId) return t
   return undefined
+}
+
+// An app-spawned terminal starts keyed new:<pid> with no sessionId; that id is
+// otherwise only attached when the USER opens the pane (openTerminal rehomes it).
+// Tag it with the adopted session id here, at scan time, so the awareness bus can
+// reach a spawned child that was never opened: findManagedTerm matches on
+// sessionId (2nd clause), and managedSessionIds includes it, so parent→child
+// messages actually deliver (and the row shows as managed) without opening it.
+// Keeps the new:<pid> KEY intact so a session being actively viewed as new:<pid>
+// keeps receiving term:data — the full key rehome still happens on open.
+function tagAdoptedTerminals(sessions: LiveSession[]): void {
+  for (const s of sessions) {
+    if (!s.sessionId) continue
+    const t = terminals.get(`new:${s.pid}`)
+    if (t && !t.exited && !t.sessionId) t.sessionId = s.sessionId
+  }
 }
 
 // Once a pending child has been adopted (has a session id), wire the typed edge
