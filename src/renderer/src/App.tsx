@@ -1024,13 +1024,20 @@ function SettingsModal({
           </span>
           <button
             className="rbtn"
-            disabled={hooksInstalled}
             onClick={async () => {
-              const r = await window.cc.settingsInstallStatusHooks()
-              showFlash(r.ok ? 'status hooks installed' : `couldn’t install: ${r.reason ?? 'error'}`)
+              const r = hooksInstalled
+                ? await window.cc.settingsRemoveStatusHooks()
+                : await window.cc.settingsInstallStatusHooks()
+              showFlash(
+                r.ok
+                  ? hooksInstalled
+                    ? 'status hooks removed'
+                    : 'status hooks installed'
+                  : `couldn’t ${hooksInstalled ? 'remove' : 'install'}: ${r.reason ?? 'error'}`,
+              )
             }}
           >
-            {hooksInstalled ? 'Installed ✓' : 'Install…'}
+            {hooksInstalled ? 'Remove' : 'Install…'}
           </button>
         </div>
 

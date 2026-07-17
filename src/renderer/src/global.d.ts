@@ -32,6 +32,7 @@ declare global {
       settingsSet: (key: string, value: string) => Promise<boolean>
       settingsGrantMail: () => Promise<{ ok: boolean; reason?: string }>
       settingsInstallStatusHooks: () => Promise<{ ok: boolean; reason?: string }>
+      settingsRemoveStatusHooks: () => Promise<{ ok: boolean; reason?: string }>
       themeSet: (sessionId: string, theme: string | null) => Promise<boolean>
       snapshotSave: (sessionId: string, data: string) => void
       sessionNew: () => Promise<{ pid: number; cwd: string } | null>

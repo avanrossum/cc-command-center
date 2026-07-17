@@ -10,6 +10,7 @@ import {
   readdirSync,
   readFileSync,
   writeFileSync,
+  renameSync,
   unlinkSync,
 } from 'node:fs'
 import * as pty from 'node-pty'
@@ -240,8 +241,15 @@ function snapshot(): Snapshot {
       const age = now - hs.at
       const ago = `${Math.round(age / 1000)}s ago`
       if (hs.state === 'working') {
-        state = 'working'
-        stateReason = `hook: working (${ago})`
+        // Capped: an Esc-interrupt can freeze both the hook file and the
+        // transcript (Stop never fires), so an uncapped hook 'working' would
+        // pin the session green forever. Past the cap the transcript owns it
+        // (it correctly says working during long tool runs via the trailing
+        // tool_use record, and ages an interrupted turn to idle).
+        if (age <= HOOK_IDLE_MS) {
+          state = 'working'
+          stateReason = `hook: working (${ago})`
+        }
       } else if (hs.state === 'waiting') {
         state = age > HOOK_IDLE_MS ? 'idle' : 'waiting'
         stateReason = `hook: turn ended (${ago})`
@@ -257,7 +265,12 @@ function snapshot(): Snapshot {
         // stale); adopted sessions have no buffer, so trust until overwritten.
         state = 'working'
         stateReason = `hook: permission prompt (${ago})`
-        if (term ? bufferDialog || age < 30_000 : true) attention = 'permission'
+        // 30s cap only for the dialog kinds the buffer scan owns at steady state
+        // (permission_prompt matches PROMPT_SIGNATURES). An MCP elicitation
+        // dialog isn't in the signature table, so it stays trusted until a later
+        // hook event (PostToolUse fires the moment it's answered) overwrites.
+        const bufferOwned = hs.kind !== 'elicitation_dialog'
+        if (term ? bufferDialog || age < 30_000 || !bufferOwned : true) attention = 'permission'
       }
     }
     return {
@@ -981,9 +994,12 @@ function spawnChild(
   autoMode?: boolean,
 ): number {
   // Auto mode lets the child's permission classifier approve routine gates (the
-  // mailbox write especially) so parent↔child messaging flows unattended.
-  setAppState('spawnAutoMode', String(!!autoMode)) // remember the last choice
-  const args = autoMode ? ['--permission-mode', 'auto'] : []
+  // mailbox write especially) so parent↔child messaging flows unattended. Only
+  // an EXPLICIT choice (the composer checkbox) updates the remembered
+  // preference; implicit callers (Cmd+K instant spawn) inherit it.
+  const effAuto = typeof autoMode === 'boolean' ? autoMode : getSettings().spawnAutoMode
+  if (typeof autoMode === 'boolean') setAppState('spawnAutoMode', String(autoMode))
+  const args = effAuto ? ['--permission-mode', 'auto'] : []
   const pid = launchSession(cwd, args, { CC_ROLE: 'child' })
   const outbox = outboxByPid.get(pid)?.path ?? ''
   const userNote = note?.trim()
@@ -1387,6 +1403,11 @@ ipcMain.handle('settings:installStatusHooks', () => {
   pushSessions()
   return r
 })
+ipcMain.handle('settings:removeStatusHooks', () => {
+  const r = removeStatusHooks()
+  pushSessions()
+  return r
+})
 ipcMain.handle('settings:grantMail', () => {
   const r = grantMailPermission()
   pushSessions()
@@ -1399,8 +1420,14 @@ ipcMain.handle('settings:grantMail', () => {
 // malformed file. Rule scoped to the app's own ~/.claude/ccc tree (covers mail +
 // mail-dev). Verified rule syntax via claude-code-guide (Write(~/path/**), the ~
 // form; permissions.allow is an array of strings in ~/.claude/settings.json).
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
 // Safe read-backup-parse of ~/.claude/settings.json shared by every merge we do.
-// Refuses to touch a malformed file; backs up before any write.
+// Refuses malformed/non-object content. The backup is a hard precondition: if it
+// can't be taken, we refuse to write (and an empty file never clobbers a good
+// .ccc-bak from an earlier run).
 function readUserSettings():
   | { ok: true; settings: Record<string, unknown>; settingsPath: string }
   | { ok: false; reason: string } {
@@ -1410,16 +1437,21 @@ function readUserSettings():
   if (existsSync(settingsPath)) {
     const raw = readFileSync(settingsPath, 'utf8')
     if (raw.trim()) {
+      let parsed: unknown
       try {
-        settings = JSON.parse(raw)
+        parsed = JSON.parse(raw)
       } catch {
         return { ok: false, reason: '~/.claude/settings.json is not valid JSON — left untouched' }
       }
-    }
-    try {
-      copyFileSync(settingsPath, `${settingsPath}.ccc-bak`) // backup before writing
-    } catch {
-      /* best-effort */
+      if (!isPlainObject(parsed)) {
+        return { ok: false, reason: '~/.claude/settings.json is not a JSON object — left untouched' }
+      }
+      settings = parsed
+      try {
+        copyFileSync(settingsPath, `${settingsPath}.ccc-bak`)
+      } catch {
+        return { ok: false, reason: 'could not back up settings.json — left untouched' }
+      }
     }
   } else {
     mkdirSync(dir, { recursive: true })
@@ -1427,19 +1459,34 @@ function readUserSettings():
   return { ok: true, settings, settingsPath }
 }
 
-// The mailbox permission rule. Claude Code's own warning (seen at session start):
-// "Write(~/.claude/ccc/**) is not matched by file permission checks — only
-// Edit(path) rules are." So the effective rule is Edit(...); the old Write rule
-// is dead weight and is migrated out wherever we touch the file.
-const MAIL_RULE_OLD = 'Write(~/.claude/ccc/**)'
-const MAIL_RULE = 'Edit(~/.claude/ccc/**)'
+// Atomic settings write: tmp + rename, so a crash/full disk mid-write can never
+// leave the user's global Claude config truncated or half-written.
+function writeUserSettings(settingsPath: string, settings: Record<string, unknown>): void {
+  const tmp = `${settingsPath}.ccc-tmp`
+  writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`)
+  renameSync(tmp, settingsPath)
+}
+
+// The mailbox permission rules, scoped to the MAIL trees only — deliberately NOT
+// ~/.claude/ccc/** wholesale, because that tree also holds status-hook.sh (which
+// runs on every hook event) and the status dir; a session must not be silently
+// pre-authorized to edit those. Claude Code's own warning established that only
+// Edit(path) rules match file permission checks, so both legacy rules (the dead
+// Write() form and the earlier broad Edit() form) are migrated out.
+const MAIL_RULES_OLD = ['Write(~/.claude/ccc/**)', 'Edit(~/.claude/ccc/**)']
+const MAIL_RULES = ['Edit(~/.claude/ccc/mail/**)', 'Edit(~/.claude/ccc/mail-dev/**)']
 function applyMailRule(settings: Record<string, unknown>): string | null {
+  if (settings.permissions !== undefined && !isPlainObject(settings.permissions)) {
+    return 'permissions is not an object — left untouched'
+  }
   const perms = (settings.permissions ??= {}) as Record<string, unknown>
   const allow = (perms.allow ??= []) as unknown
   if (!Array.isArray(allow)) return 'permissions.allow is not an array — left untouched'
-  const oldIdx = allow.indexOf(MAIL_RULE_OLD)
-  if (oldIdx >= 0) allow.splice(oldIdx, 1)
-  if (!allow.includes(MAIL_RULE)) allow.push(MAIL_RULE)
+  for (const old of MAIL_RULES_OLD) {
+    const i = allow.indexOf(old)
+    if (i >= 0) allow.splice(i, 1)
+  }
+  for (const rule of MAIL_RULES) if (!allow.includes(rule)) allow.push(rule)
   return null
 }
 
@@ -1449,12 +1496,32 @@ function grantMailPermission(): { ok: boolean; reason?: string } {
     if (!r.ok) return r
     const err = applyMailRule(r.settings)
     if (err) return { ok: false, reason: err }
-    writeFileSync(r.settingsPath, `${JSON.stringify(r.settings, null, 2)}\n`)
+    writeUserSettings(r.settingsPath, r.settings)
     setAppState('mailAllowGranted', 'true')
     setAppState('firstRunSeen', 'true')
     return { ok: true }
   } catch (e) {
     return { ok: false, reason: String(e) }
+  }
+}
+
+// Startup migration: users who granted the mailbox under an older build carry a
+// dead Write() rule (or the too-broad Edit() form) and — with the Grant button
+// disabled at "Granted ✓" — had NO path that would ever rewrite it. Runs once
+// per effective change; the changed-check makes every later launch a no-op (no
+// write, no backup churn).
+function migrateMailRuleAtStartup(): void {
+  try {
+    if (getAppState('mailAllowGranted') !== 'true') return
+    const r = readUserSettings()
+    if (!r.ok) return
+    const before = JSON.stringify(r.settings)
+    if (applyMailRule(r.settings) !== null) return
+    if (JSON.stringify(r.settings) === before) return // already migrated
+    writeUserSettings(r.settingsPath, r.settings)
+    console.log('[main] migrated mailbox permission rule to mail-scoped Edit rules')
+  } catch (e) {
+    console.error('[main] mail-rule migration failed', e)
   }
 }
 
@@ -1478,22 +1545,25 @@ const HOOK_IDLE_MS = 5 * 60 * 1000 // matches the engine's transcript IDLE_MS
 const STATUS_HOOK_SCRIPT = `#!/bin/bash
 # CC Command Center status hook — written by the app; do not edit by hand.
 # argv: $1 = state token (working|waiting|notify). stdin: the hook JSON payload.
+# NOTE: idle_prompt is deliberately IGNORED — the CLI fires it on its own idle
+# timer (~60s), which would demote sessions far earlier than the app's 5-minute
+# idle policy and make the state flap. Stop writes 'waiting'; the app ages it.
 IN=$(cat 2>/dev/null) || IN=""
 SID=$(printf '%s' "$IN" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\\([^"]*\\)"$/\\1/')
 [ -z "$SID" ] && exit 0
 STATE="$1"
+KIND=""
 if [ "$STATE" = "notify" ]; then
   NT=$(printf '%s' "$IN" | grep -o '"notification_type"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\\([^"]*\\)"$/\\1/')
   case "$NT" in
-    permission_prompt|elicitation_dialog) STATE=permission ;;
-    idle_prompt) STATE=idle ;;
+    permission_prompt|elicitation_dialog) STATE=permission; KIND="$NT" ;;
     *) exit 0 ;;
   esac
 fi
 DIR="$HOME/.claude/ccc/status"
 mkdir -p "$DIR" 2>/dev/null
 NOW=$(( $(date +%s) * 1000 ))
-printf '{"state":"%s","at":%s}\\n' "$STATE" "$NOW" > "$DIR/$SID.json.tmp" 2>/dev/null \\
+printf '{"state":"%s","kind":"%s","at":%s}\\n' "$STATE" "$KIND" "$NOW" > "$DIR/$SID.json.tmp" 2>/dev/null \\
   && mv -f "$DIR/$SID.json.tmp" "$DIR/$SID.json" 2>/dev/null
 exit 0
 `
@@ -1520,25 +1590,43 @@ const STATUS_HOOK_EVENTS: Array<[string, string]> = [
 
 // Merge the status hooks into ~/.claude/settings.json (global, so adopted
 // sessions are covered too — user-approved route, same pattern as the mailbox
-// grant: backup, preserve everything, refuse malformed). Also migrates the
-// mailbox rule to Edit(...) in the same write.
+// grant: backup, preserve everything, refuse malformed). REPLACE semantics: any
+// existing entry of ours is swapped for the current form, so re-install also
+// upgrades older installs. The command is guarded ([ -x ]) so a missing script
+// can never spray hook errors into every session.
 function installStatusHooks(): { ok: boolean; reason?: string } {
   try {
     ensureStatusHookScript()
     if (!existsSync(STATUS_HOOK_PATH)) return { ok: false, reason: 'hook script could not be written' }
     const r = readUserSettings()
     if (!r.ok) return r
+    if (r.settings.hooks !== undefined && !isPlainObject(r.settings.hooks)) {
+      return { ok: false, reason: 'hooks is not an object — left untouched' }
+    }
     const hooks = (r.settings.hooks ??= {}) as Record<string, unknown>
     for (const [event, token] of STATUS_HOOK_EVENTS) {
       const arr = (hooks[event] ??= []) as unknown
       if (!Array.isArray(arr)) return { ok: false, reason: `hooks.${event} is not an array — left untouched` }
-      // Dedupe on the script path so re-install is idempotent and we never
-      // disturb the user's own hooks for the same event.
-      if (JSON.stringify(arr).includes('status-hook.sh')) continue
-      arr.push({ hooks: [{ type: 'command', command: `${STATUS_HOOK_PATH} ${token}` }] })
+      // Drop any prior entry of ours (matched on the script name), keep every
+      // user entry, then append the current guarded form.
+      const kept = arr.filter((e) => !JSON.stringify(e).includes('status-hook.sh'))
+      kept.push({
+        hooks: [{ type: 'command', command: `[ -x "${STATUS_HOOK_PATH}" ] && "${STATUS_HOOK_PATH}" ${token} || true` }],
+      })
+      hooks[event] = kept
     }
-    applyMailRule(r.settings) // fold the Edit-rule migration into the same write
-    writeFileSync(r.settingsPath, `${JSON.stringify(r.settings, null, 2)}\n`)
+    // Mailbox rule: only MIGRATE here (old rule present, or previously granted).
+    // A user who never granted the mailbox isn't silently granted it by
+    // installing status hooks — that consent stays with the Grant button.
+    const allowArr = isPlainObject(r.settings.permissions)
+      ? (r.settings.permissions as Record<string, unknown>).allow
+      : undefined
+    const hadOldRule = Array.isArray(allowArr) && MAIL_RULES_OLD.some((o) => allowArr.includes(o))
+    if (hadOldRule || getAppState('mailAllowGranted') === 'true') {
+      const err = applyMailRule(r.settings)
+      if (err) return { ok: false, reason: err }
+    }
+    writeUserSettings(r.settingsPath, r.settings)
     setAppState('statusHooksInstalled', 'true')
     return { ok: true }
   } catch (e) {
@@ -1546,12 +1634,38 @@ function installStatusHooks(): { ok: boolean; reason?: string } {
   }
 }
 
+// Remove our hook entries (and only ours) from every event. The uninstall side
+// of the consent — the Settings button flips to Remove once installed.
+function removeStatusHooks(): { ok: boolean; reason?: string } {
+  try {
+    const r = readUserSettings()
+    if (!r.ok) return r
+    if (!isPlainObject(r.settings.hooks)) {
+      setAppState('statusHooksInstalled', 'false')
+      return { ok: true }
+    }
+    const hooks = r.settings.hooks as Record<string, unknown>
+    for (const key of Object.keys(hooks)) {
+      const arr = hooks[key]
+      if (!Array.isArray(arr)) continue
+      hooks[key] = arr.filter((e) => !JSON.stringify(e).includes('status-hook.sh'))
+    }
+    writeUserSettings(r.settingsPath, r.settings)
+    setAppState('statusHooksInstalled', 'false')
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, reason: String(e) }
+  }
+}
+
 // Startup truth-sync: the flag mirrors whether the hooks are ACTUALLY present
-// (the user may have hand-edited settings.json since we last wrote it).
+// (the user may have hand-edited settings.json since we last wrote it). Matched
+// on the full script path so an unrelated "status-hook.sh" elsewhere can't
+// false-positive.
 function syncStatusHooksFlag(): void {
   try {
     const p = join(os.homedir(), '.claude', 'settings.json')
-    const present = existsSync(p) && readFileSync(p, 'utf8').includes('status-hook.sh')
+    const present = existsSync(p) && readFileSync(p, 'utf8').includes(STATUS_HOOK_PATH)
     setAppState('statusHooksInstalled', String(present))
   } catch {
     /* leave the stored flag as-is */
@@ -1559,8 +1673,8 @@ function syncStatusHooksFlag(): void {
 }
 
 // Latest hook-reported state per session. Prunes age-outs as it reads.
-function readHookStates(): Map<string, { state: string; at: number }> {
-  const map = new Map<string, { state: string; at: number }>()
+function readHookStates(): Map<string, { state: string; at: number; kind?: string }> {
+  const map = new Map<string, { state: string; at: number; kind?: string }>()
   let files: string[] = []
   try {
     files = readdirSync(STATUS_DIR).filter((f) => f.endsWith('.json'))
@@ -1571,12 +1685,16 @@ function readHookStates(): Map<string, { state: string; at: number }> {
   for (const f of files) {
     const fp = join(STATUS_DIR, f)
     try {
-      const j = JSON.parse(readFileSync(fp, 'utf8')) as { state?: unknown; at?: unknown }
+      const j = JSON.parse(readFileSync(fp, 'utf8')) as { state?: unknown; at?: unknown; kind?: unknown }
       if (typeof j?.state !== 'string' || typeof j?.at !== 'number' || now - j.at > STATUS_MAX_AGE_MS) {
         unlinkSync(fp)
         continue
       }
-      map.set(f.slice(0, -5), { state: j.state, at: j.at })
+      map.set(f.slice(0, -5), {
+        state: j.state,
+        at: j.at,
+        kind: typeof j.kind === 'string' && j.kind ? j.kind : undefined,
+      })
     } catch {
       /* mid-write or malformed — skip this scan */
     }
@@ -1878,6 +1996,7 @@ app.whenReady().then(() => {
   installAppMenu(() => win)
   initRegistry(join(app.getPath('userData'), 'registry.db'))
   syncStatusHooksFlag() // flag mirrors what's ACTUALLY in ~/.claude/settings.json
+  migrateMailRuleAtStartup() // one-time Write()→mail-scoped-Edit() rewrite for old grants
   maybeSeed()
   createWindow()
   pollTimer = setInterval(pushSessions, 1500)

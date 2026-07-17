@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('cc', {
   settingsSet: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
   settingsGrantMail: () => ipcRenderer.invoke('settings:grantMail'),
   settingsInstallStatusHooks: () => ipcRenderer.invoke('settings:installStatusHooks'),
+  settingsRemoveStatusHooks: () => ipcRenderer.invoke('settings:removeStatusHooks'),
 
   // per-terminal theme
   themeSet: (sessionId: string, theme: string | null) =>
