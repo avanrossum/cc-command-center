@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('cc', {
   awarenessPause: (paused: boolean) => ipcRenderer.invoke('awareness:pause', paused),
   settingsSet: (key: string, value: string) => ipcRenderer.invoke('settings:set', key, value),
   settingsGrantMail: () => ipcRenderer.invoke('settings:grantMail'),
+  settingsInstallStatusHooks: () => ipcRenderer.invoke('settings:installStatusHooks'),
 
   // per-terminal theme
   themeSet: (sessionId: string, theme: string | null) =>
@@ -67,7 +68,8 @@ contextBridge.exposeInMainWorld('cc', {
     type: 'blocking' | 'tangential',
     note?: string,
     name?: string,
-  ) => ipcRenderer.invoke('session:spawnChild', parentSessionId, cwd, type, note, name),
+    autoMode?: boolean,
+  ) => ipcRenderer.invoke('session:spawnChild', parentSessionId, cwd, type, note, name, autoMode),
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
   pickPath: (sessionId?: string) => ipcRenderer.invoke('dialog:pickPath', sessionId),
   // Electron 43 removed File.path; this is the supported way to resolve a dropped

@@ -55,6 +55,8 @@ interface AppSettings {
   firstRunSeen: boolean
   lastModel: string
   lastEffort: string
+  statusHooksInstalled: boolean
+  spawnAutoMode: boolean
 }
 interface Snapshot {
   home: string
@@ -203,13 +205,7 @@ export function App() {
   const [pendingRestore, setPendingRestore] = useState<string | null>(null)
   const restoredRef = useRef(false)
   // The spawn-a-child composer (folder + optional handoff note).
-  const [spawn, setSpawn] = useState<{
-    parent: Session
-    type: 'blocking' | 'tangential'
-    cwd: string
-    note: string
-    name: string
-  } | null>(null)
+  const [spawn, setSpawn] = useState<SpawnState | null>(null)
   // The cross-session send composer (inject a prompt into another session).
   const [send, setSend] = useState<Session | null>(null)
   // The New-session modal.
@@ -736,7 +732,15 @@ export function App() {
                     return
                   }
                   const parent = live.find((s) => s.sessionId === selected.sessionId)
-                  if (parent) setSpawn({ parent, type, cwd: selected.cwd, note: text, name: '' })
+                  if (parent)
+                    setSpawn({
+                      parent,
+                      type,
+                      cwd: selected.cwd,
+                      note: text,
+                      name: '',
+                      autoMode: snap.settings?.spawnAutoMode ?? true,
+                    })
                   else {
                     window.cc.sessionSpawnChild(selected.sessionId, selected.cwd, type, text)
                     showFlash(`spawned ${label} from selection`)
@@ -865,7 +869,14 @@ export function App() {
           }}
           onSpawn={(s, type) => {
             setMenu(null)
-            setSpawn({ parent: s, type, cwd: s.cwd, note: '', name: '' })
+            setSpawn({
+              parent: s,
+              type,
+              cwd: s.cwd,
+              note: '',
+              name: '',
+              autoMode: snap.settings?.spawnAutoMode ?? true,
+            })
           }}
           onSend={(s) => {
             setMenu(null)
@@ -959,6 +970,7 @@ function SettingsModal({
 }) {
   const trust = settings?.trustChildrenByDefault ?? true
   const mailGranted = settings?.mailAllowGranted ?? false
+  const hooksInstalled = settings?.statusHooksInstalled ?? false
   return (
     <div className="spawnscrim" onClick={close}>
       <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
@@ -998,6 +1010,27 @@ function SettingsModal({
             }}
           >
             {mailGranted ? 'Granted ✓' : 'Grant…'}
+          </button>
+        </div>
+
+        <div className="setrow">
+          <span>
+            <b>Accurate status via hooks</b>
+            <span className="setsub">
+              {hooksInstalled
+                ? 'Installed — sessions report working / your turn / needs-approval themselves.'
+                : 'Adds lightweight hooks to your global Claude settings so every session reports its own state (incl. the instant a permission dialog opens) instead of the app inferring it. Applies to sessions started after install.'}
+            </span>
+          </span>
+          <button
+            className="rbtn"
+            disabled={hooksInstalled}
+            onClick={async () => {
+              const r = await window.cc.settingsInstallStatusHooks()
+              showFlash(r.ok ? 'status hooks installed' : `couldn’t install: ${r.reason ?? 'error'}`)
+            }}
+          >
+            {hooksInstalled ? 'Installed ✓' : 'Install…'}
           </button>
         </div>
 
@@ -1204,6 +1237,7 @@ type SpawnState = {
   cwd: string
   note: string
   name: string
+  autoMode: boolean
 }
 
 function SpawnComposer({
@@ -1227,6 +1261,7 @@ function SpawnComposer({
       spawn.type,
       spawn.note.trim() || undefined,
       spawn.name.trim() || undefined,
+      spawn.autoMode,
     )
     setSpawn(null)
   }
@@ -1299,6 +1334,23 @@ function SpawnComposer({
             if (e.key === 'Escape') setSpawn(null)
           }}
         />
+        <label className="setrow spawnauto">
+          <input
+            type="checkbox"
+            checked={spawn.autoMode}
+            onChange={(e) => setSpawn({ ...spawn, autoMode: e.target.checked })}
+          />
+          <span>
+            <b>Start in auto mode</b>
+            <span className="setsub">recommended for parent/child work</span>
+          </span>
+        </label>
+        <div className="spawnhint">
+          Parent–child messaging writes to a small mailbox file, and each session’s first write
+          crosses a permission gate. Auto mode clears it on its own; without auto mode you’ll
+          approve one prompt in each session before messages flow. Pre-authorizing the mailbox in
+          Settings removes the gate entirely.
+        </div>
         <div className="spawnactions">
           <button className="rbtn" onClick={() => setSpawn(null)}>
             Cancel

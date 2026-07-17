@@ -5,6 +5,7 @@ import {
   existsSync,
   statSync,
   copyFileSync,
+  chmodSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -80,6 +81,8 @@ interface AppSettings {
   firstRunSeen: boolean
   lastModel: string // remembered New-session model choice ('' = default)
   lastEffort: string // remembered reasoning effort ('' = default)
+  statusHooksInstalled: boolean // hook-driven status wired into ~/.claude/settings.json
+  spawnAutoMode: boolean // last "start child in auto mode" choice (default ON)
 }
 // App settings persist in app_state (registry kv). Defaults applied here.
 function getSettings(): AppSettings {
@@ -89,6 +92,8 @@ function getSettings(): AppSettings {
     firstRunSeen: getAppState('firstRunSeen') === 'true',
     lastModel: getAppState('lastModel') || '',
     lastEffort: getAppState('lastEffort') || '',
+    statusHooksInstalled: getAppState('statusHooksInstalled') === 'true',
+    spawnAutoMode: getAppState('spawnAutoMode') !== 'false', // default ON
   }
 }
 
@@ -213,15 +218,52 @@ function snapshot(): Snapshot {
 
   const managedIds = managedSessionIds()
   const names = getSessionNames()
+  const hookStates = readHookStates()
   const enriched: EnrichedSession[] = sessions.map((s) => {
     const managed = managedIds.has(s.sessionId)
     // Only managed sessions have a live PTY buffer to scan; adopted/external
     // sessions keep their transcript-derived coarse state.
     const term = managed ? findManagedTerm(s.sessionId) : undefined
-    const attention: AttentionKind | undefined =
-      term && detectPrompt(term.buffer) ? 'permission' : undefined
+    const bufferDialog = !!term && detectPrompt(term.buffer)
+    let state = s.state
+    let stateReason = s.stateReason
+    let attention: AttentionKind | undefined = bufferDialog ? 'permission' : undefined
+
+    // Fuse in the hook-reported state (sessions TELL us; see status-hook.sh).
+    // The hook wins when it is at least as fresh as the transcript — the +1500ms
+    // epsilon absorbs the script's whole-second timestamps so a hook that fired
+    // right after the last transcript write still wins. During active work the
+    // transcript pulls ahead within a second or two, so it re-takes ownership if
+    // a hook event was ever missed (hooks are fire-and-forget).
+    const hs = s.alive && !s.isSpare ? hookStates.get(s.sessionId) : undefined
+    if (hs && hs.at + 1500 >= (s.transcriptMtimeMs ?? 0)) {
+      const age = now - hs.at
+      const ago = `${Math.round(age / 1000)}s ago`
+      if (hs.state === 'working') {
+        state = 'working'
+        stateReason = `hook: working (${ago})`
+      } else if (hs.state === 'waiting') {
+        state = age > HOOK_IDLE_MS ? 'idle' : 'waiting'
+        stateReason = `hook: turn ended (${ago})`
+      } else if (hs.state === 'idle') {
+        state = 'idle'
+        stateReason = `hook: idle (${ago})`
+      } else if (hs.state === 'permission') {
+        // The definitive "needs approval" edge — fires the instant the dialog
+        // opens. Clearing: any later hook event overwrites the file (approve →
+        // PostToolUse, deny/esc → Stop). For managed sessions the buffer scan is
+        // the steady-state owner (a long-approved tool run leaves the hook file
+        // saying 'permission' until PostToolUse — the 30s cap stops that going
+        // stale); adopted sessions have no buffer, so trust until overwritten.
+        state = 'working'
+        stateReason = `hook: permission prompt (${ago})`
+        if (term ? bufferDialog || age < 30_000 : true) attention = 'permission'
+      }
+    }
     return {
       ...s,
+      state,
+      stateReason,
       name: names[s.sessionId] || s.name,
       categoryId: categoryOf(s.sessionId),
       theme: nodes.get(s.sessionId)?.theme ?? null,
@@ -439,6 +481,11 @@ function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: str
 function autoRemoveExitedSession(sessionId: string, key: string): void {
   purgeDeadSessionFiles(sessionId)
   deleteNode(sessionId)
+  try {
+    unlinkSync(join(STATUS_DIR, `${sessionId}.json`)) // drop its hook-status file too
+  } catch {
+    /* none written */
+  }
   terminals.delete(key)
   if (attachedKey === key) attachedKey = null
   win?.webContents.send('session:removed', { ids: [sessionId] })
@@ -931,8 +978,13 @@ function spawnChild(
   type: 'blocking' | 'tangential',
   note?: string,
   name?: string,
+  autoMode?: boolean,
 ): number {
-  const pid = launchSession(cwd, [], { CC_ROLE: 'child' })
+  // Auto mode lets the child's permission classifier approve routine gates (the
+  // mailbox write especially) so parent↔child messaging flows unattended.
+  setAppState('spawnAutoMode', String(!!autoMode)) // remember the last choice
+  const args = autoMode ? ['--permission-mode', 'auto'] : []
+  const pid = launchSession(cwd, args, { CC_ROLE: 'child' })
   const outbox = outboxByPid.get(pid)?.path ?? ''
   const userNote = note?.trim()
   const preamble = awarenessPreamble(outbox)
@@ -1330,6 +1382,11 @@ ipcMain.handle('settings:set', (_e, key: string, value: string) => {
   pushSessions()
   return true
 })
+ipcMain.handle('settings:installStatusHooks', () => {
+  const r = installStatusHooks()
+  pushSessions()
+  return r
+})
 ipcMain.handle('settings:grantMail', () => {
   const r = grantMailPermission()
   pushSessions()
@@ -1342,40 +1399,189 @@ ipcMain.handle('settings:grantMail', () => {
 // malformed file. Rule scoped to the app's own ~/.claude/ccc tree (covers mail +
 // mail-dev). Verified rule syntax via claude-code-guide (Write(~/path/**), the ~
 // form; permissions.allow is an array of strings in ~/.claude/settings.json).
-function grantMailPermission(): { ok: boolean; reason?: string } {
-  const rule = 'Write(~/.claude/ccc/**)'
+// Safe read-backup-parse of ~/.claude/settings.json shared by every merge we do.
+// Refuses to touch a malformed file; backs up before any write.
+function readUserSettings():
+  | { ok: true; settings: Record<string, unknown>; settingsPath: string }
+  | { ok: false; reason: string } {
   const dir = join(os.homedir(), '.claude')
   const settingsPath = join(dir, 'settings.json')
-  try {
-    let settings: Record<string, unknown> = {}
-    if (existsSync(settingsPath)) {
-      const raw = readFileSync(settingsPath, 'utf8')
-      if (raw.trim()) {
-        try {
-          settings = JSON.parse(raw)
-        } catch {
-          return { ok: false, reason: '~/.claude/settings.json is not valid JSON — left untouched' }
-        }
-      }
+  let settings: Record<string, unknown> = {}
+  if (existsSync(settingsPath)) {
+    const raw = readFileSync(settingsPath, 'utf8')
+    if (raw.trim()) {
       try {
-        copyFileSync(settingsPath, `${settingsPath}.ccc-bak`) // backup before writing
+        settings = JSON.parse(raw)
       } catch {
-        /* best-effort */
+        return { ok: false, reason: '~/.claude/settings.json is not valid JSON — left untouched' }
       }
-    } else {
-      mkdirSync(dir, { recursive: true })
     }
-    const perms = (settings.permissions ??= {}) as Record<string, unknown>
-    const allow = (perms.allow ??= []) as unknown
-    if (!Array.isArray(allow)) return { ok: false, reason: 'permissions.allow is not an array — left untouched' }
-    if (!allow.includes(rule)) allow.push(rule)
-    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`)
+    try {
+      copyFileSync(settingsPath, `${settingsPath}.ccc-bak`) // backup before writing
+    } catch {
+      /* best-effort */
+    }
+  } else {
+    mkdirSync(dir, { recursive: true })
+  }
+  return { ok: true, settings, settingsPath }
+}
+
+// The mailbox permission rule. Claude Code's own warning (seen at session start):
+// "Write(~/.claude/ccc/**) is not matched by file permission checks — only
+// Edit(path) rules are." So the effective rule is Edit(...); the old Write rule
+// is dead weight and is migrated out wherever we touch the file.
+const MAIL_RULE_OLD = 'Write(~/.claude/ccc/**)'
+const MAIL_RULE = 'Edit(~/.claude/ccc/**)'
+function applyMailRule(settings: Record<string, unknown>): string | null {
+  const perms = (settings.permissions ??= {}) as Record<string, unknown>
+  const allow = (perms.allow ??= []) as unknown
+  if (!Array.isArray(allow)) return 'permissions.allow is not an array — left untouched'
+  const oldIdx = allow.indexOf(MAIL_RULE_OLD)
+  if (oldIdx >= 0) allow.splice(oldIdx, 1)
+  if (!allow.includes(MAIL_RULE)) allow.push(MAIL_RULE)
+  return null
+}
+
+function grantMailPermission(): { ok: boolean; reason?: string } {
+  try {
+    const r = readUserSettings()
+    if (!r.ok) return r
+    const err = applyMailRule(r.settings)
+    if (err) return { ok: false, reason: err }
+    writeFileSync(r.settingsPath, `${JSON.stringify(r.settings, null, 2)}\n`)
     setAppState('mailAllowGranted', 'true')
     setAppState('firstRunSeen', 'true')
     return { ok: true }
   } catch (e) {
     return { ok: false, reason: String(e) }
   }
+}
+
+// ---------- hook-driven status (sessions TELL us their state) ----------
+// A tiny bash hook (written by the app, wired into ~/.claude/settings.json on
+// user consent) writes each session's latest state to STATUS_DIR/<session_id>.json
+// on every lifecycle event. The scan fuses that with the transcript-derived
+// state — hooks give definitive, instant edges (especially the permission
+// dialog, which the transcript literally cannot see); the transcript + PTY
+// buffer scan stay as the fallback since hooks are fire-and-forget.
+// STATUS_DIR is deliberately SHARED between dev and packaged builds: reads
+// don't consume, files are keyed by session id, both apps just read the truth.
+const STATUS_DIR = join(os.homedir(), '.claude', 'ccc', 'status')
+const STATUS_HOOK_PATH = join(os.homedir(), '.claude', 'ccc', 'status-hook.sh')
+const STATUS_MAX_AGE_MS = 7 * 24 * 3600 * 1000
+const HOOK_IDLE_MS = 5 * 60 * 1000 // matches the engine's transcript IDLE_MS
+// Validated against real captured payloads (incl. a spoof test): grep -o emits
+// matches in order, so head -1 is the real top-level key even if user content
+// contains the same literal. Always exits 0, never prints — a hook error would
+// otherwise nag every session on every event.
+const STATUS_HOOK_SCRIPT = `#!/bin/bash
+# CC Command Center status hook — written by the app; do not edit by hand.
+# argv: $1 = state token (working|waiting|notify). stdin: the hook JSON payload.
+IN=$(cat 2>/dev/null) || IN=""
+SID=$(printf '%s' "$IN" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\\([^"]*\\)"$/\\1/')
+[ -z "$SID" ] && exit 0
+STATE="$1"
+if [ "$STATE" = "notify" ]; then
+  NT=$(printf '%s' "$IN" | grep -o '"notification_type"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\\([^"]*\\)"$/\\1/')
+  case "$NT" in
+    permission_prompt|elicitation_dialog) STATE=permission ;;
+    idle_prompt) STATE=idle ;;
+    *) exit 0 ;;
+  esac
+fi
+DIR="$HOME/.claude/ccc/status"
+mkdir -p "$DIR" 2>/dev/null
+NOW=$(( $(date +%s) * 1000 ))
+printf '{"state":"%s","at":%s}\\n' "$STATE" "$NOW" > "$DIR/$SID.json.tmp" 2>/dev/null \\
+  && mv -f "$DIR/$SID.json.tmp" "$DIR/$SID.json" 2>/dev/null
+exit 0
+`
+
+// (Re)write the hook script every launch so it always matches this app version.
+function ensureStatusHookScript(): void {
+  try {
+    mkdirSync(STATUS_DIR, { recursive: true })
+    writeFileSync(STATUS_HOOK_PATH, STATUS_HOOK_SCRIPT, { mode: 0o755 })
+    chmodSync(STATUS_HOOK_PATH, 0o755) // writeFileSync mode is ignored if the file exists
+  } catch (e) {
+    console.error('[main] write status hook script failed', e)
+  }
+}
+
+// Hook wiring: event → the state token the script receives as argv[1].
+const STATUS_HOOK_EVENTS: Array<[string, string]> = [
+  ['UserPromptSubmit', 'working'],
+  ['PreToolUse', 'working'],
+  ['PostToolUse', 'working'], // also clears a permission wait after approval
+  ['Stop', 'waiting'],
+  ['Notification', 'notify'], // script maps permission_prompt/idle_prompt itself
+]
+
+// Merge the status hooks into ~/.claude/settings.json (global, so adopted
+// sessions are covered too — user-approved route, same pattern as the mailbox
+// grant: backup, preserve everything, refuse malformed). Also migrates the
+// mailbox rule to Edit(...) in the same write.
+function installStatusHooks(): { ok: boolean; reason?: string } {
+  try {
+    ensureStatusHookScript()
+    if (!existsSync(STATUS_HOOK_PATH)) return { ok: false, reason: 'hook script could not be written' }
+    const r = readUserSettings()
+    if (!r.ok) return r
+    const hooks = (r.settings.hooks ??= {}) as Record<string, unknown>
+    for (const [event, token] of STATUS_HOOK_EVENTS) {
+      const arr = (hooks[event] ??= []) as unknown
+      if (!Array.isArray(arr)) return { ok: false, reason: `hooks.${event} is not an array — left untouched` }
+      // Dedupe on the script path so re-install is idempotent and we never
+      // disturb the user's own hooks for the same event.
+      if (JSON.stringify(arr).includes('status-hook.sh')) continue
+      arr.push({ hooks: [{ type: 'command', command: `${STATUS_HOOK_PATH} ${token}` }] })
+    }
+    applyMailRule(r.settings) // fold the Edit-rule migration into the same write
+    writeFileSync(r.settingsPath, `${JSON.stringify(r.settings, null, 2)}\n`)
+    setAppState('statusHooksInstalled', 'true')
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, reason: String(e) }
+  }
+}
+
+// Startup truth-sync: the flag mirrors whether the hooks are ACTUALLY present
+// (the user may have hand-edited settings.json since we last wrote it).
+function syncStatusHooksFlag(): void {
+  try {
+    const p = join(os.homedir(), '.claude', 'settings.json')
+    const present = existsSync(p) && readFileSync(p, 'utf8').includes('status-hook.sh')
+    setAppState('statusHooksInstalled', String(present))
+  } catch {
+    /* leave the stored flag as-is */
+  }
+}
+
+// Latest hook-reported state per session. Prunes age-outs as it reads.
+function readHookStates(): Map<string, { state: string; at: number }> {
+  const map = new Map<string, { state: string; at: number }>()
+  let files: string[] = []
+  try {
+    files = readdirSync(STATUS_DIR).filter((f) => f.endsWith('.json'))
+  } catch {
+    return map
+  }
+  const now = Date.now()
+  for (const f of files) {
+    const fp = join(STATUS_DIR, f)
+    try {
+      const j = JSON.parse(readFileSync(fp, 'utf8')) as { state?: unknown; at?: unknown }
+      if (typeof j?.state !== 'string' || typeof j?.at !== 'number' || now - j.at > STATUS_MAX_AGE_MS) {
+        unlinkSync(fp)
+        continue
+      }
+      map.set(f.slice(0, -5), { state: j.state, at: j.at })
+    } catch {
+      /* mid-write or malformed — skip this scan */
+    }
+  }
+  return map
 }
 
 // When a link is blessed, tell the (app-managed) parent it can now message this
@@ -1473,9 +1679,10 @@ ipcMain.handle(
     type: 'blocking' | 'tangential',
     note?: string,
     name?: string,
+    autoMode?: boolean,
   ) => {
     if (!parentSessionId || !cwd) return null
-    return { pid: spawnChild(parentSessionId, cwd, type, note, name), cwd }
+    return { pid: spawnChild(parentSessionId, cwd, type, note, name, autoMode), cwd }
   },
 )
 // Copy-out: put the session's most recent assistant reply on the clipboard, so
@@ -1606,6 +1813,11 @@ ipcMain.handle('session:remove', (_e, sessionId: string) => {
     if (attachedKey === id) attachedKey = null
     purgeDeadSessionFiles(id)
     deleteNode(id)
+    try {
+      unlinkSync(join(STATUS_DIR, `${id}.json`)) // drop its hook-status file too
+    } catch {
+      /* none written */
+    }
     set.add(id) // deny-list so an alive-but-transcript-gone ghost can't re-adopt
   }
   setAppState('removedSessions', JSON.stringify([...set]))
@@ -1660,10 +1872,12 @@ app.whenReady().then(() => {
   } catch {
     /* ignore */
   }
+  ensureStatusHookScript() // keep the hook script current with this app version
   setDockIcon()
   setAboutPanel()
   installAppMenu(() => win)
   initRegistry(join(app.getPath('userData'), 'registry.db'))
+  syncStatusHooksFlag() // flag mirrors what's ACTUALLY in ~/.claude/settings.json
   maybeSeed()
   createWindow()
   pollTimer = setInterval(pushSessions, 1500)

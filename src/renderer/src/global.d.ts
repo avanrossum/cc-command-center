@@ -31,6 +31,7 @@ declare global {
       awarenessPause: (paused: boolean) => Promise<boolean>
       settingsSet: (key: string, value: string) => Promise<boolean>
       settingsGrantMail: () => Promise<{ ok: boolean; reason?: string }>
+      settingsInstallStatusHooks: () => Promise<{ ok: boolean; reason?: string }>
       themeSet: (sessionId: string, theme: string | null) => Promise<boolean>
       snapshotSave: (sessionId: string, data: string) => void
       sessionNew: () => Promise<{ pid: number; cwd: string } | null>
@@ -49,6 +50,7 @@ declare global {
         type: 'blocking' | 'tangential',
         note?: string,
         name?: string,
+        autoMode?: boolean,
       ) => Promise<{ pid: number; cwd: string } | null>
       pickFolder: () => Promise<string | null>
       pickPath: (sessionId?: string) => Promise<string | null>

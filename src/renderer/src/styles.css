@@ -1123,6 +1123,17 @@ body {
   font-size: 11.5px;
   color: #f0857d;
 }
+.spawnauto {
+  margin-top: 10px;
+}
+.spawnhint {
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--cc-dim);
+  border-left: 2px solid var(--cc-border);
+  padding-left: 8px;
+}
 .recentfolders {
   display: flex;
   flex-direction: column;
