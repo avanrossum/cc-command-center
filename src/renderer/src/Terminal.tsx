@@ -220,10 +220,17 @@ export function TerminalView({
       },
     })
 
+    // Auto-redraw on (re)attach: switching to a backgrounded session replays its
+    // raw scrollback in bulk, which can leave Claude's TUI mispositioned; a
+    // SIGWINCH forces it to repaint its live screen cleanly over the replay. Only
+    // for resumed sessions — a fresh spawn has nothing to realign. Fires once,
+    // after the buffer has been written and the grid fitted.
+    let redrawTimer: ReturnType<typeof setTimeout> | null = null
     window.cc
       .termOpen(termKey, { sessionId, pid, cwd, resume, cols: term.cols, rows: term.rows })
       .then(() => {
         window.cc.termResize(termKey, term.cols, term.rows)
+        if (resume) redrawTimer = setTimeout(() => window.cc.termRedraw(termKey), 400)
       })
 
     // Coalesce resize bursts (window drag, composer open/close) to one fit per
@@ -247,6 +254,7 @@ export function TerminalView({
     return () => {
       disposed = true
       if (roRaf != null) cancelAnimationFrame(roRaf)
+      if (redrawTimer) clearTimeout(redrawTimer)
       if (saveTimer) clearTimeout(saveTimer)
       saveSnapshot() // flush a final snapshot before tearing down the xterm
       ro.disconnect()
