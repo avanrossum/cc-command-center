@@ -1,6 +1,8 @@
-import { app, BrowserWindow, ipcMain, dialog, nativeImage, clipboard, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, nativeImage, clipboard, shell, safeStorage } from 'electron'
 import { join, isAbsolute, dirname, extname } from 'node:path'
 import os from 'node:os'
+import net from 'node:net'
+import { randomBytes } from 'node:crypto'
 import {
   existsSync,
   statSync,
@@ -45,6 +47,14 @@ import {
   deleteNode,
   setAppState,
   getAppState,
+  listApiKeys,
+  addApiKey,
+  getApiKeySecretEnc,
+  removeApiKey,
+  apiKeyExists,
+  setNodeApiKey,
+  getNodeApiKey,
+  type ApiKeyRow,
   type Category,
   type Edge,
 } from './registry'
@@ -75,6 +85,7 @@ interface Snapshot {
   awarenessPaused: boolean
   settings: AppSettings
   recentFolders: string[]
+  apiKeys: ApiKeyRow[]
 }
 interface AppSettings {
   trustChildrenByDefault: boolean
@@ -174,6 +185,151 @@ function detectPrompt(buffer: string): boolean {
   if (!buffer) return false
   const tail = stripAnsi(buffer.slice(-16000)).slice(-PROMPT_TAIL_CHARS)
   return PROMPT_SIGNATURES.some((re) => re.test(tail))
+}
+
+// ---------- named API keys (secure) ----------
+// Keys are encrypted at rest with Electron safeStorage (OS-keychain-backed) and
+// stored in the registry. The plaintext is decrypted in memory ONLY when a
+// session needs it, and served over an owner-only local socket (the key daemon)
+// to that session's apiKeyHelper — it is never written to disk in plaintext and
+// never sent to the renderer. A per-session capability token gates each fetch.
+// Per-identity socket (like MAIL_DIR): dev and packaged both run on this machine
+// and must NOT clobber each other's key daemon.
+const KEYD_SOCK = join(os.homedir(), '.claude', 'ccc', app.isPackaged ? 'keyd.sock' : 'keyd-dev.sock')
+const KEYHELPER_PATH = join(os.homedir(), '.claude', 'ccc', 'keyhelper.sh')
+// token → keyId. Minted at spawn, revoked by exact token identity when the
+// session's PTY exits (a per-pty onExit listener) — pid-reuse-safe.
+const keyTokens = new Map<string, { keyId: number }>()
+let keydServer: net.Server | null = null
+
+// The apiKeyHelper Claude Code runs to fetch the key. Uses perl + IO::Socket::UNIX
+// (both ship on every macOS, no CLT) — more portable than nc's flag soup. Reads
+// the token + socket path from the session env (a capability, not the key), asks
+// the daemon, prints the key. The key itself never lands on disk.
+const KEYHELPER_SCRIPT = `#!/bin/bash
+# CC Command Center — API key helper (app-written; do not edit).
+[ -z "$CCC_KEY_TOKEN" ] && exit 1
+[ -z "$CCC_KEYD_SOCK" ] && exit 1
+exec /usr/bin/perl -e '
+  alarm 5;
+  use IO::Socket::UNIX;
+  my $s = IO::Socket::UNIX->new(Peer => $ENV{CCC_KEYD_SOCK}) or exit 1;
+  print $s $ENV{CCC_KEY_TOKEN} . "\\n";
+  $s->flush;
+  local $/;
+  my $r = <$s>;
+  exit 1 unless defined $r && length $r;
+  print $r;
+'
+`
+
+function ensureKeyHelperScript(): void {
+  try {
+    mkdirSync(dirname(KEYHELPER_PATH), { recursive: true })
+    writeFileSync(KEYHELPER_PATH, KEYHELPER_SCRIPT, { mode: 0o755 })
+    chmodSync(KEYHELPER_PATH, 0o755)
+  } catch (e) {
+    console.error('[main] write keyhelper failed', e)
+  }
+}
+
+// Owner-only local socket that serves a decrypted key for a valid token, once.
+function startKeyDaemon(): void {
+  try {
+    try {
+      unlinkSync(KEYD_SOCK)
+    } catch {
+      /* no stale socket */
+    }
+    keydServer = net.createServer((conn) => {
+      let buf = ''
+      // Absolute deadline: a plain timer that receiving data does NOT reset, so a
+      // slow/never-newline connection can't hold a slot open. Legit fetches are
+      // sub-millisecond.
+      const deadline = setTimeout(() => conn.destroy(), 3000)
+      conn.on('close', () => clearTimeout(deadline))
+      conn.on('error', () => {})
+      conn.on('data', (d) => {
+        buf += d.toString()
+        if (buf.length > 512) {
+          conn.destroy() // token is short; bound the input
+          return
+        }
+        const nl = buf.indexOf('\n')
+        if (nl < 0) return
+        const token = buf.slice(0, nl).trim()
+        const info = keyTokens.get(token)
+        const key = info ? getDecryptedKey(info.keyId) : null
+        conn.end(key ?? '') // unknown token or missing key → empty
+      })
+    })
+    keydServer.maxConnections = 16 // bound total fds; legit use is one at a time
+    keydServer.on('error', (e) => console.error('[main] keyd error', e))
+    keydServer.listen(KEYD_SOCK, () => {
+      try {
+        chmodSync(KEYD_SOCK, 0o600) // owner-only
+      } catch {
+        /* best effort */
+      }
+    })
+  } catch (e) {
+    console.error('[main] keyd start failed', e)
+  }
+}
+
+// Decrypt a stored key. Main-process ONLY — never exposed over IPC.
+function getDecryptedKey(id: number): string | null {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) return null
+    const enc = getApiKeySecretEnc(id)
+    return enc ? safeStorage.decryptString(enc) : null
+  } catch (e) {
+    console.error('[main] decrypt key failed', e)
+    return null
+  }
+}
+
+// The env + argv that make a spawned session run on a chosen API key: a
+// per-session capability token (NOT the key) + apiKeyHelper via --settings. The
+// caller registers the token (and its onExit revoker) after spawn. Returns empty
+// pieces when no/invalid key is chosen.
+function keySpawnConfig(apiKeyId?: number): {
+  env: Record<string, string>
+  args: string[]
+  token?: string
+} {
+  if (apiKeyId == null || !apiKeyExists(apiKeyId)) return { env: {}, args: [] }
+  const token = randomBytes(24).toString('hex')
+  return {
+    env: { CCC_KEY_TOKEN: token, CCC_KEYD_SOCK: KEYD_SOCK },
+    args: ['--settings', JSON.stringify({ apiKeyHelper: KEYHELPER_PATH })],
+    token,
+  }
+}
+// Register a minted token so the daemon will serve it, and revoke it exactly when
+// this pty exits (pid-reuse-safe).
+function registerKeyToken(token: string | undefined, apiKeyId: number | undefined, p: pty.IPty): void {
+  if (!token || apiKeyId == null) return
+  keyTokens.set(token, { keyId: apiKeyId })
+  p.onExit(() => keyTokens.delete(token))
+}
+
+// Encrypt + store a new key. Returns the display row (id/name/hint), never the key.
+function storeApiKey(name: string, raw: string): { ok: true; key: ApiKeyRow } | { ok: false; reason: string } {
+  if (!safeStorage.isEncryptionAvailable()) {
+    return { ok: false, reason: 'macOS secure storage is unavailable — cannot store keys safely' }
+  }
+  const trimmed = raw.trim()
+  if (!trimmed) return { ok: false, reason: 'empty key' }
+  try {
+    const enc = safeStorage.encryptString(trimmed)
+    // Reveal at most the last 4 chars, and nothing for a short/bogus value — the
+    // hint must never contain the whole secret.
+    const hint = trimmed.length > 8 ? `…${trimmed.slice(-4)}` : '…'
+    return { ok: true, key: addApiKey(name.trim() || 'API key', hint, enc) }
+  } catch (e) {
+    return { ok: false, reason: String(e) }
+  }
 }
 
 function snapshot(): Snapshot {
@@ -326,6 +482,7 @@ function snapshot(): Snapshot {
     awarenessPaused,
     settings: getSettings(),
     recentFolders: getRecentFolders(),
+    apiKeys: listApiKeys(),
   }
 }
 
@@ -538,15 +695,20 @@ function openTerminal(key: string, opts: OpenOpts): void {
   }
   if (!term) {
     const cmd = resolveClaude()
-    const args = opts.resume && opts.sessionId ? ['--resume', opts.sessionId] : []
-    const p = pty.spawn(cmd, args, {
+    const resumeArgs = opts.resume && opts.sessionId ? ['--resume', opts.sessionId] : []
+    // Re-apply the session's persisted API key on resume, so a key-session keeps
+    // its metered billing instead of silently reverting to the subscription.
+    const apiKeyId = opts.sessionId ? (getNodeApiKey(opts.sessionId) ?? undefined) : undefined
+    const kc = keySpawnConfig(apiKeyId)
+    const p = pty.spawn(cmd, [...kc.args, ...resumeArgs], {
       name: 'xterm-256color',
       cols: opts.cols || 120,
       rows: opts.rows || 30,
       cwd: opts.cwd || os.homedir(),
-      env: buildEnv(),
+      env: { ...buildEnv(), ...kc.env },
     })
-    console.log(`[main] terminal ${key}: spawned ${cmd} ${args.join(' ')} in ${opts.cwd}`)
+    registerKeyToken(kc.token, apiKeyId, p)
+    console.log(`[main] terminal ${key}: spawned ${cmd} ${resumeArgs.join(' ')} in ${opts.cwd}`)
     term = wireTerm(key, p, { sessionId: opts.sessionId, cwd: opts.cwd })
   }
   attachedKey = key
@@ -582,7 +744,12 @@ function getRecentFolders(): string[] {
   }
 }
 
-function launchSession(cwd: string, args: string[] = [], extraEnv: Record<string, string> = {}): number {
+function launchSession(
+  cwd: string,
+  args: string[] = [],
+  extraEnv: Record<string, string> = {},
+  apiKeyId?: number,
+): number {
   const cmd = resolveClaude()
   pushRecentFolder(cwd)
   // Every app-spawned session gets an outbox so it can take part in the awareness
@@ -590,13 +757,18 @@ function launchSession(cwd: string, args: string[] = [], extraEnv: Record<string
   // (@name). The file is created lazily when the session first writes to it.
   const token = `cc-${Date.now()}-${outboxCounter++}`
   const outboxPath = join(MAIL_DIR, `${token}.msg`)
-  const p = pty.spawn(cmd, args, {
+  // Run this session on a chosen API key (metered billing) via apiKeyHelper — the
+  // key is fetched from the key daemon at runtime, never placed in the env.
+  // --settings is additive, so the session still gets the global status hooks.
+  const kc = keySpawnConfig(apiKeyId)
+  const p = pty.spawn(cmd, [...kc.args, ...args], {
     name: 'xterm-256color',
     cols: 120,
     rows: 30,
     cwd,
-    env: { ...buildEnv(), ...extraEnv, CC_OUTBOX: outboxPath },
+    env: { ...buildEnv(), ...extraEnv, ...kc.env, CC_OUTBOX: outboxPath },
   })
+  registerKeyToken(kc.token, apiKeyId, p)
   outboxOwner.set(token, p.pid)
   outboxByPid.set(p.pid, { token, path: outboxPath })
   const key = `new:${p.pid}`
@@ -963,6 +1135,7 @@ interface PendingChild {
   type: 'blocking' | 'tangential'
   note?: string
   name?: string // user-set name applied on adoption; stable @-handle for the bus
+  apiKeyId?: number // persisted on the node at adoption so resume re-applies it
   at: number
 }
 // Keyed by the child's pid. Entries expire so a child that dies before adoption
@@ -976,6 +1149,7 @@ interface PendingNew {
   categoryId: number | null
   name?: string
   instructions?: string
+  apiKeyId?: number // persisted on the node at adoption so resume re-applies it
   at: number
 }
 const pendingNew = new Map<number, PendingNew>()
@@ -992,6 +1166,7 @@ function spawnChild(
   note?: string,
   name?: string,
   autoMode?: boolean,
+  apiKeyId?: number,
 ): number {
   // Auto mode lets the child's permission classifier approve routine gates (the
   // mailbox write especially) so parent↔child messaging flows unattended. Only
@@ -1000,7 +1175,7 @@ function spawnChild(
   const effAuto = typeof autoMode === 'boolean' ? autoMode : getSettings().spawnAutoMode
   if (typeof autoMode === 'boolean') setAppState('spawnAutoMode', String(autoMode))
   const args = effAuto ? ['--permission-mode', 'auto'] : []
-  const pid = launchSession(cwd, args, { CC_ROLE: 'child' })
+  const pid = launchSession(cwd, args, { CC_ROLE: 'child' }, apiKeyId)
   const outbox = outboxByPid.get(pid)?.path ?? ''
   const userNote = note?.trim()
   const preamble = awarenessPreamble(outbox)
@@ -1009,6 +1184,7 @@ function spawnChild(
     type,
     note: userNote ? `${preamble}\n\n— — —\n\n${userNote}` : preamble,
     name: name?.trim() || undefined,
+    apiKeyId,
     at: Date.now(),
   })
   return pid
@@ -1103,6 +1279,7 @@ function reconcilePendingChildren(sessions: LiveSession[]): void {
     pendingChildren.delete(s.pid)
     try {
       ensureNode(s.sessionId, { cwd: s.cwd, name: s.name })
+      if (pend.apiKeyId != null) setNodeApiKey(s.sessionId, pend.apiKeyId) // resume re-applies it
       setParent(s.sessionId, pend.parentSessionId, pend.type)
       // A user-set name is the child's stable, @-addressable handle (the bus
       // resolves @name on the user name before Claude's drifting auto-title).
@@ -1138,6 +1315,7 @@ function reconcilePendingNew(sessions: LiveSession[]): void {
     pendingNew.delete(s.pid)
     try {
       ensureNode(s.sessionId, { cwd: s.cwd, name: s.name })
+      if (p.apiKeyId != null) setNodeApiKey(s.sessionId, p.apiKeyId) // resume re-applies it
       if (p.categoryId != null) assignCategory(s.sessionId, p.categoryId)
       if (p.name) setSessionName(s.sessionId, p.name)
     } catch (e) {
@@ -1798,11 +1976,26 @@ ipcMain.handle(
     note?: string,
     name?: string,
     autoMode?: boolean,
+    apiKeyId?: number,
   ) => {
     if (!parentSessionId || !cwd) return null
-    return { pid: spawnChild(parentSessionId, cwd, type, note, name, autoMode), cwd }
+    return { pid: spawnChild(parentSessionId, cwd, type, note, name, autoMode, apiKeyId), cwd }
   },
 )
+// ---------- API keys (renderer never receives a plaintext key) ----------
+ipcMain.handle('apikeys:list', () => listApiKeys())
+ipcMain.handle('apikeys:add', (_e, name: string, rawKey: string) => {
+  const r = storeApiKey(String(name ?? ''), String(rawKey ?? ''))
+  pushSessions()
+  return r
+})
+ipcMain.handle('apikeys:remove', (_e, id: number) => {
+  if (typeof id !== 'number') return { ok: false }
+  removeApiKey(id)
+  for (const [t, info] of keyTokens) if (info.keyId === id) keyTokens.delete(t) // stop serving it
+  pushSessions()
+  return { ok: true }
+})
 // Copy-out: put the session's most recent assistant reply on the clipboard, so
 // it can be handed to another session (or anywhere).
 ipcMain.handle('session:copyOutput', (_e, sessionId: string, cwd: string) => {
@@ -1875,14 +2068,16 @@ ipcMain.handle(
       categoryId?: number | null
       name?: string
       instructions?: string
+      apiKeyId?: number
     },
   ) => {
     if (!opts?.cwd) return null
-    const pid = launchSession(opts.cwd, opts.flags ? parseArgs(opts.flags) : [])
+    const pid = launchSession(opts.cwd, opts.flags ? parseArgs(opts.flags) : [], {}, opts.apiKeyId)
     pendingNew.set(pid, {
       categoryId: opts.categoryId ?? null,
       name: opts.name?.trim() || undefined,
       instructions: opts.instructions?.trim() || undefined,
+      apiKeyId: opts.apiKeyId,
       at: Date.now(),
     })
     return { pid, cwd: opts.cwd }
@@ -1954,6 +2149,21 @@ ipcMain.on('state:set', (_e, key: string, value: string) => setAppState(key, val
 // way above, so two running instances never consume each other's messages.)
 app.setName(app.isPackaged ? 'CC Command Center' : 'CC Command Center Dev')
 
+// Single instance per identity (the lock keys on userData, which differs for dev
+// vs packaged, so they still coexist). Prevents a double-launch from running a
+// second key daemon over the same socket or opening the registry DB twice.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    const w = BrowserWindow.getAllWindows()[0]
+    if (w) {
+      if (w.isMinimized()) w.restore()
+      w.focus()
+    }
+  })
+}
+
 // Electron derives userData from the app name, so a rename would point at a
 // fresh empty dir. Carry the existing registry across: if the new location has
 // no DB yet but the previous ("Claude Command Center") one does, copy it over.
@@ -1991,6 +2201,8 @@ app.whenReady().then(() => {
     /* ignore */
   }
   ensureStatusHookScript() // keep the hook script current with this app version
+  ensureKeyHelperScript() // API-key helper, current with this app version
+  startKeyDaemon() // owner-only socket that serves decrypted keys to sessions
   setDockIcon()
   setAboutPanel()
   installAppMenu(() => win)
@@ -2016,4 +2228,17 @@ app.on('window-all-closed', () => {
     }
   }
   if (process.platform !== 'darwin') app.quit()
+})
+
+// The key daemon is torn down only on a REAL quit — NOT on window-all-closed,
+// which on macOS keeps the app alive in the dock. Tearing it down there and never
+// restarting on reopen left API-key sessions unable to fetch their key.
+app.on('will-quit', () => {
+  keyTokens.clear()
+  try {
+    keydServer?.close()
+    unlinkSync(KEYD_SOCK)
+  } catch {
+    /* already gone */
+  }
 })

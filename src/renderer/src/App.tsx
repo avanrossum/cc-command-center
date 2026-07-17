@@ -35,6 +35,12 @@ interface Category {
   sort: number
   label: string | null
 }
+interface ApiKey {
+  id: number
+  name: string
+  hint: string
+  created_at: number
+}
 interface Edge {
   child_id: string
   parent_id: string
@@ -68,6 +74,7 @@ interface Snapshot {
   awarenessPaused?: boolean
   settings?: AppSettings
   recentFolders?: string[]
+  apiKeys?: ApiKey[]
 }
 interface Selected {
   key: string
@@ -914,6 +921,7 @@ export function App() {
         <SpawnComposer
           spawn={spawn}
           setSpawn={setSpawn}
+          apiKeys={snap.apiKeys ?? []}
           siblingNames={live
             .filter((s) => edgeByChild.get(s.sessionId ?? '')?.parent_id === spawn.parent.sessionId)
             .map((s) => (s.name ?? '').toLowerCase())
@@ -935,6 +943,7 @@ export function App() {
           recent={snap.recentFolders ?? []}
           lastModel={snap.settings?.lastModel ?? ''}
           lastEffort={snap.settings?.lastEffort ?? ''}
+          apiKeys={snap.apiKeys ?? []}
           close={() => setNewSessionOpen(false)}
         />
       )}
@@ -947,7 +956,12 @@ export function App() {
         />
       )}
       {settingsOpen && (
-        <SettingsModal settings={snap.settings} showFlash={showFlash} close={() => setSettingsOpen(false)} />
+        <SettingsModal
+          settings={snap.settings}
+          apiKeys={snap.apiKeys ?? []}
+          showFlash={showFlash}
+          close={() => setSettingsOpen(false)}
+        />
       )}
       {snap.settings && !snap.settings.firstRunSeen && (
         <FirstRunMail settings={snap.settings} showFlash={showFlash} />
@@ -961,16 +975,32 @@ export function App() {
 // edits ~/.claude/settings.json (see main). Grows as more settings are added.
 function SettingsModal({
   settings,
+  apiKeys,
   showFlash,
   close,
 }: {
   settings?: AppSettings
+  apiKeys: ApiKey[]
   showFlash: (m: string) => void
   close: () => void
 }) {
   const trust = settings?.trustChildrenByDefault ?? true
   const mailGranted = settings?.mailAllowGranted ?? false
   const hooksInstalled = settings?.statusHooksInstalled ?? false
+  const [keyName, setKeyName] = useState('')
+  const [keyVal, setKeyVal] = useState('')
+  const [adding, setAdding] = useState(false)
+  const addKey = async () => {
+    if (!keyName.trim() || !keyVal.trim() || adding) return
+    setAdding(true)
+    const r = await window.cc.apiKeysAdd(keyName.trim(), keyVal.trim())
+    setAdding(false)
+    if (r.ok) {
+      setKeyName('')
+      setKeyVal('')
+      showFlash('API key stored')
+    } else showFlash(`couldn’t store: ${r.reason}`)
+  }
   return (
     <div className="spawnscrim" onClick={close}>
       <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
@@ -1039,6 +1069,57 @@ function SettingsModal({
           >
             {hooksInstalled ? 'Remove' : 'Install…'}
           </button>
+        </div>
+
+        <div className="setsection">
+          <b>API keys</b>
+          <span className="setsub">
+            Stored encrypted in your macOS Keychain — never shown again, never leaves this machine
+            in the clear. Pick one per session to run it on metered API billing instead of your
+            subscription.
+          </span>
+          {apiKeys.length > 0 && (
+            <div className="keylist">
+              {apiKeys.map((k) => (
+                <div className="keyrow" key={k.id}>
+                  <span className="keyname">{k.name}</span>
+                  <span className="keyhint">{k.hint}</span>
+                  <button
+                    className="rbtn danger"
+                    onClick={async () => {
+                      if (!window.confirm(`Remove API key “${k.name}”?`)) return
+                      await window.cc.apiKeysRemove(k.id)
+                      showFlash('API key removed')
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="keyadd">
+            <input
+              className="spawnname"
+              value={keyName}
+              placeholder="Name — e.g. Personal, Work…"
+              onChange={(e) => setKeyName(e.target.value)}
+            />
+            <input
+              className="spawnname"
+              type="password"
+              value={keyVal}
+              placeholder="sk-ant-…  (paste key; hidden)"
+              autoComplete="off"
+              onChange={(e) => setKeyVal(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') addKey()
+              }}
+            />
+            <button className="rbtn primary" disabled={!keyName.trim() || !keyVal.trim() || adding} onClick={addKey}>
+              Add Claude API key
+            </button>
+          </div>
         </div>
 
         <div className="spawnactions">
@@ -1245,16 +1326,72 @@ type SpawnState = {
   note: string
   name: string
   autoMode: boolean
+  apiKeyId?: number
+}
+
+// "Use an API key for this session" — a checkbox that reveals a key dropdown.
+// value is the chosen key id (undefined = use the subscription).
+function ApiKeyPicker({
+  apiKeys,
+  value,
+  onChange,
+}: {
+  apiKeys: ApiKey[]
+  value?: number
+  onChange: (id?: number) => void
+}) {
+  const on = value != null
+  return (
+    <div className="apikeypick">
+      <label className="setrow">
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={apiKeys.length === 0}
+          onChange={(e) => onChange(e.target.checked ? apiKeys[0]?.id : undefined)}
+        />
+        <span>
+          <b>Use an API key for this session</b>
+          <span className="setsub">
+            {apiKeys.length === 0
+              ? 'Add a key in Settings first — runs this session on metered API billing.'
+              : 'Runs on metered API billing instead of your subscription.'}
+          </span>
+        </span>
+      </label>
+      {on && (
+        <>
+          <select
+            className="keyselect"
+            value={value}
+            onChange={(e) => onChange(Number(e.target.value))}
+          >
+            {apiKeys.map((k) => (
+              <option key={k.id} value={k.id}>
+                {k.name} · {k.hint}
+              </option>
+            ))}
+          </select>
+          <div className="keywarn">
+            A session on a key can read that key (anything it runs can too). Prefer a key with a
+            spend limit, and avoid high-value keys on untrusted or fully-automated work.
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 function SpawnComposer({
   spawn,
   setSpawn,
   siblingNames,
+  apiKeys,
 }: {
   spawn: SpawnState
   setSpawn: (s: SpawnState | null) => void
   siblingNames: string[]
+  apiKeys: ApiKey[]
 }) {
   const isBlocking = spawn.type === 'blocking'
   const parentName = spawn.parent.name ?? `pid ${spawn.parent.pid}`
@@ -1269,6 +1406,7 @@ function SpawnComposer({
       spawn.note.trim() || undefined,
       spawn.name.trim() || undefined,
       spawn.autoMode,
+      spawn.apiKeyId,
     )
     setSpawn(null)
   }
@@ -1352,6 +1490,11 @@ function SpawnComposer({
             <span className="setsub">recommended for parent/child work</span>
           </span>
         </label>
+        <ApiKeyPicker
+          apiKeys={apiKeys}
+          value={spawn.apiKeyId}
+          onChange={(id) => setSpawn({ ...spawn, apiKeyId: id })}
+        />
         <div className="spawnhint">
           Parent–child messaging writes to a small mailbox file, and each session’s first write
           crosses a permission gate. Auto mode clears it on its own; without auto mode you’ll
@@ -1388,6 +1531,7 @@ function NewSessionComposer({
   recent,
   lastModel,
   lastEffort,
+  apiKeys,
   close,
 }: {
   categories: Category[]
@@ -1396,6 +1540,7 @@ function NewSessionComposer({
   recent: string[]
   lastModel: string
   lastEffort: string
+  apiKeys: ApiKey[]
   close: () => void
 }) {
   const [name, setName] = useState('')
@@ -1403,6 +1548,7 @@ function NewSessionComposer({
   const [cwd, setCwd] = useState('')
   const [flags, setFlags] = useState('')
   const [instructions, setInstructions] = useState('')
+  const [apiKeyId, setApiKeyId] = useState<number | undefined>(undefined)
   // Remember the last model/effort. A custom id restores as the "Custom…" choice.
   const knownModel = MODEL_OPTS.some((o) => o.v === lastModel)
   const [model, setModel] = useState(knownModel ? lastModel : lastModel ? '__custom__' : '')
@@ -1431,6 +1577,7 @@ function NewSessionComposer({
       categoryId: cat,
       name: name.trim() || undefined,
       instructions: instructions.trim() || undefined,
+      apiKeyId,
     })
     close()
   }
@@ -1545,6 +1692,8 @@ function NewSessionComposer({
           placeholder="What should it start on?"
           onChange={(e) => setInstructions(e.target.value)}
         />
+
+        <ApiKeyPicker apiKeys={apiKeys} value={apiKeyId} onChange={setApiKeyId} />
 
         <div className="spawnactions">
           <button className="rbtn" onClick={close}>

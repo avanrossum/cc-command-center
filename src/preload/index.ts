@@ -43,6 +43,9 @@ contextBridge.exposeInMainWorld('cc', {
   settingsGrantMail: () => ipcRenderer.invoke('settings:grantMail'),
   settingsInstallStatusHooks: () => ipcRenderer.invoke('settings:installStatusHooks'),
   settingsRemoveStatusHooks: () => ipcRenderer.invoke('settings:removeStatusHooks'),
+  apiKeysList: () => ipcRenderer.invoke('apikeys:list'),
+  apiKeysAdd: (name: string, rawKey: string) => ipcRenderer.invoke('apikeys:add', name, rawKey),
+  apiKeysRemove: (id: number) => ipcRenderer.invoke('apikeys:remove', id),
 
   // per-terminal theme
   themeSet: (sessionId: string, theme: string | null) =>
@@ -60,6 +63,7 @@ contextBridge.exposeInMainWorld('cc', {
     categoryId?: number | null
     name?: string
     instructions?: string
+    apiKeyId?: number
   }) => ipcRenderer.invoke('session:create', opts),
   sessionStartFresh: (cwd: string) => ipcRenderer.invoke('session:startFresh', cwd),
   sessionRemove: (sessionId: string) => ipcRenderer.invoke('session:remove', sessionId),
@@ -70,7 +74,18 @@ contextBridge.exposeInMainWorld('cc', {
     note?: string,
     name?: string,
     autoMode?: boolean,
-  ) => ipcRenderer.invoke('session:spawnChild', parentSessionId, cwd, type, note, name, autoMode),
+    apiKeyId?: number,
+  ) =>
+    ipcRenderer.invoke(
+      'session:spawnChild',
+      parentSessionId,
+      cwd,
+      type,
+      note,
+      name,
+      autoMode,
+      apiKeyId,
+    ),
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
   pickPath: (sessionId?: string) => ipcRenderer.invoke('dialog:pickPath', sessionId),
   // Electron 43 removed File.path; this is the supported way to resolve a dropped

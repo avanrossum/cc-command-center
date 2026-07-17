@@ -9,6 +9,13 @@ interface OpenOpts {
   rows: number
 }
 
+interface ApiKey {
+  id: number
+  name: string
+  hint: string
+  created_at: number
+}
+
 declare global {
   interface Window {
     cc: {
@@ -33,6 +40,12 @@ declare global {
       settingsGrantMail: () => Promise<{ ok: boolean; reason?: string }>
       settingsInstallStatusHooks: () => Promise<{ ok: boolean; reason?: string }>
       settingsRemoveStatusHooks: () => Promise<{ ok: boolean; reason?: string }>
+      apiKeysList: () => Promise<ApiKey[]>
+      apiKeysAdd: (
+        name: string,
+        rawKey: string,
+      ) => Promise<{ ok: true; key: ApiKey } | { ok: false; reason: string }>
+      apiKeysRemove: (id: number) => Promise<{ ok: boolean }>
       themeSet: (sessionId: string, theme: string | null) => Promise<boolean>
       snapshotSave: (sessionId: string, data: string) => void
       sessionNew: () => Promise<{ pid: number; cwd: string } | null>
@@ -42,6 +55,7 @@ declare global {
         categoryId?: number | null
         name?: string
         instructions?: string
+        apiKeyId?: number
       }) => Promise<{ pid: number; cwd: string } | null>
       sessionStartFresh: (cwd: string) => Promise<{ pid: number; cwd: string } | null>
       sessionRemove: (sessionId: string) => Promise<{ removed: string[] }>
@@ -52,6 +66,7 @@ declare global {
         note?: string,
         name?: string,
         autoMode?: boolean,
+        apiKeyId?: number,
       ) => Promise<{ pid: number; cwd: string } | null>
       pickFolder: () => Promise<string | null>
       pickPath: (sessionId?: string) => Promise<string | null>

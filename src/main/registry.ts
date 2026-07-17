@@ -124,6 +124,70 @@ export function initRegistry(dbPath: string): void {
     db.exec(`ALTER TABLE edge ADD COLUMN trusted INTEGER NOT NULL DEFAULT 0;`)
     db.pragma('user_version = 6')
   }
+  if (v < 7) {
+    // Named Anthropic API keys. secret_enc holds the Electron safeStorage
+    // ciphertext (OS-keychain-backed) — never the plaintext. `hint` is the last
+    // few chars, for display only.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS api_key (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        hint TEXT NOT NULL,
+        secret_enc BLOB NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `)
+    db.pragma('user_version = 7')
+  }
+  if (v < 8) {
+    // Which API key (if any) a session runs on, so a resume re-applies it instead
+    // of silently falling back to the subscription.
+    db.exec(`ALTER TABLE node ADD COLUMN api_key_id INTEGER;`)
+    db.pragma('user_version = 8')
+  }
+}
+
+export function setNodeApiKey(sessionId: string, apiKeyId: number | null): void {
+  must().prepare('UPDATE node SET api_key_id=? WHERE session_id=?').run(apiKeyId, sessionId)
+}
+export function getNodeApiKey(sessionId: string): number | null {
+  const row = must().prepare('SELECT api_key_id FROM node WHERE session_id=?').get(sessionId) as
+    | { api_key_id: number | null }
+    | undefined
+  return row?.api_key_id ?? null
+}
+
+export interface ApiKeyRow {
+  id: number
+  name: string
+  hint: string
+  created_at: number
+}
+// List keys WITHOUT the secret — this is all the renderer ever sees.
+export function listApiKeys(): ApiKeyRow[] {
+  return must()
+    .prepare('SELECT id, name, hint, created_at FROM api_key ORDER BY created_at DESC, id DESC')
+    .all() as ApiKeyRow[]
+}
+export function addApiKey(name: string, hint: string, secretEnc: Buffer): ApiKeyRow {
+  const created_at = Date.now()
+  const info = must()
+    .prepare('INSERT INTO api_key (name, hint, secret_enc, created_at) VALUES (?,?,?,?)')
+    .run(name, hint, secretEnc, created_at)
+  return { id: Number(info.lastInsertRowid), name, hint, created_at }
+}
+// Main-process only: the encrypted blob, for safeStorage.decryptString at use time.
+export function getApiKeySecretEnc(id: number): Buffer | null {
+  const row = must().prepare('SELECT secret_enc FROM api_key WHERE id=?').get(id) as
+    | { secret_enc: Buffer }
+    | undefined
+  return row ? row.secret_enc : null
+}
+export function removeApiKey(id: number): void {
+  must().prepare('DELETE FROM api_key WHERE id=?').run(id)
+}
+export function apiKeyExists(id: number): boolean {
+  return !!must().prepare('SELECT 1 FROM api_key WHERE id=?').get(id)
 }
 
 export function setEdgeTrust(childId: string, trusted: boolean): void {

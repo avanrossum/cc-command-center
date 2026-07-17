@@ -1126,6 +1126,64 @@ body {
 .spawnauto {
   margin-top: 10px;
 }
+.setsection {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--cc-hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.keylist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+.keyrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-r-sm);
+}
+.keyname {
+  font-weight: 600;
+  font-size: 12px;
+}
+.keyhint {
+  font: 11px var(--cc-font-mono);
+  color: var(--cc-dim);
+  margin-right: auto;
+}
+.keyadd {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+.apikeypick {
+  margin-top: 8px;
+}
+.keywarn {
+  margin-top: 6px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--cc-dim);
+  border-left: 2px solid #d0a35b;
+  padding-left: 8px;
+}
+.keyselect {
+  margin-top: 6px;
+  width: 100%;
+  background: var(--cc-surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: 12px -apple-system, system-ui, sans-serif;
+}
 .spawnhint {
   margin-top: 8px;
   font-size: 11px;
