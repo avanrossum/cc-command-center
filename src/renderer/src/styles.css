@@ -935,6 +935,8 @@ body {
 .termhost {
   flex: 1;
   min-height: 0;
+  overflow: hidden; /* clip the xterm so its content can't force the column taller
+                       than the pane and shove the status bar below the window */
   padding: 6px 8px;
 }
 .termhost .xterm {
@@ -951,6 +953,10 @@ body {
   font: 11px var(--cc-font-mono);
   color: var(--cc-dim);
   background: var(--term-bg);
+  flex: none; /* always reserve the footer's height — never shrink or get pushed off */
+}
+.composer {
+  flex: none; /* same: the composer must not steal the status bar's space */
 }
 .tsbtn {
   font: 11px var(--cc-font-mono);
