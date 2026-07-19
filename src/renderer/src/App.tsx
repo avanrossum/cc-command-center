@@ -594,15 +594,21 @@ export function App() {
         <nav className="rail">
           {groups.map((g) => {
             const tag = g.id === null ? '·' : g.label || autoTag(g.name)
-            // Category dot lights when something in it needs you — same rule as
-            // the beacon ledger (a parked dialog or a blocked parent).
-            const hasWaiting = g.rows.some(
-              ({ s }) => !s.dormant && (s.attention === 'permission' || blockedSet.has(s.sessionId)),
-            )
+            // The most-urgent "needs you" state in this category, so the rail dot
+            // shows not just THAT a category needs you but WHY: needs-approval
+            // (amber) > blocked-on-child (pink) > your-turn (blue). null = quiet.
+            const rows = g.rows.filter((r) => !r.s.dormant)
+            const railNeed: DisplayState | null = rows.some((r) => r.s.attention === 'permission')
+              ? 'permission'
+              : rows.some((r) => blockedSet.has(r.s.sessionId))
+                ? 'blocked'
+                : rows.some((r) => r.s.state === 'waiting')
+                  ? 'waiting'
+                  : null
             return (
               <button
                 key={g.id ?? 'uncat'}
-                className={`rail-cell${selectedCat === g.id ? ' active' : ''}${hasWaiting ? ' waiting' : ''}`}
+                className={`rail-cell${selectedCat === g.id ? ' active' : ''}${railNeed ? ` needs need-${railNeed}` : ''}`}
                 style={{ '--cat-color': g.color } as CSSProperties}
                 onClick={() => {
                   setSelectedCat(g.id)

@@ -499,8 +499,8 @@ body {
   width: 3px;
   background: var(--cat-color, var(--cc-cat-terracotta));
 }
-/* Fires when a session in this category needs you (parked dialog or blocked). */
-.rail-cell.waiting::after {
+/* Fires when a session in this category needs you; color encodes WHY. */
+.rail-cell.needs::after {
   content: '';
   position: absolute;
   right: 0;
@@ -508,7 +508,17 @@ body {
   bottom: 9px;
   width: 3px;
   border-radius: 2px 0 0 2px;
+  background: var(--cc-dim);
+}
+.rail-cell.need-permission::after {
   background: var(--cc-permission);
+  animation: cc-pulse var(--cc-pulse) var(--cc-ease-out) infinite;
+}
+.rail-cell.need-blocked::after {
+  background: var(--cc-blocked);
+}
+.rail-cell.need-waiting::after {
+  background: var(--cc-waiting);
 }
 .rail-add {
   margin-top: auto;
