@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('cc', {
   // categories
   catCreate: (name: string) => ipcRenderer.invoke('cat:create', name),
   catRename: (id: number, name: string) => ipcRenderer.invoke('cat:rename', id, name),
+  sessionSetName: (sessionId: string, name: string) =>
+    ipcRenderer.invoke('session:setName', sessionId, name),
   catDelete: (id: number) => ipcRenderer.invoke('cat:delete', id),
   catSetLabel: (id: number, label: string | null) => ipcRenderer.invoke('cat:setLabel', id, label),
   catSetColor: (id: number, color: string) => ipcRenderer.invoke('cat:setColor', id, color),

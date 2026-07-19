@@ -1535,6 +1535,15 @@ ipcMain.handle('cat:rename', (_e, id: number, name: string) => {
   pushSessions()
   return true
 })
+// Rename a session's display name. Persisted in sessionNames (app_state); the
+// periodic scan honors the user name over Claude's generated title. Empty clears
+// it back to the generated title.
+ipcMain.handle('session:setName', (_e, sessionId: string, name: string) => {
+  if (!sessionId) return false
+  setSessionName(sessionId, name)
+  pushSessions()
+  return true
+})
 ipcMain.handle('cat:delete', (_e, id: number) => {
   deleteCategory(id)
   pushSessions()

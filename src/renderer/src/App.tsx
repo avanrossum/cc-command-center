@@ -202,6 +202,12 @@ export function App() {
     x: number
     y: number
   } | null>(null)
+  const [nameEdit, setNameEdit] = useState<{
+    sessionId: string
+    name: string
+    x: number
+    y: number
+  } | null>(null)
   // Instant theme feedback for the current terminal before the persisted value
   // round-trips back through the next snapshot. Cleared when the selection changes.
   const [themeOverride, setThemeOverride] = useState<{ key: string; name: string } | null>(null)
@@ -921,6 +927,21 @@ export function App() {
               window.cc.stateSet('activeSessionId', '')
             }
           }}
+          onRename={(s) => {
+            if (!s.sessionId) return
+            setNameEdit({ sessionId: s.sessionId, name: s.name ?? '', x: menu.x, y: menu.y })
+            setMenu(null)
+          }}
+        />
+      )}
+      {nameEdit && (
+        <SessionNameEditor
+          edit={nameEdit}
+          setEdit={setNameEdit}
+          onSaved={(sessionId, nm) => {
+            // Keep the open terminal's header in sync if it's this session.
+            if (selected?.sessionId === sessionId) setSelected({ ...selected, name: nm || `pid ${selected.pid}` })
+          }}
         />
       )}
       {spawn && (
@@ -1195,6 +1216,7 @@ function ContextMenu({
   onSend,
   onCopy,
   onRemove,
+  onRename,
 }: {
   menu: Menu
   snap: Snapshot
@@ -1208,6 +1230,7 @@ function ContextMenu({
   onSend: (s: Session) => void
   onCopy: (s: Session) => void
   onRemove: (s: Session) => void
+  onRename: (s: Session) => void
 }) {
   const s = menu.session
   const hasParent = edgeByChild.has(s.sessionId)
@@ -1246,6 +1269,9 @@ function ContextMenu({
               </>
             )}
             <div className="menusep" />
+            <button className="menuitem" onClick={() => onRename(s)}>
+              Rename…
+            </button>
             <button className="menuitem" onClick={() => onCopy(s)}>
               Copy last output
             </button>
@@ -1944,6 +1970,55 @@ function CategoryEditor({
           }}
         >
           Delete category
+        </button>
+      </div>
+    </>
+  )
+}
+
+function SessionNameEditor({
+  edit,
+  setEdit,
+  onSaved,
+}: {
+  edit: { sessionId: string; name: string; x: number; y: number }
+  setEdit: (v: null) => void
+  onSaved: (sessionId: string, name: string) => void
+}) {
+  const [name, setName] = useState(edit.name)
+  const close = () => setEdit(null)
+  const save = () => {
+    const nm = name.trim()
+    window.cc.sessionSetName(edit.sessionId, nm)
+    onSaved(edit.sessionId, nm)
+    close()
+  }
+  return (
+    <>
+      <div
+        className="menuscrim"
+        onClick={close}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          close()
+        }}
+      />
+      <div className="menu cateditor" style={{ left: edit.x, top: edit.y }}>
+        <div className="menuhead">Rename session</div>
+        <input
+          className="cat-in"
+          autoFocus
+          value={name}
+          placeholder="Name — blank restores the generated title"
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save()
+            if (e.key === 'Escape') close()
+          }}
+        />
+        <div className="menusep" />
+        <button className="menuitem" onClick={save}>
+          Save
         </button>
       </div>
     </>

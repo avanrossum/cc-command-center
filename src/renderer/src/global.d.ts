@@ -24,6 +24,7 @@ declare global {
       onSessions: (cb: (snapshot: unknown) => void) => () => void
       catCreate: (name: string) => Promise<{ id: number; name: string; color: string }>
       catRename: (id: number, name: string) => Promise<boolean>
+      sessionSetName: (sessionId: string, name: string) => Promise<boolean>
       catDelete: (id: number) => Promise<boolean>
       catSetLabel: (id: number, label: string | null) => Promise<boolean>
       catSetColor: (id: number, color: string) => Promise<boolean>
