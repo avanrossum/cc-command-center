@@ -65,10 +65,13 @@ let pollTimer: NodeJS.Timeout | null = null
 const DORMANT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000 // dormant/resumable sessions age out after a week
 
 // ---------- session polling (status board) ----------
-// A managed session parked on an interactive dialog (tool permission, folder
-// trust, plan approval). This is derived from the live PTY buffer, NOT the
-// transcript — see detectPrompt(). 'permission' covers every current dialog kind.
-type AttentionKind = 'permission'
+// A managed session parked on an interactive dialog it can't clear itself. Two
+// kinds, by what they ask of the human: 'permission' = "open a door" (approve /
+// trust / proceed so Claude can continue what it was doing); 'question' = "needs
+// your brain" (an AskUserQuestion / elicitation selection, or a turn that ended on
+// a question). Derived from the live PTY buffer and the hook — NOT the transcript,
+// which cannot see a live dialog.
+type AttentionKind = 'permission' | 'question'
 type EnrichedSession = LiveSession & {
   categoryId: number | null
   theme: string | null
@@ -192,10 +195,17 @@ function stripAnsi(s: string): string {
 
 // True if the managed terminal is currently showing an interactive dialog. Slice
 // the raw tail first (cheap) before stripping the whole 256KB buffer each poll.
-function detectPrompt(buffer: string): boolean {
-  if (!buffer) return false
+// The kind of interactive dialog a managed terminal is showing, or undefined.
+// Permission takes precedence — its phrases are specific — so an approval menu is
+// never misread as a plain question. The interactive-selection footer ("Enter to
+// select … to navigate") catches AskUserQuestion, which fires no hook at all.
+// Degrades safely to undefined if Claude changes the wording (coarse state wins).
+function detectInteractivePrompt(buffer: string): AttentionKind | undefined {
+  if (!buffer) return undefined
   const tail = stripAnsi(buffer.slice(-16000)).slice(-PROMPT_TAIL_CHARS)
-  return PROMPT_SIGNATURES.some((re) => re.test(tail))
+  if (PROMPT_SIGNATURES.some((re) => re.test(tail))) return 'permission'
+  if (/Enter to select/i.test(tail) && /to navigate/i.test(tail)) return 'question'
+  return undefined
 }
 
 // The gated command for a "why" line — strip the managed PTY tail, then parse it
@@ -207,9 +217,16 @@ function extractDialogCommand(buffer: string): string | undefined {
 }
 
 // The question a turn-ended session is waiting on, or undefined when its last
-// message isn't a question (protects the high-signal rule).
-function questionFromTranscript(path: string): string | undefined {
-  return questionFromText(readLastAssistantText(path))
+// message isn't a question (protects the high-signal rule). Cached by transcript
+// mtime — a turn-end question can persist for a long time (held until you act), so
+// without the cache every idle-but-asking session would re-read its tail each scan.
+const questionCache = new Map<string, { mtime: number; q: string | undefined }>()
+function questionFromTranscript(path: string, mtime: number | undefined, sid: string): string | undefined {
+  const cached = questionCache.get(sid)
+  if (cached && mtime !== undefined && cached.mtime === mtime) return cached.q
+  const q = questionFromText(readLastAssistantText(path))
+  if (mtime !== undefined) questionCache.set(sid, { mtime, q })
+  return q
 }
 
 // ---------- named API keys (secure) ----------
@@ -406,10 +423,11 @@ function snapshot(): Snapshot {
     // Only managed sessions have a live PTY buffer to scan; adopted/external
     // sessions keep their transcript-derived coarse state.
     const term = managed ? findManagedTerm(s.sessionId) : undefined
-    const bufferDialog = !!term && detectPrompt(term.buffer)
+    const promptKind = term ? detectInteractivePrompt(term.buffer) : undefined
+    const bufferDialog = promptKind === 'permission'
     let state = s.state
     let stateReason = s.stateReason
-    let attention: AttentionKind | undefined = bufferDialog ? 'permission' : undefined
+    let attention: AttentionKind | undefined = promptKind
 
     // Fuse in the hook-reported state (sessions TELL us; see status-hook.sh).
     // The hook wins when it is at least as fresh as the transcript — the +1500ms
@@ -438,25 +456,32 @@ function snapshot(): Snapshot {
         state = 'idle'
         stateReason = `hook: idle (${ago})`
       } else if (hs.state === 'permission') {
-        // The definitive "needs approval" edge — fires the instant the dialog
-        // opens. Clearing: any later hook event overwrites the file (approve →
-        // PostToolUse, deny/esc → Stop). For managed sessions the buffer scan is
-        // the steady-state owner (a long-approved tool run leaves the hook file
-        // saying 'permission' until PostToolUse — the 30s cap stops that going
-        // stale); adopted sessions have no buffer, so trust until overwritten.
+        // The definitive "needs you" edge — fires the instant the dialog opens.
+        // An elicitation dialog is a QUESTION (needs your thought), not a plain
+        // permission (open a door). Clearing: any later hook event overwrites the
+        // file (approve → PostToolUse, deny/esc → Stop). For managed permission
+        // menus the buffer scan is the steady-state owner (the 30s cap stops a
+        // long-approved tool run going stale); elicitations aren't buffer-owned,
+        // so they stay trusted until a later hook event overwrites.
+        const gateKind: AttentionKind = hs.kind === 'elicitation_dialog' ? 'question' : 'permission'
         state = 'working'
-        stateReason = `hook: permission prompt (${ago})`
-        // 30s cap only for the dialog kinds the buffer scan owns at steady state
-        // (permission_prompt matches PROMPT_SIGNATURES). An MCP elicitation
-        // dialog isn't in the signature table, so it stays trusted until a later
-        // hook event (PostToolUse fires the moment it's answered) overwrites.
+        stateReason = `hook: ${gateKind} prompt (${ago})`
         const bufferOwned = hs.kind !== 'elicitation_dialog'
-        if (term ? bufferDialog || age < 30_000 || !bufferOwned : true) attention = 'permission'
+        if (term ? bufferDialog || age < 30_000 || !bufferOwned : true) attention = gateKind
       }
     }
+    // Latch a hook-reported gate even when the transcript reads fresher: a live
+    // dialog is invisible to the transcript, so a 'working' tool_use record must
+    // not suppress a real "needs you". (State fusion above stays freshness-gated;
+    // only the attention flag latches here.) Cleared by the next hook event.
+    if (!attention && hs && hs.state === 'permission') {
+      attention = hs.kind === 'elicitation_dialog' ? 'question' : 'permission'
+    }
     // The "why" behind a needs-you moment. Permission → the gated command (from
-    // the buffer) or a coarse label; question → the actual question asked.
-    // Blocked-on-child is derived in the renderer from the edge graph.
+    // the buffer) or a coarse label. Question → the interactive dialog ("needs your
+    // answer") or, for a turn that ended on a question, the actual question. A
+    // genuine your-turn question HOLDS: it is rescued from aging to idle, so it
+    // stays visible until you act. Blocked-on-child is derived in the renderer.
     let why: string | undefined
     let whyKind: 'permission' | 'question' | undefined
     let whyCoarse: boolean | undefined
@@ -466,17 +491,34 @@ function snapshot(): Snapshot {
       if (cmd) {
         why = cmd
       } else {
-        // No readable buffer (adopted session, or an elicitation dialog the
-        // signature table doesn't parse) — an honest coarse label, flagged so the
-        // UI can mark it as coarse rather than pass it off as the real command.
-        why = hs?.kind === 'elicitation_dialog' ? 'responding to a prompt' : 'wants approval'
+        // No readable buffer (adopted session, or a dialog the parser can't isolate)
+        // — an honest coarse label, flagged so the UI marks it coarse rather than
+        // passing it off as the real command.
+        why = 'wants approval'
         whyCoarse = true
       }
-    } else if (state === 'waiting' && s.alive && !s.isSpare && s.transcriptPath) {
-      const q = questionFromTranscript(s.transcriptPath)
+    } else if (attention === 'question') {
+      // Interactive AskUserQuestion / elicitation: Claude is frozen needing your
+      // input. The question text lives in the dialog; a coarse label for now.
+      whyKind = 'question'
+      why = 'needs your answer'
+      whyCoarse = true
+    } else if (
+      (state === 'waiting' || state === 'idle') &&
+      s.alive &&
+      !s.isSpare &&
+      s.lastRecordType === 'assistant' &&
+      s.transcriptPath
+    ) {
+      const q = questionFromTranscript(s.transcriptPath, s.transcriptMtimeMs, s.sessionId)
       if (q) {
         whyKind = 'question'
         why = q
+        // Your turn — a real question holds until you act, never silently idle.
+        if (state === 'idle') {
+          state = 'waiting'
+          stateReason = 'your turn — asked a question'
+        }
       }
     }
     return {

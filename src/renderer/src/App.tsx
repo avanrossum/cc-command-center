@@ -26,7 +26,7 @@ interface Session {
   theme: string | null
   dormant?: boolean
   managed?: boolean
-  attention?: 'permission' // parked on a permission/approval dialog (buffer-scanned)
+  attention?: 'permission' | 'question' // parked on a dialog: approve (door) vs answer (brain)
   // The substance behind a needs-you moment — see EnrichedSession in main. Blocked
   // -on-child is derived here from the edge graph, not sent from main.
   whyKind?: 'permission' | 'question'
@@ -304,16 +304,19 @@ export function App() {
     }
     return blocked
   }, [live, snap.edges])
-  // Display state, most-urgent wins: a parked dialog (self needs action) beats
-  // blocked-on-child, which beats the coarse transcript state.
+  // Display state, most-urgent wins: a parked permission dialog (open a door) beats
+  // blocked-on-child beats the coarse transcript state. A question gate (needs your
+  // brain) reads as "your turn" (blue), same tier as a turn that ended asking you.
   const dstate = (s: Session): DisplayState =>
     s.dormant
       ? s.state
       : s.attention === 'permission'
         ? 'permission'
-        : blockedSet.has(s.sessionId)
-          ? 'blocked'
-          : s.state
+        : s.attention === 'question'
+          ? 'waiting'
+          : blockedSet.has(s.sessionId)
+            ? 'blocked'
+            : s.state
 
   const nameOf = (s: Session): string =>
     s.name ?? (s.dormant ? s.sessionId.slice(0, 8) : `pid ${s.pid}`)
@@ -344,7 +347,10 @@ export function App() {
       const child = blockingChildOf.get(s.sessionId)
       return child ? { kind: 'blocked', text: child } : null
     }
-    if (s.state === 'waiting' && s.whyKind === 'question' && s.why) return { kind: 'question', text: s.why, gloss: s.whyGloss }
+    // A question gate (interactive) or a turn that ended asking you — both read as
+    // 'waiting' (blue) and carry whyKind==='question'.
+    if (d === 'waiting' && s.whyKind === 'question' && s.why)
+      return { kind: 'question', text: s.why, coarse: s.whyCoarse, gloss: s.whyGloss }
     return null
   }
 
@@ -362,14 +368,19 @@ export function App() {
   }, [live, blockedSet]) // eslint-disable-line react-hooks/exhaustive-deps
   const liveCount = useMemo(() => live.filter((s) => !s.dormant).length, [live])
   const dormantCount = useMemo(() => live.filter((s) => s.dormant).length, [live])
-  // The "NEEDS YOU" ledger: only sessions that genuinely can't proceed without
-  // you — parked on a dialog, or blocked on an unfinished blocking child. Plain
-  // 'waiting' (a turn that just ended) is NOT included: it's usually a session
-  // that replied and went idle, which was the old over-flagging noise.
+  // The "NEEDS YOU" ledger: sessions that genuinely want you — a permission gate
+  // (open a door), a question (interactive or a turn that ended asking you, both
+  // whyKind==='question'), or a parent blocked on an unfinished child. A turn that
+  // ended WITHOUT a question is NOT included — that's the replied-and-idle noise
+  // the ledger was built to drop.
   const needsYou = useMemo(
     () =>
       live
-        .filter((s) => !s.dormant && (s.attention === 'permission' || blockedSet.has(s.sessionId)))
+        .filter(
+          (s) =>
+            !s.dormant &&
+            (s.attention === 'permission' || s.whyKind === 'question' || blockedSet.has(s.sessionId)),
+        )
         .sort((a, b) => STATE[dstate(a)].order - STATE[dstate(b)].order),
     [live, blockedSet], // eslint-disable-line react-hooks/exhaustive-deps
   )
@@ -641,13 +652,15 @@ export function App() {
             const tag = g.id === null ? '·' : g.label || autoTag(g.name)
             // The most-urgent "needs you" state in this category, so the rail dot
             // shows not just THAT a category needs you but WHY: needs-approval
-            // (amber) > blocked-on-child (pink) > your-turn (blue). null = quiet.
+            // (amber) > blocked-on-child (pink) > your-turn/question (blue). null =
+            // quiet. Only a genuine question counts for blue — not a transient
+            // turn-end that will settle to idle — matching the NEEDS YOU ledger.
             const rows = g.rows.filter((r) => !r.s.dormant)
             const railNeed: DisplayState | null = rows.some((r) => r.s.attention === 'permission')
               ? 'permission'
               : rows.some((r) => blockedSet.has(r.s.sessionId))
                 ? 'blocked'
-                : rows.some((r) => r.s.state === 'waiting')
+                : rows.some((r) => r.s.whyKind === 'question')
                   ? 'waiting'
                   : null
             return (
@@ -753,11 +766,16 @@ export function App() {
                             <span className="whyverb">wants</span> <code>{why.text}</code>
                           </>
                         ))}
-                      {why.kind === 'question' && (
-                        <>
-                          <span className="whyverb">asked</span> {why.text}
-                        </>
-                      )}
+                      {why.kind === 'question' &&
+                        (why.coarse ? (
+                          <>
+                            {why.text} <span className="whytag">coarse</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="whyverb">asked</span> {why.text}
+                          </>
+                        ))}
                       {why.kind === 'blocked' && (
                         <>
                           <span className="whyverb">blocked →</span> {why.text}
