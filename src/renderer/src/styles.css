@@ -774,6 +774,73 @@ body {
   flex: none;
 }
 
+/* ---- needs-you "why" line: the substance under a gated / blocked / asking row.
+   High-signal only — whyOf() returns null for everything else, so plain working /
+   idle rows never grow this line. ---- */
+.row.has-why {
+  align-items: flex-start;
+}
+.row.has-why .cc-dot {
+  margin-top: 4px;
+}
+.row.has-why .meta {
+  margin-top: 3px;
+}
+.why {
+  display: block;
+  margin-top: 3px;
+  font-family: ui-monospace, monospace;
+  font-size: 10.5px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+}
+.why .whyverb {
+  color: var(--cc-faint);
+}
+.why code {
+  font-family: ui-monospace, monospace;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.why-permission {
+  color: var(--cc-permission);
+}
+.why-permission code {
+  color: var(--cc-permission);
+  background: rgba(245, 158, 11, 0.1);
+}
+.why-question {
+  color: var(--cc-waiting);
+  white-space: normal; /* a question may wrap to two lines */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.why-blocked {
+  color: var(--cc-blocked);
+}
+.whytag {
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cc-faint);
+  border: 1px solid var(--cc-hairline);
+  border-radius: 20px;
+  padding: 0 5px;
+  margin-left: 4px;
+}
+.whygloss {
+  display: block;
+  font-style: italic;
+  color: var(--cc-faint);
+  margin-top: 2px;
+  white-space: normal;
+}
+
 /* ---- terminal area ---- */
 .terminalarea {
   flex: 1;

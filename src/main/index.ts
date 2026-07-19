@@ -23,6 +23,7 @@ import {
   findTranscript,
 } from './engine/sessions'
 import { readLastAssistantText } from './engine/transcript'
+import { parseDialogCommand, questionFromText } from './engine/dialog'
 import type { LiveSession } from './engine/types'
 import { installAppMenu, setAboutPanel } from './about'
 import { APP_VERSION, BUILD_HASH, BUILD_TIME, FULL_VERSION } from '../shared/version'
@@ -74,6 +75,16 @@ type EnrichedSession = LiveSession & {
   dormant?: boolean // registry node with no live process — resumable, survives restart
   managed?: boolean // the app owns this session's PTY, so it can receive injected prompts
   attention?: AttentionKind // parked on a dialog waiting for the human (high-signal)
+  // The substance behind a "needs you" moment — the answer to "why is this
+  // waiting on me". 'permission' → the gated command (verbatim from the PTY
+  // buffer, or a coarse label when unreadable); 'question' → the actual question
+  // the session asked. Blocked-on-child is derived in the renderer from the edge
+  // graph. whyGloss is the Arbiter seam: a plain-English gloss the control agent
+  // fills later — always undefined here, so nothing depends on it or on a key.
+  whyKind?: 'permission' | 'question'
+  why?: string
+  whyCoarse?: boolean // coarse label, no verbatim command (adopted / elicitation dialog)
+  whyGloss?: string // reserved for the Arbiter; never populated by this path
 }
 interface Snapshot {
   home: string
@@ -185,6 +196,20 @@ function detectPrompt(buffer: string): boolean {
   if (!buffer) return false
   const tail = stripAnsi(buffer.slice(-16000)).slice(-PROMPT_TAIL_CHARS)
   return PROMPT_SIGNATURES.some((re) => re.test(tail))
+}
+
+// The gated command for a "why" line — strip the managed PTY tail, then parse it
+// with the pure, unit-tested parser (see engine/dialog.ts). Returns undefined when
+// nothing clean is isolated, so the caller falls back to a coarse label.
+function extractDialogCommand(buffer: string): string | undefined {
+  if (!buffer) return undefined
+  return parseDialogCommand(stripAnsi(buffer.slice(-16000)).slice(-PROMPT_TAIL_CHARS))
+}
+
+// The question a turn-ended session is waiting on, or undefined when its last
+// message isn't a question (protects the high-signal rule).
+function questionFromTranscript(path: string): string | undefined {
+  return questionFromText(readLastAssistantText(path))
 }
 
 // ---------- named API keys (secure) ----------
@@ -429,6 +454,31 @@ function snapshot(): Snapshot {
         if (term ? bufferDialog || age < 30_000 || !bufferOwned : true) attention = 'permission'
       }
     }
+    // The "why" behind a needs-you moment. Permission → the gated command (from
+    // the buffer) or a coarse label; question → the actual question asked.
+    // Blocked-on-child is derived in the renderer from the edge graph.
+    let why: string | undefined
+    let whyKind: 'permission' | 'question' | undefined
+    let whyCoarse: boolean | undefined
+    if (attention === 'permission') {
+      whyKind = 'permission'
+      const cmd = term && bufferDialog ? extractDialogCommand(term.buffer) : undefined
+      if (cmd) {
+        why = cmd
+      } else {
+        // No readable buffer (adopted session, or an elicitation dialog the
+        // signature table doesn't parse) — an honest coarse label, flagged so the
+        // UI can mark it as coarse rather than pass it off as the real command.
+        why = hs?.kind === 'elicitation_dialog' ? 'responding to a prompt' : 'wants approval'
+        whyCoarse = true
+      }
+    } else if (state === 'waiting' && s.alive && !s.isSpare && s.transcriptPath) {
+      const q = questionFromTranscript(s.transcriptPath)
+      if (q) {
+        whyKind = 'question'
+        why = q
+      }
+    }
     return {
       ...s,
       state,
@@ -438,6 +488,9 @@ function snapshot(): Snapshot {
       theme: nodes.get(s.sessionId)?.theme ?? null,
       managed,
       attention,
+      why,
+      whyKind,
+      whyCoarse,
     }
   })
 

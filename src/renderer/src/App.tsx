@@ -27,6 +27,12 @@ interface Session {
   dormant?: boolean
   managed?: boolean
   attention?: 'permission' // parked on a permission/approval dialog (buffer-scanned)
+  // The substance behind a needs-you moment — see EnrichedSession in main. Blocked
+  // -on-child is derived here from the edge graph, not sent from main.
+  whyKind?: 'permission' | 'question'
+  why?: string
+  whyCoarse?: boolean
+  whyGloss?: string // Arbiter seam — a plain-English gloss, rendered only when present
 }
 interface Category {
   id: number
@@ -308,6 +314,39 @@ export function App() {
         : blockedSet.has(s.sessionId)
           ? 'blocked'
           : s.state
+
+  const nameOf = (s: Session): string =>
+    s.name ?? (s.dormant ? s.sessionId.slice(0, 8) : `pid ${s.pid}`)
+
+  // The unfinished blocking child a blocked parent is waiting on, for the
+  // "blocked → child" why-line. Same source as blockedSet (edges + child state).
+  const blockingChildOf = useMemo(() => {
+    const stateById = new Map(live.map((s) => [s.sessionId, s.state]))
+    const nameById = new Map(live.map((s) => [s.sessionId, nameOf(s)]))
+    const m = new Map<string, string>()
+    for (const e of snap.edges) {
+      if (e.type !== 'blocking') continue
+      const cs = stateById.get(e.child_id)
+      if (cs === 'working' || cs === 'waiting') m.set(e.parent_id, nameById.get(e.child_id) ?? e.child_id.slice(0, 8))
+    }
+    return m
+  }, [live, snap.edges]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The needs-you substance to show under a row, or null (high-signal: only a real
+  // gate, a genuine question, or a blocked parent ever gets a why-line).
+  const whyOf = (
+    s: Session,
+  ): { kind: 'permission' | 'question' | 'blocked'; text: string; coarse?: boolean; gloss?: string } | null => {
+    if (s.dormant) return null
+    const d = dstate(s)
+    if (d === 'permission' && s.why) return { kind: 'permission', text: s.why, coarse: s.whyCoarse, gloss: s.whyGloss }
+    if (d === 'blocked') {
+      const child = blockingChildOf.get(s.sessionId)
+      return child ? { kind: 'blocked', text: child } : null
+    }
+    if (s.state === 'waiting' && s.whyKind === 'question' && s.why) return { kind: 'question', text: s.why, gloss: s.whyGloss }
+    return null
+  }
 
   const counts = useMemo(() => {
     const c: Record<DisplayState, number> = {
@@ -670,10 +709,12 @@ export function App() {
             {selectedGroup.rows.length === 0 && (
               <li className="emptycat">right-click a session to move it here</li>
             )}
-            {selectedGroup.rows.map(({ s, depth, edgeType }) => (
+            {selectedGroup.rows.map(({ s, depth, edgeType }) => {
+              const why = whyOf(s)
+              return (
               <li
                 key={s.sessionId}
-                className={`row state-${dstate(s)}${s.dormant ? ' dormant' : ''}${selected?.key === s.sessionId ? ' sel' : ''}`}
+                className={`row state-${dstate(s)}${s.dormant ? ' dormant' : ''}${selected?.key === s.sessionId ? ' sel' : ''}${why ? ' has-why' : ''}`}
                 style={{ paddingLeft: 10 + depth * 16 }}
                 title={s.stateReason}
                 onClick={() => openSession(s)}
@@ -700,6 +741,31 @@ export function App() {
                     {s.name ?? <em>{s.dormant ? s.sessionId.slice(0, 8) : `pid ${s.pid}`}</em>}
                   </span>
                   <span className="rowcwd">{short(s.cwd)}</span>
+                  {why && (
+                    <span className={`why why-${why.kind}`} title={why.text}>
+                      {why.kind === 'permission' &&
+                        (why.coarse ? (
+                          <>
+                            {why.text} <span className="whytag">coarse</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="whyverb">wants</span> <code>{why.text}</code>
+                          </>
+                        ))}
+                      {why.kind === 'question' && (
+                        <>
+                          <span className="whyverb">asked</span> {why.text}
+                        </>
+                      )}
+                      {why.kind === 'blocked' && (
+                        <>
+                          <span className="whyverb">blocked →</span> {why.text}
+                        </>
+                      )}
+                      {why.gloss && <span className="whygloss">{why.gloss}</span>}
+                    </span>
+                  )}
                 </span>
                 {s.dormant ? (
                   <span className="meta resume">resume</span>
@@ -707,7 +773,8 @@ export function App() {
                   <span className="meta">{fmtAge(s.transcriptMtimeMs, snap.scannedAt)}</span>
                 )}
               </li>
-            ))}
+              )
+            })}
           </ul>
         </aside>
 
