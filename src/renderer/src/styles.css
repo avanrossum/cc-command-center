@@ -1478,7 +1478,7 @@ body {
 
 /* ---- category editor popover ---- */
 .cateditor {
-  min-width: 216px;
+  min-width: 248px;
 }
 .cat-in {
   width: 100%;
@@ -1503,6 +1503,36 @@ body {
   flex: none;
   text-align: center;
   font-size: 16px;
+}
+.cat-emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  margin: 6px 0 2px;
+}
+.cat-emoji-opt {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--cc-r-sm);
+  cursor: pointer;
+  padding: 0;
+}
+.cat-emoji-opt.none {
+  color: var(--cc-faint);
+  font-size: 13px;
+}
+.cat-emoji-opt:hover {
+  background: var(--cc-fill-hover);
+}
+.cat-emoji-opt.on {
+  border-color: var(--cc-waiting);
+  background: rgba(96, 165, 250, 0.14);
 }
 select.cat-in {
   appearance: none;

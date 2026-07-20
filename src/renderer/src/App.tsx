@@ -175,6 +175,16 @@ const CAT_PALETTE = [
   '#2fb8a0', '#e0625f', '#9bbf4a', '#6d7cf0',
 ]
 
+// A curated palette of category-labelling emoji, so picking one is a click — most
+// people don't know the macOS fn / ctrl-⌘-space picker. Typing/pasting still works.
+const CAT_EMOJI = [
+  '💼', '🏢', '📊', '💰', '📁', '🗂️', '📈', '🧾',
+  '💻', '⚙️', '🔧', '🚀', '🧪', '🐛', '🖥️', '🤖',
+  '☁️', '🔌', '🗄️', '📦', '🧠', '💡', '🔬', '🧩',
+  '🤝', '🎯', '👥', '🏠', '🌊', '🌱', '🎨', '📚',
+  '⭐', '🔥', '⚡', '🔔', '🗓️', '📝', '✈️', '🎛️',
+]
+
 export function App() {
   const [snap, setSnap] = useState<Snapshot>({
     home: '',
@@ -197,15 +207,14 @@ export function App() {
   const openOrder = useRef<Map<string, number>>(new Map())
   const openSeq = useRef(0)
   const [menu, setMenu] = useState<Menu | null>(null)
-  const [newCat, setNewCat] = useState(false)
-  const [newCatName, setNewCatName] = useState('')
   const [version, setVersion] = useState('')
   // The category rail selects ONE collection; its tree shows in the pane below.
   const [selectedCat, setSelectedCat] = useState<number | null>(null)
   const initCatRef = useRef(false)
-  // Right-click a rail cell → edit its name / tag / color / delete.
+  // Right-click a rail cell to edit it, or the ＋ to create one — same editor.
+  // id === null puts the editor in create mode (name / emoji / word / color).
   const [catEdit, setCatEdit] = useState<{
-    id: number
+    id: number | null
     name: string
     color: string
     label: string | null
@@ -563,15 +572,6 @@ export function App() {
     if (type === 'blocking' || type === 'tangential') window.cc.edgeSet(child.sessionId, parent.sessionId, type)
     setMenu(null)
   }
-  const createCategory = async () => {
-    const name = newCatName.trim()
-    if (name) {
-      const c = await window.cc.catCreate(name)
-      if (c?.id != null) setSelectedCat(c.id)
-    }
-    setNewCatName('')
-    setNewCat(false)
-  }
   // Beacon "needs you" click: switch the rail to that session's category, then open it.
   const jumpTo = (s: Session) => {
     setSelectedCat(s.categoryId)
@@ -704,7 +704,22 @@ export function App() {
               </button>
             )
           })}
-          <button className="rail-add" onClick={() => setNewCat(true)} title="New category">
+          <button
+            className="rail-add"
+            title="New category"
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect()
+              setCatEdit({
+                id: null,
+                name: '',
+                color: '',
+                label: null,
+                emoji: null,
+                x: r.right + 6,
+                y: Math.max(48, Math.min(r.top, window.innerHeight - 380)),
+              })
+            }}
+          >
             ＋
           </button>
         </nav>
@@ -713,23 +728,6 @@ export function App() {
           <button className="newsession" onClick={() => setNewSessionOpen(true)}>
             ＋ New session…
           </button>
-          {newCat && (
-            <input
-              className="newcatinput"
-              autoFocus
-              placeholder="New category name…"
-              value={newCatName}
-              onChange={(e) => setNewCatName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') createCategory()
-                if (e.key === 'Escape') {
-                  setNewCat(false)
-                  setNewCatName('')
-                }
-              }}
-              onBlur={createCategory}
-            />
-          )}
           <div className="treehead">
             <span className="cdot" style={{ background: selectedGroup.color }} />
             <span className="cname">{selectedGroup.name}</span>
@@ -986,8 +984,9 @@ export function App() {
           assign={assign}
           setEdge={setEdge}
           onNewCat={() => {
+            const pos = menu ? { x: menu.x, y: menu.y } : { x: 90, y: 110 }
             setMenu(null)
-            setNewCat(true)
+            setCatEdit({ id: null, name: '', color: '', label: null, emoji: null, x: pos.x, y: pos.y })
           }}
           onSpawn={(s, type) => {
             setMenu(null)
@@ -1077,7 +1076,7 @@ export function App() {
           close={() => setNewSessionOpen(false)}
         />
       )}
-      {catEdit && <CategoryEditor edit={catEdit} setEdit={setCatEdit} />}
+      {catEdit && <CategoryEditor edit={catEdit} setEdit={setCatEdit} onCreated={(id) => setSelectedCat(id)} />}
       {logOpen && (
         <MessageLog
           messages={snap.messages ?? []}
@@ -1999,9 +1998,10 @@ function SendComposer({
 function CategoryEditor({
   edit,
   setEdit,
+  onCreated,
 }: {
   edit: {
-    id: number
+    id: number | null // null → create mode
     name: string
     color: string
     label: string | null
@@ -2010,21 +2010,36 @@ function CategoryEditor({
     y: number
   }
   setEdit: (v: null) => void
+  onCreated?: (id: number) => void
 }) {
+  const isCreate = edit.id === null
   const [name, setName] = useState(edit.name)
   const [tag, setTag] = useState(edit.label ?? '')
   const [emoji, setEmoji] = useState(edit.emoji ?? '')
   const [color, setColor] = useState(edit.color)
   const close = () => setEdit(null)
-  const save = () => {
+  const save = async () => {
     const nm = name.trim()
-    if (nm && nm !== edit.name) window.cc.catRename(edit.id, nm)
-    window.cc.catSetLabel(edit.id, tag.trim().slice(0, 8) || null)
+    const label = tag.trim().slice(0, 8) || null
     // Keep only the first grapheme (a single emoji can span several code points —
     // variation selectors, ZWJ sequences); empty clears it.
     const g = emoji.trim()
     const firstGrapheme = g ? [...new Intl.Segmenter().segment(g)][0]?.segment ?? null : null
-    window.cc.catSetEmoji(edit.id, firstGrapheme)
+    if (edit.id === null) {
+      if (!nm) return close() // no name → nothing to create
+      const c = await window.cc.catCreate(nm)
+      if (c?.id != null) {
+        await window.cc.catSetLabel(c.id, label)
+        await window.cc.catSetEmoji(c.id, firstGrapheme)
+        if (color) await window.cc.catSetColor(c.id, color) // else keep the auto-assigned color
+        onCreated?.(c.id)
+      }
+    } else {
+      if (nm && nm !== edit.name) window.cc.catRename(edit.id, nm)
+      window.cc.catSetLabel(edit.id, label)
+      window.cc.catSetEmoji(edit.id, firstGrapheme)
+      if (color && color !== edit.color) window.cc.catSetColor(edit.id, color)
+    }
     close()
   }
   return (
@@ -2038,7 +2053,7 @@ function CategoryEditor({
         }}
       />
       <div className="menu cateditor" style={{ left: edit.x, top: edit.y }}>
-        <div className="menuhead">Category</div>
+        <div className="menuhead">{isCreate ? 'New category' : 'Category'}</div>
         <input
           className="cat-in"
           autoFocus
@@ -2066,13 +2081,33 @@ function CategoryEditor({
             className="cat-in"
             value={tag}
             maxLength={8}
-            placeholder={`Short word (default ${autoTag(edit.name)})`}
+            placeholder={`Short word (default ${autoTag(name || edit.name || '?')})`}
             onChange={(e) => setTag(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') save()
               if (e.key === 'Escape') close()
             }}
           />
+        </div>
+        <div className="cat-emoji-grid">
+          <button
+            type="button"
+            className={`cat-emoji-opt none${!emoji.trim() ? ' on' : ''}`}
+            title="No emoji"
+            onClick={() => setEmoji('')}
+          >
+            ⊘
+          </button>
+          {CAT_EMOJI.map((e) => (
+            <button
+              type="button"
+              key={e}
+              className={`cat-emoji-opt${emoji.trim() === e ? ' on' : ''}`}
+              onClick={() => setEmoji(e)}
+            >
+              {e}
+            </button>
+          ))}
         </div>
         <div className="cat-colors">
           {CAT_PALETTE.map((col) => (
@@ -2081,26 +2116,25 @@ function CategoryEditor({
               className={`cat-sw${col === color ? ' on' : ''}`}
               style={{ background: col }}
               title={col}
-              onClick={() => {
-                setColor(col)
-                window.cc.catSetColor(edit.id, col)
-              }}
+              onClick={() => setColor(col)}
             />
           ))}
         </div>
         <div className="menusep" />
         <button className="menuitem" onClick={save}>
-          Save
+          {isCreate ? 'Create' : 'Save'}
         </button>
-        <button
-          className="menuitem danger"
-          onClick={() => {
-            window.cc.catDelete(edit.id)
-            close()
-          }}
-        >
-          Delete category
-        </button>
+        {edit.id !== null && (
+          <button
+            className="menuitem danger"
+            onClick={() => {
+              window.cc.catDelete(edit.id as number)
+              close()
+            }}
+          >
+            Delete category
+          </button>
+        )}
       </div>
     </>
   )
