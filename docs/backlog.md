@@ -76,6 +76,26 @@ genuinely waiting from one that merely looks parked (the done-vs-turn call the s
 deferred to it). Needs a demotion path in the snapshot, and a bias toward leaving a flag up when
 unsure — a missed flag costs more than a spurious one.
 
+## Fleet activity view — SHIPPED v0.11.0 (2026-07-20); pop-out deferred
+
+The subagent/task view (roadmap.md §Fleet activity). Data source confirmed against
+1834 real transcripts before building — corrected two wrong guesses (tool is named
+`Agent` here not `Task`; `message.content` is a bare string ~4% of the time, not always
+a list). `src/main/engine/subtasks.ts` parses Agent/Task `tool_use`→`tool_result` pairs,
+mtime-cached, 8MB-bounded. Renders as an arbiter-style collapsed panel in the companion.
+
+**Deferred, deliberate — the next step here:**
+- **Pop-out to a floating panel.** The user wants both the Strip AND the fleet activity
+  panel to optionally "pop out". Chosen approach (user, 2026-07-20): **in-app detach
+  first** (a large floating panel over the terminal area, reusing the existing React
+  tree + snapshot — cheap), then a **true OS window later** (a second BrowserWindow, its
+  own feed + lifecycle — the real value is an always-on-top monitor visible while working
+  in OTHER apps; that's the ambient/out-of-app thread). Build the in-app detach as a
+  reusable mechanism both surfaces share.
+- **Richer per-agent status** from the `<session>/subagents/` + `/workflows/` journals
+  (progress %, live tool). Current view uses the universal main-transcript signal only
+  (running / done / stalled). The journals add depth for SDK/harness-driven agents.
+
 ## Quick wins (logged)
 
 - ✅ **Context-window selector on spawn (SHIPPED v0.9.25, 2026-07-20).** New sessions could pick
