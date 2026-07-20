@@ -1492,6 +1492,12 @@ body {
 .spawnmodal {
   width: 460px;
   max-width: 100%;
+  /* Bounded to the viewport (minus the scrim's 24px padding top+bottom) and
+     scrolls internally — otherwise a modal taller than a small / non-fullscreen
+     window pushed its top and bottom off-screen with no way to reach them. */
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  overscroll-behavior: contain; /* don't chain scroll to the background */
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
