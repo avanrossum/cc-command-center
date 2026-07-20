@@ -235,6 +235,7 @@ export function App() {
     color: string
     label: string | null
     emoji: string | null
+    count: number // sessions currently in it — shown before a delete
     x: number
     y: number
   } | null>(null)
@@ -779,6 +780,7 @@ export function App() {
                       color: g.color,
                       label: g.label,
                       emoji: g.emoji,
+                      count: g.rows.length,
                       x: e.clientX,
                       y: e.clientY,
                     })
@@ -801,6 +803,7 @@ export function App() {
                 color: '',
                 label: null,
                 emoji: null,
+                count: 0,
                 x: r.right + 6,
                 y: Math.max(48, Math.min(r.top, window.innerHeight - 380)),
               })
@@ -1208,7 +1211,16 @@ export function App() {
           onNewCat={() => {
             const pos = menu ? { x: menu.x, y: menu.y } : { x: 90, y: 110 }
             setMenu(null)
-            setCatEdit({ id: null, name: '', color: '', label: null, emoji: null, x: pos.x, y: pos.y })
+            setCatEdit({
+              id: null,
+              name: '',
+              color: '',
+              label: null,
+              emoji: null,
+              count: 0,
+              x: pos.x,
+              y: pos.y,
+            })
           }}
           onSpawn={(s, type) => {
             setMenu(null)
@@ -2268,6 +2280,7 @@ function CategoryEditor({
     color: string
     label: string | null
     emoji: string | null
+    count: number
     x: number
     y: number
   }
@@ -2279,6 +2292,9 @@ function CategoryEditor({
   const [tag, setTag] = useState(edit.label ?? '')
   const [emoji, setEmoji] = useState(edit.emoji ?? '')
   const [color, setColor] = useState(edit.color)
+  // Deleting a category used to fire on a single click, silently. It's a
+  // container holding sessions, so it asks first and says where they go.
+  const [confirmDel, setConfirmDel] = useState(false)
   const close = () => setEdit(null)
   const save = async () => {
     const nm = name.trim()
@@ -2378,17 +2394,36 @@ function CategoryEditor({
         <button className="menuitem" onClick={save}>
           {isCreate ? 'Create' : 'Save'}
         </button>
-        {edit.id !== null && (
-          <button
-            className="menuitem danger"
-            onClick={() => {
-              window.cc.catDelete(edit.id as number)
-              close()
-            }}
-          >
-            Delete category
-          </button>
-        )}
+        {edit.id !== null &&
+          (confirmDel ? (
+            <>
+              {/* Say what actually happens. Sessions are NOT deleted — node.category_id
+                  falls back to NULL via ON DELETE SET NULL, so they land in Uncat. */}
+              <div className="menunote">
+                {edit.count === 0
+                  ? 'Delete this category?'
+                  : `${edit.count} session${edit.count === 1 ? '' : 's'} move${
+                      edit.count === 1 ? 's' : ''
+                    } to Uncat. No session is deleted.`}
+              </div>
+              <button
+                className="menuitem danger"
+                onClick={() => {
+                  window.cc.catDelete(edit.id as number)
+                  close()
+                }}
+              >
+                Delete “{edit.name}”
+              </button>
+              <button className="menuitem" onClick={() => setConfirmDel(false)}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button className="menuitem danger" onClick={() => setConfirmDel(true)}>
+              Delete category
+            </button>
+          ))}
       </div>
     </>
   )

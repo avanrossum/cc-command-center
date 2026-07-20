@@ -1788,6 +1788,14 @@ body {
 .menuitem:hover {
   background: rgba(96, 165, 250, 0.14);
 }
+/* Consequence line above a destructive confirm — plain, not italic like a hint,
+   because it states what will happen rather than offering advice. */
+.menunote {
+  color: var(--dim);
+  font-size: 11px;
+  padding: 6px 8px;
+  line-height: 1.4;
+}
 .menuitem.danger {
   color: #f0857d;
 }
