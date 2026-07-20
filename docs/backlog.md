@@ -22,6 +22,20 @@ break the worktree's base if run before it merges.
 
 ## Quick wins (logged)
 
+- ✅ **Context-window selector on spawn (SHIPPED v0.9.25, 2026-07-20).** New sessions could pick
+  a model but not a context window, so every spawn landed on the default window. Claude Code
+  selects the 1M variant with a **`[1m]` suffix on the model string** (`--model opus[1m]`) —
+  verified empirically: `claude --model 'opus[1m]' -p … --output-format json` reports
+  `"claude-opus-4-8[1m]"` with `contextWindow: 1000000`, and the statusLine payload's
+  `model.display_name` reads `Opus 4.8 (1M context)` vs plain `Opus 4.8`. In the CLI bundle the
+  alias allowlist is `["sonnet","opus","haiku","fable","best","sonnet[1m]","opus[1m]","fable[1m]","opusplan"]`
+  and the display gate is `endsWith("[1m]") && supports_1m_suffix`, so the suffix attaches to
+  aliases *and* full ids (`claude-opus-4-8[1m]`) but **not Haiku** (no 1M variant). A third
+  "Context" dropdown sits beside Model/Effort, remembered via a new `lastContext` app-state key
+  (kept separate from `lastModel` so the two restore independently). Disabled when the model is
+  Default or Haiku. NB: `modelUsage.contextWindow` and the statusLine `context_window_size` both
+  report the *model's* max (1000000) regardless of the suffix — the display_name is the reliable
+  signal that 1M is actually engaged.
 - ✅ **Rename a session from the sidebar (SHIPPED v0.9.24, 2026-07-18).** Right-click a session
   → "Rename…" → a small popover (`SessionNameEditor`, mirrors the category editor); blank restores
   the generated title. `session:setName` IPC → `setSessionName`; the open terminal header stays in

@@ -93,6 +93,7 @@ interface AppSettings {
   firstRunSeen: boolean
   lastModel: string // remembered New-session model choice ('' = default)
   lastEffort: string // remembered reasoning effort ('' = default)
+  lastContext: string // remembered context window ('' = default, '1m' = [1m] suffix)
   statusHooksInstalled: boolean // hook-driven status wired into ~/.claude/settings.json
   spawnAutoMode: boolean // last "start child in auto mode" choice (default ON)
 }
@@ -104,6 +105,7 @@ function getSettings(): AppSettings {
     firstRunSeen: getAppState('firstRunSeen') === 'true',
     lastModel: getAppState('lastModel') || '',
     lastEffort: getAppState('lastEffort') || '',
+    lastContext: getAppState('lastContext') || '',
     statusHooksInstalled: getAppState('statusHooksInstalled') === 'true',
     spawnAutoMode: getAppState('spawnAutoMode') !== 'false', // default ON
   }

@@ -61,6 +61,7 @@ interface AppSettings {
   firstRunSeen: boolean
   lastModel: string
   lastEffort: string
+  lastContext: string
   statusHooksInstalled: boolean
   spawnAutoMode: boolean
 }
@@ -970,6 +971,7 @@ export function App() {
           recent={snap.recentFolders ?? []}
           lastModel={snap.settings?.lastModel ?? ''}
           lastEffort={snap.settings?.lastEffort ?? ''}
+          lastContext={snap.settings?.lastContext ?? ''}
           apiKeys={snap.apiKeys ?? []}
           close={() => setNewSessionOpen(false)}
         />
@@ -1555,6 +1557,21 @@ const MODEL_OPTS = [
   { v: '__custom__', label: 'Custom…' },
 ]
 const EFFORT_OPTS = ['', 'low', 'medium', 'high', 'xhigh', 'max']
+const CONTEXT_OPTS = [
+  { v: '', label: 'Default' },
+  { v: '1m', label: '1M' },
+]
+// Claude Code selects the 1M-context variant of a model with a `[1m]` suffix on
+// the model string (`--model opus[1m]`). It only attaches to a model that has a
+// 1M variant — Haiku doesn't, and "Default" gives us no model string to suffix.
+function supports1m(model: string, customModel: string): boolean {
+  if (model === '__custom__') return customModel.trim() !== ''
+  return model !== '' && model !== 'haiku'
+}
+function withContext(model: string, ctx: string): string {
+  if (!model || ctx !== '1m') return model
+  return model.replace(/(\[1m\])+$/i, '') + '[1m]'
+}
 
 function NewSessionComposer({
   categories,
@@ -1563,6 +1580,7 @@ function NewSessionComposer({
   recent,
   lastModel,
   lastEffort,
+  lastContext,
   apiKeys,
   close,
 }: {
@@ -1572,6 +1590,7 @@ function NewSessionComposer({
   recent: string[]
   lastModel: string
   lastEffort: string
+  lastContext: string
   apiKeys: ApiKey[]
   close: () => void
 }) {
@@ -1586,13 +1605,16 @@ function NewSessionComposer({
   const [model, setModel] = useState(knownModel ? lastModel : lastModel ? '__custom__' : '')
   const [customModel, setCustomModel] = useState(knownModel ? '' : lastModel)
   const [effort, setEffort] = useState(lastEffort)
+  const [ctx, setCtx] = useState(lastContext)
+  const ctxOk = supports1m(model, customModel)
   const pick = async () => {
     const p = await window.cc.pickFolder()
     if (p) setCwd(p)
   }
   const create = () => {
     if (!cwd) return
-    const chosenModel = model === '__custom__' ? customModel.trim() : model
+    const baseModel = model === '__custom__' ? customModel.trim() : model
+    const chosenModel = ctxOk ? withContext(baseModel, ctx) : baseModel
     // Prepend --model / --effort to whatever the user typed in Flags.
     const allFlags = [
       chosenModel && `--model ${chosenModel}`,
@@ -1601,8 +1623,11 @@ function NewSessionComposer({
     ]
       .filter(Boolean)
       .join(' ')
-    window.cc.settingsSet('lastModel', model === '__custom__' ? customModel.trim() : model)
+    // Remember the bare model; the context choice is remembered separately so
+    // the two restore independently.
+    window.cc.settingsSet('lastModel', baseModel)
     window.cc.settingsSet('lastEffort', effort)
+    window.cc.settingsSet('lastContext', ctx)
     window.cc.sessionCreate({
       cwd,
       flags: allFlags || undefined,
@@ -1691,6 +1716,22 @@ function NewSessionComposer({
               {EFFORT_OPTS.map((v) => (
                 <option key={v} value={v}>
                   {v === '' ? 'Default' : v}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="nscol">
+            <div className="spawnlabel">Context</div>
+            <select
+              className="cat-in"
+              value={ctxOk ? ctx : ''}
+              disabled={!ctxOk}
+              title={ctxOk ? '1M adds the [1m] suffix to the model' : 'pick a model that has a 1M variant'}
+              onChange={(e) => setCtx(e.target.value)}
+            >
+              {CONTEXT_OPTS.map((o) => (
+                <option key={o.v} value={o.v}>
+                  {o.label}
                 </option>
               ))}
             </select>
