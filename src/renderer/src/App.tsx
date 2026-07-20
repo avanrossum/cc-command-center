@@ -88,6 +88,7 @@ interface AppSettings {
   arbiterEnabled: boolean
   arbiterKeyId: number | null
   arbiterCapUsd: number
+  arbiterModel: string
   arbiterPaused: boolean
   statusHooksInstalled: boolean
   spawnAutoMode: boolean
@@ -1551,6 +1552,19 @@ function SettingsModal({
                 </option>
               ))}
             </select>
+          </div>
+          <div className="setrow">
+            <span className="setlabel">Model</span>
+            <select
+              className="cat-in"
+              value={settings?.arbiterModel ?? 'claude-haiku-4-5'}
+              onChange={(e) => window.cc.arbiterSetModel(e.target.value)}
+            >
+              <option value="claude-haiku-4-5">Haiku — cheapest, the default</option>
+              <option value="claude-sonnet-5">Sonnet — steadier triage</option>
+              <option value="claude-opus-4-8">Opus — best, priciest</option>
+            </select>
+            <span className="setsub">Pricing tracks the model; the spend readout stays accurate.</span>
           </div>
           <div className="setrow">
             <span className="setlabel">Daily cap</span>

@@ -26,32 +26,68 @@ import {
   recordArbiterSpend,
 } from './registry'
 
-// Sonnet: steady enough for triage, cheap enough to run often. Haiku tested as
-// jumpy on this task; Opus is not worth the rate for one-line summaries.
-export const ARBITER_MODEL = 'claude-sonnet-5'
-
-// USD per million tokens. Deliberately the STANDARD rate, not the promotional
-// one — over-reporting spend is safe, under-reporting is the failure that
-// produces a surprise bill.
-const PRICE = {
-  input: 3.0,
-  output: 15.0,
-  cacheRead: 0.3, // ~0.1x input
-  cacheWrite: 3.75, // ~1.25x input
+// The models the Arbiter can run on. Each entry carries BOTH its pricing and its
+// request-shape rules, because getting either wrong breaks a guarantee:
+//
+//  - PRICE drives the spend ledger. Wrong price → the "no surprise bills"
+//    promise lies. Rates are USD per 1M tokens, the STANDARD (not promotional)
+//    rate, so spend over-reports rather than under-reports.
+//  - `effort` and `thinkingDisabled` are per-model API facts, not preferences.
+//    `output_config.effort` is REJECTED on Haiku 4.5 (a 400), so it must be
+//    omitted there. And omitting `thinking` runs ADAPTIVE on Sonnet 5 (it would
+//    think, and cost, on every triage) but runs no-thinking on Haiku — so the
+//    disable is sent only where it's both needed and accepted.
+export interface ArbiterModelSpec {
+  label: string
+  price: { input: number; output: number; cacheRead: number; cacheWrite: number }
+  effort: boolean // output_config.effort supported (false on Haiku 4.5)
+  thinkingDisabled: boolean // send thinking:{disabled} (needed on Sonnet, a no-op default on Haiku)
 }
 
-function costOf(u: {
-  input_tokens?: number
-  output_tokens?: number
-  cache_read_input_tokens?: number | null
-  cache_creation_input_tokens?: number | null
-}): number {
+export const ARBITER_MODELS: Record<string, ArbiterModelSpec> = {
+  'claude-haiku-4-5': {
+    label: 'Haiku',
+    price: { input: 1.0, output: 5.0, cacheRead: 0.1, cacheWrite: 1.25 },
+    effort: false,
+    thinkingDisabled: false, // Haiku doesn't think by default; omit the param
+  },
+  'claude-sonnet-5': {
+    label: 'Sonnet',
+    price: { input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite: 3.75 },
+    effort: true,
+    thinkingDisabled: true, // else Sonnet 5 runs adaptive thinking and bills for it
+  },
+  'claude-opus-4-8': {
+    label: 'Opus',
+    price: { input: 5.0, output: 25.0, cacheRead: 0.5, cacheWrite: 6.25 },
+    effort: true,
+    thinkingDisabled: true,
+  },
+}
+// Default: cheapest tier. Triage is a one-line summarisation task, and running
+// it often on the priciest model is exactly the surprise this feature avoids.
+export const DEFAULT_ARBITER_MODEL = 'claude-haiku-4-5'
+
+function specFor(model: string): ArbiterModelSpec {
+  return ARBITER_MODELS[model] ?? ARBITER_MODELS[DEFAULT_ARBITER_MODEL]
+}
+
+function costOf(
+  spec: ArbiterModelSpec,
+  u: {
+    input_tokens?: number
+    output_tokens?: number
+    cache_read_input_tokens?: number | null
+    cache_creation_input_tokens?: number | null
+  },
+): number {
   const M = 1_000_000
+  const p = spec.price
   return (
-    ((u.input_tokens ?? 0) * PRICE.input +
-      (u.output_tokens ?? 0) * PRICE.output +
-      (u.cache_read_input_tokens ?? 0) * PRICE.cacheRead +
-      (u.cache_creation_input_tokens ?? 0) * PRICE.cacheWrite) /
+    ((u.input_tokens ?? 0) * p.input +
+      (u.output_tokens ?? 0) * p.output +
+      (u.cache_read_input_tokens ?? 0) * p.cacheRead +
+      (u.cache_creation_input_tokens ?? 0) * p.cacheWrite) /
     M
   )
 }
@@ -128,6 +164,7 @@ export interface ArbiterConfig {
   enabled: boolean
   apiKey: string | null
   capUsd: number
+  model: string // one of ARBITER_MODELS; falls back to the default if unknown
 }
 
 // A stable digest of what we are about to ask. Identical input → identical
@@ -170,26 +207,32 @@ export async function runArbiter(
 
   const safe = redactForApi(sessions)
   const withDetail = safe.filter((s) => s.detail).length
+  const spec = specFor(cfg.model)
+  const model = ARBITER_MODELS[cfg.model] ? cfg.model : DEFAULT_ARBITER_MODEL
 
   const client = new Anthropic({ apiKey: cfg.apiKey })
   let costUsd = 0
   try {
+    // Triage is summarisation, not reasoning — keep it cheap. Effort and the
+    // thinking-disable are model-specific: effort 400s on Haiku, and omitting
+    // thinking on Sonnet 5 would run adaptive. See ARBITER_MODELS.
+    const outputConfig = spec.effort
+      ? { effort: 'low' as const, format: { type: 'json_schema' as const, schema: SCHEMA } }
+      : { format: { type: 'json_schema' as const, schema: SCHEMA } }
     const res = await client.messages.create({
-      model: ARBITER_MODEL,
+      model,
       // Scales with the batch: a truncated response is unparseable JSON that was
       // still billed in full, so under-sizing this is a money bug, not a UX one.
       max_tokens: Math.min(4096, 320 + safe.length * 80),
       system: SYSTEM,
-      // Triage is a summarisation task, not a reasoning one. Thinking off plus
-      // low effort keeps a frequently-run agent cheap.
-      thinking: { type: 'disabled' },
-      output_config: { effort: 'low', format: { type: 'json_schema', schema: SCHEMA } },
+      ...(spec.thinkingDisabled ? { thinking: { type: 'disabled' as const } } : {}),
+      output_config: outputConfig,
       messages: [{ role: 'user', content: JSON.stringify({ sessions: safe }) }],
     })
 
-    costUsd = costOf(res.usage ?? {})
+    costUsd = costOf(spec, res.usage ?? {})
     recordArbiterSpend({
-      model: ARBITER_MODEL,
+      model,
       input_tokens: res.usage?.input_tokens ?? 0,
       output_tokens: res.usage?.output_tokens ?? 0,
       cache_read_tokens: res.usage?.cache_read_input_tokens ?? 0,
@@ -225,7 +268,7 @@ export async function runArbiter(
     // Record the attempt even on failure: a request can be billed after the
     // model has generated tokens, and an unrecorded call is a silent debit.
     recordArbiterSpend({
-      model: ARBITER_MODEL,
+      model,
       input_tokens: 0,
       output_tokens: 0,
       cache_read_tokens: 0,

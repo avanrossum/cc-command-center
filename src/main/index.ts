@@ -72,7 +72,12 @@ import {
   type Edge,
   type OpenGate,
 } from './registry'
-import { runArbiter, arbiterInputFingerprint, type ArbiterSessionInput } from './arbiter'
+import {
+  runArbiter,
+  arbiterInputFingerprint,
+  DEFAULT_ARBITER_MODEL,
+  type ArbiterSessionInput,
+} from './arbiter'
 import { scanSubtasks, type SubtaskInfo } from './engine/subtasks'
 
 let win: BrowserWindow | null = null
@@ -142,6 +147,7 @@ interface AppSettings {
   arbiterEnabled: boolean
   arbiterKeyId: number | null
   arbiterCapUsd: number // hard daily ceiling in USD; 0 disables the cap
+  arbiterModel: string // which model the Arbiter runs on (default Haiku)
   // Distinct from `enabled`. Disabling is configuration (Settings, forgets the
   // key); pausing is an operator action from the Arbiter's own window — stop
   // spending right now, keep everything set up, resume in one click.
@@ -169,6 +175,7 @@ function getSettings(): AppSettings {
       const n = Number(raw)
       return Number.isFinite(n) && n >= 0 ? n : 1.0
     })(),
+    arbiterModel: getAppState('arbiterModel') || DEFAULT_ARBITER_MODEL,
   }
 }
 
@@ -843,7 +850,7 @@ async function runArbiterNow(inputs: ArbiterSessionInput[], fp: string): Promise
     const s = getSettings()
     const key = s.arbiterKeyId !== null ? getDecryptedKey(s.arbiterKeyId) : null
     const res = await runArbiter(
-      { enabled: s.arbiterEnabled, apiKey: key, capUsd: s.arbiterCapUsd },
+      { enabled: s.arbiterEnabled, apiKey: key, capUsd: s.arbiterCapUsd, model: s.arbiterModel },
       inputs,
     )
     // The user changed the key, revoked a category, or switched the agent off
@@ -2025,6 +2032,15 @@ ipcMain.handle('arbiter:setPaused', (_e, paused: boolean) => {
     arbiterStatus = 'paused'
   }
   appendArbiterLog('config', paused ? 'paused' : 'resumed')
+  pushSessions()
+  return true
+})
+ipcMain.handle('arbiter:setModel', (_e, model: string) => {
+  setAppState('arbiterModel', model)
+  arbiterFp = '' // a different model gives a different gloss for the same question
+  arbiterPendingFp = ''
+  arbiterGeneration++
+  appendArbiterLog('config', `model ${model}`)
   pushSessions()
   return true
 })
