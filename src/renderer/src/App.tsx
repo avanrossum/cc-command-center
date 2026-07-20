@@ -652,17 +652,18 @@ export function App() {
           {groups.map((g) => {
             const tag = g.id === null ? '·' : g.label || autoTag(g.name)
             // The most-urgent "needs you" state in this category, so the rail dot
-            // shows not just THAT a category needs you but WHY: needs-approval
-            // (amber) > blocked-on-child (pink) > your-turn/question (blue). null =
+            // shows not just THAT a category needs you but WHY. Order MATCHES the
+            // beacon's STATE.order so the two surfaces never disagree: needs-approval
+            // (amber) > your-turn/question (blue) > blocked-on-child (pink). null =
             // quiet. Only a genuine question counts for blue — not a transient
             // turn-end that will settle to idle — matching the NEEDS YOU ledger.
             const rows = g.rows.filter((r) => !r.s.dormant)
             const railNeed: DisplayState | null = rows.some((r) => r.s.attention === 'permission')
               ? 'permission'
-              : rows.some((r) => blockedSet.has(r.s.sessionId))
-                ? 'blocked'
-                : rows.some((r) => r.s.whyKind === 'question')
-                  ? 'waiting'
+              : rows.some((r) => r.s.whyKind === 'question')
+                ? 'waiting'
+                : rows.some((r) => blockedSet.has(r.s.sessionId))
+                  ? 'blocked'
                   : null
             return (
               <button

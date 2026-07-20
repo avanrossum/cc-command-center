@@ -395,7 +395,13 @@ export interface OpenGate {
   sessionId: string
   categoryId: number | null
   kind: 'permission' | 'question' | 'blocked'
-  payload: string // the substance; part of the fingerprint, so a reworded gate is a new row
+  // The fingerprint identity for this kind — STABLE across scans: a permission's
+  // constant marker (its command text oscillates as the TUI repaints, so it can't
+  // be the identity), a question's text (a reworded question IS a new gate), a
+  // blocked child's stable id (not its drifting display name). Kept separate from
+  // the display payload so a volatile display string can never churn the fp.
+  key: string
+  payload: string // the display substance (command / question / child name)
 }
 
 export interface GateRow {
@@ -418,11 +424,11 @@ const MAX_EVENTS = 4000 // global backstop on the activity log
 let lastPruneAt = 0
 
 function gateFp(g: OpenGate): string {
-  // Stable identity: same session + kind + substance = the same gate across scans
-  // and a restart; a genuinely new / reworded gate mints a new fp (re-surfaces as
-  // new). uuid|kind|payload is injective — the uuid and kind never contain a pipe,
-  // so a payload with pipes stays one trailing field and can't collide.
-  return `${g.sessionId}|${g.kind}|${g.payload}`
+  // Identity = session + kind + STABLE key (not the volatile display payload), so
+  // one live dialog keeps one fp across scans and a restart. uuid|kind|key is
+  // injective — the uuid and kind never contain a pipe, so a key with pipes stays
+  // one trailing field and can't collide.
+  return `${g.sessionId}|${g.kind}|${g.key}`
 }
 
 function logEvent(
@@ -481,13 +487,22 @@ export function syncGates(gates: OpenGate[], attachedSid: string | null, now: nu
       }
     }
     // Auto-resolve: open gates not touched this scan for longer than the debounce.
+    // The `last_seen > now` arm handles a backward clock step: a gate that vanished
+    // before the step has a "future" last_seen and would otherwise never resolve
+    // (pip stuck). A genuinely-open gate is touched this scan so last_seen === now.
     const stale = d
-      .prepare('SELECT fp, session_id, category_id, kind FROM gate WHERE resolved_at IS NULL AND last_seen < ?')
-      .all(now - RESOLVE_DEBOUNCE_MS) as { fp: string; session_id: string; category_id: number | null; kind: string }[]
+      .prepare('SELECT fp, session_id, category_id, kind FROM gate WHERE resolved_at IS NULL AND (last_seen < ? OR last_seen > ?)')
+      .all(now - RESOLVE_DEBOUNCE_MS, now) as {
+      fp: string
+      session_id: string
+      category_id: number | null
+      kind: string
+    }[]
     for (const s of stale) {
       d.prepare("UPDATE gate SET resolved_at=?, resolution='cleared' WHERE fp=?").run(now, s.fp)
       logEvent(d, { sessionId: s.session_id, categoryId: s.category_id, kind: s.kind }, s.fp, 'gate_resolved', now)
     }
+    if (now < lastPruneAt) lastPruneAt = now // clock stepped back — don't starve the prune
     if (now - lastPruneAt > 60_000) {
       lastPruneAt = now
       pruneLedger(d, now)

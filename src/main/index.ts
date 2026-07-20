@@ -65,6 +65,8 @@ import {
 
 let win: BrowserWindow | null = null
 let pollTimer: NodeJS.Timeout | null = null
+let winFocused = true // OS window focus — a gate is auto-"seen" only while you're actually looking
+let lastUnhandled = new Set<string>() // last good unhandled set, retained if a scan's ledger sync throws
 const DORMANT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000 // dormant/resumable sessions age out after a week
 
 // ---------- session polling (status board) ----------
@@ -440,7 +442,8 @@ function snapshot(): Snapshot {
     // transcript pulls ahead within a second or two, so it re-takes ownership if
     // a hook event was ever missed (hooks are fire-and-forget).
     const hs = s.alive && !s.isSpare ? hookStates.get(s.sessionId) : undefined
-    if (hs && hs.at + 1500 >= (s.transcriptMtimeMs ?? 0)) {
+    const hookFresh = !!hs && hs.at + 1500 >= (s.transcriptMtimeMs ?? 0)
+    if (hs && hookFresh) {
       const age = now - hs.at
       const ago = `${Math.round(age / 1000)}s ago`
       if (hs.state === 'working') {
@@ -474,11 +477,12 @@ function snapshot(): Snapshot {
         if (term ? bufferDialog || age < 30_000 || !bufferOwned : true) attention = gateKind
       }
     }
-    // Latch a hook-reported gate even when the transcript reads fresher: a live
-    // dialog is invisible to the transcript, so a 'working' tool_use record must
-    // not suppress a real "needs you". (State fusion above stays freshness-gated;
-    // only the attention flag latches here.) Cleared by the next hook event.
-    if (!attention && hs && hs.state === 'permission') {
+    // Latch a hook-reported gate ONLY when the freshness gate skipped the block
+    // above (a stale transcript hid a live dialog). When the block DID run, its 30s
+    // cap may have deliberately suppressed a long-approved buffer-owned permission —
+    // this latch must not override that, or the cap becomes unreachable and the gate
+    // never resolves. Cleared by the next hook event.
+    if (!attention && !hookFresh && hs && hs.state === 'permission') {
       attention = hs.kind === 'elicitation_dialog' ? 'question' : 'permission'
     }
     // The "why" behind a needs-you moment. Permission → the gated command (from
@@ -573,34 +577,58 @@ function snapshot(): Snapshot {
 
   // ---------- gate ledger sync: the "did I handle that?" memory ----------
   // Blocked parents (a parent whose blocking child is unfinished) — the same rule
-  // the renderer uses for the blocked display state, computed here for the ledger.
-  const stateById = new Map(enriched.map((e) => [e.sessionId, e.state]))
-  const blockedChild = new Map<string, string>()
+  // the renderer uses for the blocked display state. Dedup state by sessionId
+  // preferring the alive row (a resumed session yields a dead + a live row under
+  // one id), matching the renderer's `live` view so a real blocked parent can't be
+  // silently dropped from the ledger.
+  const stateById = new Map<string, EnrichedSession['state']>()
+  for (const e of enriched) {
+    const cur = stateById.get(e.sessionId)
+    if (cur === undefined || (e.alive && (e.state === 'working' || e.state === 'waiting'))) {
+      stateById.set(e.sessionId, e.state)
+    }
+  }
+  const blockedChild = new Map<string, { id: string; name: string }>()
   for (const e of edges) {
     if (e.type !== 'blocking') continue
     const cs = stateById.get(e.child_id)
     if (cs === 'working' || cs === 'waiting') {
-      blockedChild.set(e.parent_id, names[e.child_id] || nodes.get(e.child_id)?.name || e.child_id.slice(0, 8))
+      blockedChild.set(e.parent_id, {
+        id: e.child_id,
+        name: names[e.child_id] || nodes.get(e.child_id)?.name || e.child_id.slice(0, 8),
+      })
     }
   }
+  // One gate per session. key = the STABLE fp identity per kind (never the volatile
+  // display text): a permission's constant marker (its command repaints), a
+  // question's text, a blocked child's id. payload = the display string.
   const openGates: OpenGate[] = []
+  const gatedSids = new Set<string>()
   for (const e of enriched) {
-    if (e.dormant) continue
+    if (e.dormant || gatedSids.has(e.sessionId)) continue
+    const bc = blockedChild.get(e.sessionId)
     let gate: OpenGate | undefined
     if (e.attention === 'permission')
-      gate = { sessionId: e.sessionId, categoryId: e.categoryId, kind: 'permission', payload: e.why ?? 'wants approval' }
+      gate = { sessionId: e.sessionId, categoryId: e.categoryId, kind: 'permission', key: 'gate', payload: e.why ?? 'wants approval' }
     else if (e.whyKind === 'question')
-      gate = { sessionId: e.sessionId, categoryId: e.categoryId, kind: 'question', payload: e.why ?? 'needs your answer' }
-    else if (blockedChild.has(e.sessionId))
-      gate = { sessionId: e.sessionId, categoryId: e.categoryId, kind: 'blocked', payload: blockedChild.get(e.sessionId)! }
-    if (gate) openGates.push(gate)
+      gate = { sessionId: e.sessionId, categoryId: e.categoryId, kind: 'question', key: e.why ?? 'needs your answer', payload: e.why ?? 'needs your answer' }
+    else if (bc) gate = { sessionId: e.sessionId, categoryId: e.categoryId, kind: 'blocked', key: bc.id, payload: bc.name }
+    if (gate) {
+      openGates.push(gate)
+      gatedSids.add(e.sessionId)
+    }
   }
-  // The session the human is looking at — its open gate is auto-marked "seen".
+  // Auto-"seen" only when the app window is actually focused — a gate that appears
+  // while you're in another app must still fire the pip (this is the common case).
   const attachedSid = attachedKey ? terminals.get(attachedKey)?.sessionId ?? null : null
-  let unhandled = new Set<string>()
+  const seenSid = winFocused ? attachedSid : null
+  // Bound the question cache to live sessions so it can't grow without limit.
+  for (const k of questionCache.keys()) if (!liveIds.has(k)) questionCache.delete(k)
+  let unhandled = lastUnhandled // retain the last-known pips if this scan's sync throws
   try {
-    syncGates(openGates, attachedSid, now)
+    syncGates(openGates, seenSid, now)
     unhandled = getUnhandledSessions()
+    lastUnhandled = unhandled
   } catch (err) {
     console.error('[main] gate ledger sync failed', err)
   }
@@ -1612,6 +1640,13 @@ function createWindow(): void {
     openExternalUrl(url)
     return { action: 'deny' } // never spawn a child Electron window
   })
+  // Track OS window focus so the gate ledger auto-marks a gate "seen" only when you
+  // are actually looking at the app — not merely have a session attached while the
+  // window sits in the background — so a gate that arrives while you're away in
+  // another app still fires the pip.
+  winFocused = win.isFocused()
+  win.on('focus', () => (winFocused = true))
+  win.on('blur', () => (winFocused = false))
   // Defense in depth: the app frame itself must never navigate away. Let
   // same-origin (the renderer's own) navigations through; send anything else out.
   win.webContents.on('will-navigate', (e, url) => {
