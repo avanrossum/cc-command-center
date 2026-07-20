@@ -371,6 +371,23 @@ body {
   font-size: 11.5px;
   color: var(--cc-dim);
 }
+/* .cat-in is width:100%, which inside a flex .setrow eats the row and crushes
+   any trailing text to one word per line. Size the controls to their content
+   and give the explanation the remaining space. */
+.setrow .cat-in {
+  width: auto;
+  flex: 0 1 220px;
+  min-width: 0;
+}
+.setrow .cat-in[type='number'] {
+  flex: none;
+  width: 96px;
+}
+.setrow > .setsub {
+  flex: 1;
+  min-width: 0;
+  padding-top: 6px;
+}
 
 /* ---- message log ---- */
 .msglog {
