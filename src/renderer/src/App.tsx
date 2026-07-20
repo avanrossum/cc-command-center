@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { createPortal } from 'react-dom'
 import { insertablePath } from './util'
 import { TerminalView } from './Terminal'
 import { THEMES, themeByName, DEFAULT_THEME_NAME } from './themes'
@@ -718,8 +717,89 @@ export function App() {
     openSession(s)
   }
 
+  // The two poppable companion panels, built once. Each renders either inline in
+  // the companion (not popped) or inside a floating card at the app root (popped)
+  // — never both — so a single element instance moves between the two homes. The
+  // float lives at the root, NOT inside the companion, so closing the sidebar
+  // doesn't take a popped panel down with it.
+  const stripPanel = (
+    <div className="comp-strip-wrap">
+      <div className="comp-section-head strip-head">
+        <button className="sh-toggle" onClick={() => showStrip(!stripOpen)}>
+          <span className="chev">{stripOpen ? '▾' : '▸'}</span> activity
+        </button>
+        {stripOpen && (
+          <span className="strip-gran">
+            {[5, 10, 25].map((m) => (
+              <button
+                key={m}
+                className={`sg-opt${stripWinMin === m ? ' on' : ''}`}
+                onClick={() => {
+                  setStripWinMin(m)
+                  window.cc.stateSet('stripWinMin', String(m))
+                }}
+                title={`show the last ${m} minutes`}
+              >
+                {m}m
+              </button>
+            ))}
+          </span>
+        )}
+      </div>
+      {stripOpen && (
+        <div className="comp-strip">
+          {stripLanes.length === 0 ? (
+            <div className="strip-empty">no live sessions</div>
+          ) : (
+            stripLanes.map((s) => {
+              const segs = stripSegs(s.sessionId, snap.scannedAt || Date.now())
+              return (
+                <button
+                  key={s.sessionId}
+                  className="strip-lane"
+                  onClick={() => openSession(s)}
+                  title={nameOf(s)}
+                >
+                  <span className="strip-name">{nameOf(s)}</span>
+                  <span className="strip-track">
+                    {segs.map((seg, i) => (
+                      <span
+                        key={i}
+                        className={`strip-seg seg-${seg.s}`}
+                        style={{ width: `${(seg.w * 100).toFixed(2)}%` }}
+                      />
+                    ))}
+                  </span>
+                </button>
+              )
+            })
+          )}
+        </div>
+      )}
+    </div>
+  )
+  const fleetPanel = (
+    <FleetActivity
+      sessions={live.filter((s) => companionScope === 'all' || s.categoryId === selectedCat)}
+      now={snap.scannedAt || Date.now()}
+      onOpen={openSession}
+    />
+  )
+
   return (
     <div className="app">
+      {/* Popped panels float at the app ROOT so they persist when the companion
+          (their normal home) is hidden. */}
+      {popped.has('strip') && (
+        <FloatCard id="strip" title="Activity" onReturn={() => setPop('strip', false)}>
+          {stripPanel}
+        </FloatCard>
+      )}
+      {popped.has('subagents') && (
+        <FloatCard id="subagents" title="Subagents" onReturn={() => setPop('subagents', false)}>
+          {fleetPanel}
+        </FloatCard>
+      )}
       <header className="beacon">
         <div className="beacon-brand">
           <span className="pulse" />
@@ -1153,68 +1233,20 @@ export function App() {
                   ⇥
                 </button>
               </div>
-              <Poppable
-                id="strip"
-                title="Activity"
-                popped={popped.has('strip')}
-                onPop={() => setPop('strip', true)}
-                onReturn={() => setPop('strip', false)}
-              >
-              <div className="comp-strip-wrap">
-                <div className="comp-section-head strip-head">
-                  <button className="sh-toggle" onClick={() => showStrip(!stripOpen)}>
-                    <span className="chev">{stripOpen ? '▾' : '▸'}</span> activity
+              {popped.has('strip') ? (
+                <PopStub title="Activity" onReturn={() => setPop('strip', false)} />
+              ) : (
+                <div className="poppable">
+                  <button
+                    className="pop-out"
+                    onClick={() => setPop('strip', true)}
+                    title="Pop out to a floating panel"
+                  >
+                    ⇱
                   </button>
-                  {stripOpen && (
-                    <span className="strip-gran">
-                      {[5, 10, 25].map((m) => (
-                        <button
-                          key={m}
-                          className={`sg-opt${stripWinMin === m ? ' on' : ''}`}
-                          onClick={() => {
-                            setStripWinMin(m)
-                            window.cc.stateSet('stripWinMin', String(m))
-                          }}
-                          title={`show the last ${m} minutes`}
-                        >
-                          {m}m
-                        </button>
-                      ))}
-                    </span>
-                  )}
+                  {stripPanel}
                 </div>
-                {stripOpen && (
-                  <div className="comp-strip">
-                    {stripLanes.length === 0 ? (
-                      <div className="strip-empty">no live sessions</div>
-                    ) : (
-                      stripLanes.map((s) => {
-                        const segs = stripSegs(s.sessionId, snap.scannedAt || Date.now())
-                        return (
-                          <button
-                            key={s.sessionId}
-                            className="strip-lane"
-                            onClick={() => openSession(s)}
-                            title={nameOf(s)}
-                          >
-                            <span className="strip-name">{nameOf(s)}</span>
-                            <span className="strip-track">
-                              {segs.map((seg, i) => (
-                                <span
-                                  key={i}
-                                  className={`strip-seg seg-${seg.s}`}
-                                  style={{ width: `${(seg.w * 100).toFixed(2)}%` }}
-                                />
-                              ))}
-                            </span>
-                          </button>
-                        )
-                      })
-                    )}
-                  </div>
-                )}
-              </div>
-              </Poppable>
+              )}
               <div className="comp-board">
                 {boardItems.length === 0 ? (
                   <div className="comp-empty">
@@ -1277,21 +1309,20 @@ export function App() {
                   })
                 )}
               </div>
-              <Poppable
-                id="subagents"
-                title="Subagents"
-                popped={popped.has('subagents')}
-                onPop={() => setPop('subagents', true)}
-                onReturn={() => setPop('subagents', false)}
-              >
-                <FleetActivity
-                  sessions={live.filter(
-                    (s) => companionScope === 'all' || s.categoryId === selectedCat,
-                  )}
-                  now={snap.scannedAt || Date.now()}
-                  onOpen={openSession}
-                />
-              </Poppable>
+              {popped.has('subagents') ? (
+                <PopStub title="Subagents" onReturn={() => setPop('subagents', false)} />
+              ) : (
+                <div className="poppable">
+                  <button
+                    className="pop-out"
+                    onClick={() => setPop('subagents', true)}
+                    title="Pop out to a floating panel"
+                  >
+                    ⇱
+                  </button>
+                  {fleetPanel}
+                </div>
+              )}
               <ArbiterConsole
                 panel={snap.arbiter}
                 enabled={snap.settings?.arbiterEnabled ?? false}
@@ -2154,49 +2185,22 @@ function FloatCard({
   )
 }
 
-// Wraps a companion panel so it can pop out. Inline it shows a small pop-out
-// affordance; popped, it leaves a stub in the sidebar (so the slot never
-// vanishes — you always see it's out, and how to get it back) and portals the
-// real panel into a floating card.
-function Poppable({
-  id,
+// The stub left in the companion while a panel is popped out — so the slot never
+// silently vanishes: you can see it's out and dock it back. The panel itself
+// floats separately (FloatCard, rendered at the app root).
+function PopStub({
   title,
-  popped,
-  onPop,
   onReturn,
-  children,
 }: {
-  id: string
   title: string
-  popped: boolean
-  onPop: () => void
   onReturn: () => void
-  children: React.ReactNode
 }): React.ReactElement {
-  if (popped) {
-    return (
-      <>
-        <div className="pop-stub">
-          <span className="pop-stub-txt">{title} — in separate window</span>
-          <button className="pop-stub-btn" onClick={onReturn}>
-            return to sidebar
-          </button>
-        </div>
-        {createPortal(
-          <FloatCard id={id} title={title} onReturn={onReturn}>
-            {children}
-          </FloatCard>,
-          document.body,
-        )}
-      </>
-    )
-  }
   return (
-    <div className="poppable">
-      <button className="pop-out" onClick={onPop} title="Pop out to a floating panel">
-        ⇱
+    <div className="pop-stub">
+      <span className="pop-stub-txt">{title} — in separate window</span>
+      <button className="pop-stub-btn" onClick={onReturn}>
+        return to sidebar
       </button>
-      {children}
     </div>
   )
 }
