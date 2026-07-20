@@ -23,9 +23,14 @@ asarUnpack:
 
 mac:
   category: public.app-category.developer-tools
+  # Apple Silicon only — deliberate. Every shipped build has been arm64 (it was
+  # inheriting the host arch); pinning it makes that explicit and keeps the
+  # README honest. No Intel/Windows/Linux target planned.
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
   icon: resources/icon.icns
   darkModeSupport: true
   hardenedRuntime: true
