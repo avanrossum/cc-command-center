@@ -111,7 +111,7 @@ SQLite via `better-sqlite3` 12.x, one WAL database at `app.getPath('userData')/r
 | Field | Type | Notes |
 |---|---|---|
 | `id` | TEXT PK | uuid v4 |
-| `name` | TEXT | "Personal", "Client", "Client: Acme" |
+| `name` | TEXT | "Personal", "MipYip", "Client: Acme" |
 | `color` | TEXT | UI accent |
 | `sort_order` | INTEGER | |
 | `created_at` / `updated_at` | INTEGER | epoch ms |
