@@ -33,6 +33,12 @@ import {
   createCategory,
   renameCategory,
   deleteCategory,
+  setCategoryArbiterContext,
+  getArbiterSpend,
+  getArbiterLog,
+  appendArbiterLog,
+  type ArbiterSpendSummary,
+  type ArbiterLogRow,
   setCategoryLabel,
   setCategoryEmoji,
   setCategoryColor,
@@ -63,6 +69,7 @@ import {
   type Edge,
   type OpenGate,
 } from './registry'
+import { runArbiter, arbiterInputFingerprint, type ArbiterSessionInput } from './arbiter'
 
 let win: BrowserWindow | null = null
 let pollTimer: NodeJS.Timeout | null = null
@@ -107,6 +114,14 @@ interface Snapshot {
   settings: AppSettings
   recentFolders: string[]
   apiKeys: ApiKeyRow[]
+  arbiter: ArbiterPanel
+}
+// Everything the Arbiter console renders. Spend is always present — it is the
+// one thing that must be visible whether the agent is on, off, or capped.
+interface ArbiterPanel {
+  status: 'idle' | 'running' | 'capped' | 'error' | 'off'
+  spend: ArbiterSpendSummary
+  log: ArbiterLogRow[]
 }
 interface AppSettings {
   trustChildrenByDefault: boolean
@@ -117,6 +132,11 @@ interface AppSettings {
   lastContext: string // remembered context window ('' = default, '1m' = [1m] suffix)
   statusHooksInstalled: boolean // hook-driven status wired into ~/.claude/settings.json
   spawnAutoMode: boolean // last "start child in auto mode" choice (default ON)
+  // The Arbiter. Off unless BOTH enabled and pointed at a stored key, so the
+  // feature can never start spending by default.
+  arbiterEnabled: boolean
+  arbiterKeyId: number | null
+  arbiterCapUsd: number // hard daily ceiling in USD; 0 disables the cap
 }
 // App settings persist in app_state (registry kv). Defaults applied here.
 function getSettings(): AppSettings {
@@ -129,6 +149,9 @@ function getSettings(): AppSettings {
     lastContext: getAppState('lastContext') || '',
     statusHooksInstalled: getAppState('statusHooksInstalled') === 'true',
     spawnAutoMode: getAppState('spawnAutoMode') !== 'false', // default ON
+    arbiterEnabled: getAppState('arbiterEnabled') === 'true', // default OFF
+    arbiterKeyId: getAppState('arbiterKeyId') ? Number(getAppState('arbiterKeyId')) : null,
+    arbiterCapUsd: Number(getAppState('arbiterCapUsd') ?? '') || 1.0, // $1/day until changed
   }
 }
 
@@ -544,6 +567,10 @@ function snapshot(): Snapshot {
       why,
       whyKind,
       whyCoarse,
+      // Populated only when the Arbiter is on and has already answered for this
+      // session; the renderer shows the verbatim `why` regardless, so a missing
+      // gloss (no key, capped, still running) degrades to the base experience.
+      whyGloss: arbiterGloss.get(s.sessionId),
     }
   })
 
@@ -636,17 +663,43 @@ function snapshot(): Snapshot {
     console.error('[main] gate ledger sync failed', err)
   }
 
+  const cats = listCategories()
+
+  // Feed the Arbiter exactly the set the UI calls "needs you". Wrapped because a
+  // scheduling fault must never take down the scan that drives the whole app.
+  try {
+    const catName = new Map(cats.map((c) => [c.id, c.name]))
+    scheduleArbiter(
+      enriched
+        .filter((e) => !e.dormant && e.why)
+        .map((e) => ({
+          sessionId: e.sessionId,
+          name: e.name || '',
+          category: e.categoryId !== null ? (catName.get(e.categoryId) ?? '') : 'Uncategorized',
+          categoryId: e.categoryId,
+          state: e.attention ?? e.state,
+          kind: e.whyKind,
+          // A coarse label ("wants approval") is not substance — it carries no
+          // information the model can use, so it is not worth sending.
+          detail: e.whyCoarse ? undefined : e.why,
+        })),
+    )
+  } catch (err) {
+    console.error('[main] arbiter scheduling failed', err)
+  }
+
   return {
     home: os.homedir(),
     scannedAt: Date.now(),
     sessions: enriched.map((e) => (unhandled.has(e.sessionId) ? { ...e, unhandled: true } : e)),
-    categories: listCategories(),
+    categories: cats,
     edges,
     messages: messageLog.slice(-40),
     awarenessPaused,
     settings: getSettings(),
     recentFolders: getRecentFolders(),
     apiKeys: listApiKeys(),
+    arbiter: { status: arbiterStatus, spend: getArbiterSpend(), log: getArbiterLog(40) },
   }
 }
 
@@ -680,6 +733,66 @@ function maybeSeed(): void {
 
 function pushSessions(): void {
   win?.webContents.send('cc:sessions', snapshot())
+}
+
+// ---------- Arbiter scheduling ----------
+// snapshot() runs on every ~1.5s scan, so the trigger is guarded three ways: a
+// fingerprint of the needs-you set (identical state never pays twice), a
+// debounce (a burst of transitions settles into one run), and a non-reentrancy
+// flag (a slow call cannot stack). Nothing here can block the scan — the run is
+// fire-and-forget and only touches the cache when it lands.
+const arbiterGloss = new Map<string, string>()
+let arbiterLastInputs: ArbiterSessionInput[] = []
+let arbiterFp = '' // fingerprint of the last input we actually sent
+let arbiterTimer: NodeJS.Timeout | null = null
+let arbiterRunning = false
+let arbiterStatus: 'idle' | 'running' | 'capped' | 'error' | 'off' = 'off'
+const ARBITER_DEBOUNCE_MS = 2500
+
+function scheduleArbiter(inputs: ArbiterSessionInput[]): void {
+  arbiterLastInputs = inputs // what a manual poke would ask about
+  const s = getSettings()
+  if (!s.arbiterEnabled || s.arbiterKeyId === null) {
+    arbiterStatus = 'off'
+    return
+  }
+  const fp = arbiterInputFingerprint(inputs)
+  if (fp === arbiterFp) return // same question — reuse the answer we already paid for
+  if (arbiterTimer) clearTimeout(arbiterTimer)
+  arbiterTimer = setTimeout(() => {
+    arbiterTimer = null
+    void runArbiterNow(inputs, fp)
+  }, ARBITER_DEBOUNCE_MS)
+}
+
+async function runArbiterNow(inputs: ArbiterSessionInput[], fp: string): Promise<void> {
+  if (arbiterRunning) return
+  arbiterRunning = true
+  arbiterStatus = 'running'
+  pushSessions()
+  try {
+    const s = getSettings()
+    const key = s.arbiterKeyId !== null ? getDecryptedKey(s.arbiterKeyId) : null
+    const res = await runArbiter(
+      { enabled: s.arbiterEnabled, apiKey: key, capUsd: s.arbiterCapUsd },
+      inputs,
+    )
+    if (res.skipped === 'capped') arbiterStatus = 'capped'
+    else if (!res.ok) arbiterStatus = 'error'
+    else arbiterStatus = 'idle'
+    if (res.ok && !res.skipped) {
+      // Only mark this input as answered once a real result came back, so a
+      // failed run retries instead of caching the failure.
+      arbiterFp = fp
+      for (const [id, g] of Object.entries(res.glosses)) arbiterGloss.set(id, g)
+      // Drop glosses for sessions that are no longer waiting.
+      const live = new Set(inputs.map((i) => i.sessionId))
+      for (const id of [...arbiterGloss.keys()]) if (!live.has(id)) arbiterGloss.delete(id)
+    }
+  } finally {
+    arbiterRunning = false
+    pushSessions()
+  }
 }
 
 // ---------- terminal hosting ----------
@@ -1732,6 +1845,52 @@ ipcMain.handle('cat:delete', (_e, id: number) => {
   deleteCategory(id)
   pushSessions()
   return { removed }
+})
+// ---------- Arbiter controls ----------
+ipcMain.handle('arbiter:setEnabled', (_e, on: boolean) => {
+  setAppState('arbiterEnabled', on ? 'true' : 'false')
+  if (!on) {
+    // Turning it off clears the cached glosses immediately — a stale line
+    // attributed to an agent you just disabled is worse than none.
+    arbiterGloss.clear()
+    arbiterFp = ''
+    arbiterStatus = 'off'
+  }
+  appendArbiterLog('config', on ? 'enabled' : 'disabled')
+  pushSessions()
+  return true
+})
+ipcMain.handle('arbiter:setKey', (_e, keyId: number | null) => {
+  if (keyId === null) setAppState('arbiterKeyId', '')
+  else setAppState('arbiterKeyId', String(keyId))
+  arbiterFp = '' // different credentials — do not reuse the previous answer
+  pushSessions()
+  return true
+})
+ipcMain.handle('arbiter:setCap', (_e, usd: number) => {
+  const v = Number.isFinite(usd) && usd >= 0 ? usd : 0
+  setAppState('arbiterCapUsd', String(v))
+  appendArbiterLog('config', v > 0 ? `daily cap $${v.toFixed(2)}` : 'daily cap removed')
+  pushSessions()
+  return true
+})
+// Manual poke: run now against the current needs-you set, ignoring the
+// fingerprint cache so the user can always force a fresh read.
+ipcMain.handle('arbiter:poke', async () => {
+  if (arbiterTimer) {
+    clearTimeout(arbiterTimer)
+    arbiterTimer = null
+  }
+  arbiterFp = ''
+  await runArbiterNow(arbiterLastInputs, arbiterInputFingerprint(arbiterLastInputs))
+  return true
+})
+ipcMain.handle('cat:setArbiterContext', (_e, id: number, on: boolean) => {
+  setCategoryArbiterContext(id, on)
+  arbiterFp = '' // the redaction changed, so the previous answer is stale
+  appendArbiterLog('config', `category context ${on ? 'granted' : 'revoked'}`)
+  pushSessions()
+  return true
 })
 ipcMain.handle('cat:setLabel', (_e, id: number, label: string | null) => {
   setCategoryLabel(id, label)

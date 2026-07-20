@@ -14,6 +14,10 @@ export interface Category {
   sort: number
   label: string | null // short rail word; null → auto-derived from the name
   emoji: string | null // optional glyph shown in the rail and on cross-category tags
+  // Privacy gate for the Arbiter. 0 (default) → only metadata about this
+  // category's sessions may be sent to the API; 1 → the substance may go too.
+  // Opt-in by design: an untouched category never leaks session content.
+  arbiter_context: number
 }
 
 export interface NodeRow {
@@ -187,6 +191,42 @@ export function initRegistry(dbPath: string): void {
     db.exec(`ALTER TABLE category ADD COLUMN emoji TEXT;`)
     db.pragma('user_version = 10')
   }
+  if (v < 11) {
+    // The Arbiter (optional control agent).
+    //
+    // arbiter_context is the PRIVACY GATE and defaults to 0 — opt-in, never
+    // opt-out. 0 means only metadata (state, tool name, category) may be sent to
+    // the API; 1 means the substance (pending command, the question text) may go
+    // too. A category the user never touches therefore leaks nothing, which is
+    // the safe default for client work.
+    //
+    // arbiter_spend is the money ledger. Every billable call appends one row
+    // whether it succeeded or not, so the running total can never silently
+    // under-report. arbiter_log is the console feed — bounded, cosmetic, and
+    // safe to delete.
+    db.exec(`
+      ALTER TABLE category ADD COLUMN arbiter_context INTEGER NOT NULL DEFAULT 0;
+      CREATE TABLE IF NOT EXISTS arbiter_spend (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at INTEGER NOT NULL,
+        model TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd REAL NOT NULL DEFAULT 0,
+        ok INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE INDEX IF NOT EXISTS arbiter_spend_at ON arbiter_spend(at);
+      CREATE TABLE IF NOT EXISTS arbiter_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        text TEXT NOT NULL
+      );
+    `)
+    db.pragma('user_version = 11')
+  }
 }
 
 export function setNodeApiKey(sessionId: string, apiKeyId: number | null): void {
@@ -328,8 +368,106 @@ export function getEdges(): Edge[] {
 
 export function listCategories(): Category[] {
   return must()
-    .prepare('SELECT id, name, color, sort, label, emoji FROM category ORDER BY sort, id')
+    .prepare(
+      'SELECT id, name, color, sort, label, emoji, arbiter_context FROM category ORDER BY sort, id',
+    )
     .all() as Category[]
+}
+
+// ---------- Arbiter (optional control agent) ----------
+
+export function setCategoryArbiterContext(id: number, on: boolean): void {
+  must().prepare('UPDATE category SET arbiter_context=? WHERE id=?').run(on ? 1 : 0, id)
+}
+
+// Categories cleared to send substance. The Arbiter consults this on every run
+// rather than caching it, so revoking a category takes effect immediately.
+export function arbiterContextCategoryIds(): Set<number> {
+  const rows = must()
+    .prepare('SELECT id FROM category WHERE arbiter_context=1')
+    .all() as { id: number }[]
+  return new Set(rows.map((r) => r.id))
+}
+
+export interface ArbiterSpendRow {
+  model: string
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  cost_usd: number
+  ok: boolean
+}
+
+// Append-only. A failed call still records what it burned — a request that errors
+// after the model generated tokens is still billable, and silently dropping it
+// would make the running total lie in the one direction that matters.
+export function recordArbiterSpend(r: ArbiterSpendRow): void {
+  must()
+    .prepare(
+      `INSERT INTO arbiter_spend
+       (at, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, ok)
+       VALUES (?,?,?,?,?,?,?,?)`,
+    )
+    .run(
+      Date.now(),
+      r.model,
+      r.input_tokens,
+      r.output_tokens,
+      r.cache_read_tokens,
+      r.cache_write_tokens,
+      r.cost_usd,
+      r.ok ? 1 : 0,
+    )
+}
+
+export interface ArbiterSpendSummary {
+  todayUsd: number
+  totalUsd: number
+  calls: number
+  lastAt: number | null
+}
+
+// "Today" is local-midnight based, matching how a person reads a daily spend
+// figure — not a rolling 24h window.
+export function getArbiterSpend(): ArbiterSpendSummary {
+  const d = must()
+  const midnight = new Date()
+  midnight.setHours(0, 0, 0, 0)
+  const today = d
+    .prepare('SELECT COALESCE(SUM(cost_usd),0) AS s FROM arbiter_spend WHERE at >= ?')
+    .get(midnight.getTime()) as { s: number }
+  const all = d
+    .prepare(
+      'SELECT COALESCE(SUM(cost_usd),0) AS s, COUNT(*) AS c, MAX(at) AS m FROM arbiter_spend',
+    )
+    .get() as { s: number; c: number; m: number | null }
+  return { todayUsd: today.s, totalUsd: all.s, calls: all.c, lastAt: all.m }
+}
+
+export interface ArbiterLogRow {
+  id: number
+  at: number
+  kind: string
+  text: string
+}
+
+const ARBITER_LOG_CAP = 200
+
+export function appendArbiterLog(kind: string, text: string): void {
+  const d = must()
+  d.prepare('INSERT INTO arbiter_log (at, kind, text) VALUES (?,?,?)').run(Date.now(), kind, text)
+  // Bounded ring — the console is a live feed, not a record.
+  d.prepare(
+    `DELETE FROM arbiter_log WHERE id NOT IN
+     (SELECT id FROM arbiter_log ORDER BY id DESC LIMIT ?)`,
+  ).run(ARBITER_LOG_CAP)
+}
+
+export function getArbiterLog(limit = 60): ArbiterLogRow[] {
+  return must()
+    .prepare('SELECT id, at, kind, text FROM arbiter_log ORDER BY id DESC LIMIT ?')
+    .all(limit) as ArbiterLogRow[]
 }
 
 export function createCategory(name: string, color?: string): Category {
@@ -339,7 +477,15 @@ export function createCategory(name: string, color?: string): Category {
   const info = d
     .prepare('INSERT INTO category (name, color, sort, created_at) VALUES (?,?,?,?)')
     .run(name, col, count, Date.now())
-  return { id: Number(info.lastInsertRowid), name, color: col, sort: count, label: null, emoji: null }
+  return {
+    id: Number(info.lastInsertRowid),
+    name,
+    color: col,
+    sort: count,
+    label: null,
+    emoji: null,
+    arbiter_context: 0, // new categories never send substance until told to
+  }
 }
 
 export function renameCategory(id: number, name: string): void {
