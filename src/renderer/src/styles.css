@@ -1630,6 +1630,10 @@ body {
   overflow-y: auto;
 }
 .recentfolder {
+  /* In a max-height flex column, items shrink to fit instead of overflowing —
+     which squashed these to unreadable slivers. Hold natural height and let
+     the container scroll. */
+  flex: none;
   text-align: left;
   font: 11px var(--cc-font-mono);
   color: var(--cc-dim);
