@@ -151,7 +151,14 @@ function getSettings(): AppSettings {
     spawnAutoMode: getAppState('spawnAutoMode') !== 'false', // default ON
     arbiterEnabled: getAppState('arbiterEnabled') === 'true', // default OFF
     arbiterKeyId: getAppState('arbiterKeyId') ? Number(getAppState('arbiterKeyId')) : null,
-    arbiterCapUsd: Number(getAppState('arbiterCapUsd') ?? '') || 1.0, // $1/day until changed
+    // Explicit parse: `|| 1.0` turned a deliberate 0 ("no cap", per the UI copy)
+    // into a silent $1 cap.
+    arbiterCapUsd: (() => {
+      const raw = getAppState('arbiterCapUsd')
+      if (raw === null || raw === undefined || raw === '') return 1.0
+      const n = Number(raw)
+      return Number.isFinite(n) && n >= 0 ? n : 1.0
+    })(),
   }
 }
 
@@ -732,7 +739,11 @@ function maybeSeed(): void {
 }
 
 function pushSessions(): void {
-  win?.webContents.send('cc:sessions', snapshot())
+  // A send to a destroyed window throws. That used to escape runArbiterNow
+  // before its try block, leaving arbiterRunning stuck true so the agent never
+  // ran again for the rest of the process.
+  if (!win || win.isDestroyed()) return
+  win.webContents.send('cc:sessions', snapshot())
 }
 
 // ---------- Arbiter scheduling ----------
@@ -743,21 +754,35 @@ function pushSessions(): void {
 // fire-and-forget and only touches the cache when it lands.
 const arbiterGloss = new Map<string, string>()
 let arbiterLastInputs: ArbiterSessionInput[] = []
-let arbiterFp = '' // fingerprint of the last input we actually sent
+// Two fingerprints, doing two different jobs. Conflating them caused both of the
+// scheduler's original bugs: `answered` is what we have already PAID for, while
+// `pending` is what is already scheduled or in flight. Without `pending`, every
+// 1.5s scan re-armed the debounce (so it never fired), and the re-entrant
+// pushSessions() inside a run armed a second timer for the same question.
+let arbiterFp = '' // last ANSWERED fingerprint
+let arbiterPendingFp = '' // scheduled or in flight
 let arbiterTimer: NodeJS.Timeout | null = null
 let arbiterRunning = false
+// Bumped by any config change that invalidates a result computed under the old
+// settings (disable, key swap, context grant/revoke). A run compares the
+// generation across its await and discards a result the user has since revoked.
+let arbiterGeneration = 0
 let arbiterStatus: 'idle' | 'running' | 'capped' | 'error' | 'off' = 'off'
 const ARBITER_DEBOUNCE_MS = 2500
 
 function scheduleArbiter(inputs: ArbiterSessionInput[]): void {
   arbiterLastInputs = inputs // what a manual poke would ask about
   const s = getSettings()
-  if (!s.arbiterEnabled || s.arbiterKeyId === null) {
+  // A key id that no longer resolves is the same as no key: the agent must read
+  // as off rather than sit at 'idle' pretending to work.
+  if (!s.arbiterEnabled || s.arbiterKeyId === null || !apiKeyExists(s.arbiterKeyId)) {
     arbiterStatus = 'off'
     return
   }
   const fp = arbiterInputFingerprint(inputs)
-  if (fp === arbiterFp) return // same question — reuse the answer we already paid for
+  if (fp === arbiterFp) return // already paid for this exact question
+  if (fp === arbiterPendingFp) return // already scheduled or in flight — do NOT re-arm
+  arbiterPendingFp = fp
   if (arbiterTimer) clearTimeout(arbiterTimer)
   arbiterTimer = setTimeout(() => {
     arbiterTimer = null
@@ -768,6 +793,8 @@ function scheduleArbiter(inputs: ArbiterSessionInput[]): void {
 async function runArbiterNow(inputs: ArbiterSessionInput[], fp: string): Promise<void> {
   if (arbiterRunning) return
   arbiterRunning = true
+  arbiterPendingFp = fp // claimed before the first pushSessions, so re-entry is a no-op
+  const gen = arbiterGeneration
   arbiterStatus = 'running'
   pushSessions()
   try {
@@ -777,20 +804,32 @@ async function runArbiterNow(inputs: ArbiterSessionInput[], fp: string): Promise
       { enabled: s.arbiterEnabled, apiKey: key, capUsd: s.arbiterCapUsd },
       inputs,
     )
+    // The user changed the key, revoked a category, or switched the agent off
+    // while this was in flight. The answer was computed under permissions that
+    // no longer hold, so it is dropped rather than rendered.
+    if (gen !== arbiterGeneration) return
+
     if (res.skipped === 'capped') arbiterStatus = 'capped'
+    else if (res.skipped === 'no-key' || res.skipped === 'disabled') arbiterStatus = 'off'
     else if (!res.ok) arbiterStatus = 'error'
     else arbiterStatus = 'idle'
+
+    // Mark answered whenever a request actually reached the API — including a
+    // refusal or output we could not parse. Those were billed; asking the
+    // identical question again on the next scan would bill again, and keep
+    // billing until the cap drained. A gloss is decoration, the money is not.
+    if (res.billed) arbiterFp = fp
+
     if (res.ok && !res.skipped) {
-      // Only mark this input as answered once a real result came back, so a
-      // failed run retries instead of caching the failure.
-      arbiterFp = fp
       for (const [id, g] of Object.entries(res.glosses)) arbiterGloss.set(id, g)
-      // Drop glosses for sessions that are no longer waiting.
       const live = new Set(inputs.map((i) => i.sessionId))
       for (const id of [...arbiterGloss.keys()]) if (!live.has(id)) arbiterGloss.delete(id)
+      const missing = inputs.length - Object.keys(res.glosses).length
+      if (missing > 0) appendArbiterLog('run', `${missing} not answered — left unglossed`)
     }
   } finally {
     arbiterRunning = false
+    if (arbiterPendingFp === fp) arbiterPendingFp = ''
     pushSessions()
   }
 }
@@ -1849,6 +1888,7 @@ ipcMain.handle('cat:delete', (_e, id: number) => {
 // ---------- Arbiter controls ----------
 ipcMain.handle('arbiter:setEnabled', (_e, on: boolean) => {
   setAppState('arbiterEnabled', on ? 'true' : 'false')
+  arbiterGeneration++ // discard any run already in flight under the old setting
   if (!on) {
     // Turning it off clears the cached glosses immediately — a stale line
     // attributed to an agent you just disabled is worse than none.
@@ -1864,6 +1904,8 @@ ipcMain.handle('arbiter:setKey', (_e, keyId: number | null) => {
   if (keyId === null) setAppState('arbiterKeyId', '')
   else setAppState('arbiterKeyId', String(keyId))
   arbiterFp = '' // different credentials — do not reuse the previous answer
+  arbiterPendingFp = ''
+  arbiterGeneration++
   pushSessions()
   return true
 })
@@ -1882,12 +1924,19 @@ ipcMain.handle('arbiter:poke', async () => {
     arbiterTimer = null
   }
   arbiterFp = ''
+  arbiterPendingFp = ''
   await runArbiterNow(arbiterLastInputs, arbiterInputFingerprint(arbiterLastInputs))
   return true
 })
 ipcMain.handle('cat:setArbiterContext', (_e, id: number, on: boolean) => {
   setCategoryArbiterContext(id, on)
   arbiterFp = '' // the redaction changed, so the previous answer is stale
+  arbiterPendingFp = ''
+  arbiterGeneration++
+  // Revoking has to remove what the grant produced. A gloss derived from a
+  // command the user has just withdrawn permission to send must not keep
+  // rendering — clearing all of them is cheap and cannot under-clear.
+  if (!on) arbiterGloss.clear()
   appendArbiterLog('config', `category context ${on ? 'granted' : 'revoked'}`)
   pushSessions()
   return true
@@ -2350,6 +2399,20 @@ ipcMain.handle('apikeys:remove', (_e, id: number) => {
   if (typeof id !== 'number') return { ok: false }
   removeApiKey(id)
   for (const [t, info] of keyTokens) if (info.keyId === id) keyTokens.delete(t) // stop serving it
+  // If the Arbiter was pointed at this key, stand it down rather than leaving it
+  // "enabled" against a dangling id — that state reported idle while doing
+  // nothing, and the Settings checkbox disabled itself once the last key was
+  // gone, so it could not be switched off either.
+  if (getSettings().arbiterKeyId === id) {
+    setAppState('arbiterKeyId', '')
+    setAppState('arbiterEnabled', 'false')
+    arbiterGloss.clear()
+    arbiterFp = ''
+    arbiterPendingFp = ''
+    arbiterGeneration++
+    arbiterStatus = 'off'
+    appendArbiterLog('config', 'key removed — disabled')
+  }
   pushSessions()
   return { ok: true }
 })

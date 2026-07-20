@@ -1468,7 +1468,9 @@ function SettingsModal({
             <input
               type="checkbox"
               checked={settings?.arbiterEnabled ?? false}
-              disabled={apiKeys.length === 0}
+              // Only block turning it ON without a key — a checked box must
+              // always be clickable, or a bad state can't be switched off.
+              disabled={apiKeys.length === 0 && !(settings?.arbiterEnabled ?? false)}
               onChange={(e) => window.cc.arbiterSetEnabled(e.target.checked)}
             />
             <span>

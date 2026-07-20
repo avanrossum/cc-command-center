@@ -75,6 +75,11 @@ export interface ArbiterResult {
   costUsd: number
   error?: string
   skipped?: 'disabled' | 'no-key' | 'capped' | 'nothing-to-do' | 'unchanged'
+  // True once a request actually reached the API and could be billed. The caller
+  // uses this to decide whether to mark the input as answered: retrying a
+  // question that was already PAID for (a refusal, or output we failed to parse)
+  // would re-bill the identical request on every scan until the cap drained.
+  billed: boolean
 }
 
 const NEUTRAL = (skipped: ArbiterResult['skipped']): ArbiterResult => ({
@@ -82,6 +87,7 @@ const NEUTRAL = (skipped: ArbiterResult['skipped']): ArbiterResult => ({
   glosses: {},
   costUsd: 0,
   skipped,
+  billed: false,
 })
 
 const SYSTEM = `You triage a fleet of autonomous coding sessions for one developer.
@@ -140,7 +146,10 @@ export function redactForApi(sessions: ArbiterSessionInput[]): ArbiterSessionInp
   return sessions.map((s) => {
     if (s.categoryId !== null && allowed.has(s.categoryId)) return s
     const { detail: _drop, ...rest } = s
-    return rest
+    // The NAME is substance too — sessions get named after what they are working
+    // on, which is exactly the thing an un-cleared category is withholding. Send
+    // a stable handle instead so the model can still key its answer correctly.
+    return { ...rest, name: `session-${s.sessionId.slice(0, 8)}` }
   })
 }
 
@@ -167,7 +176,9 @@ export async function runArbiter(
   try {
     const res = await client.messages.create({
       model: ARBITER_MODEL,
-      max_tokens: 1024,
+      // Scales with the batch: a truncated response is unparseable JSON that was
+      // still billed in full, so under-sizing this is a money bug, not a UX one.
+      max_tokens: Math.min(4096, 320 + safe.length * 80),
       system: SYSTEM,
       // Triage is a summarisation task, not a reasoning one. Thinking off plus
       // low effort keeps a frequently-run agent cheap.
@@ -190,7 +201,7 @@ export async function runArbiter(
     // A refusal is a successful HTTP response with no usable content.
     if (res.stop_reason === 'refusal') {
       appendArbiterLog('error', 'model declined this batch')
-      return { ok: false, glosses: {}, costUsd, error: 'refusal' }
+      return { ok: false, glosses: {}, costUsd, error: 'refusal', billed: true }
     }
 
     const text = res.content.find((b) => b.type === 'text')
@@ -208,7 +219,7 @@ export async function runArbiter(
         `${withDetail < safe.length ? ` · ${safe.length - withDetail} metadata-only` : ''}` +
         ` · $${costUsd.toFixed(4)}`,
     )
-    return { ok: true, glosses, costUsd }
+    return { ok: true, glosses, costUsd, billed: true }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     // Record the attempt even on failure: a request can be billed after the
@@ -223,6 +234,10 @@ export async function runArbiter(
       ok: false,
     })
     appendArbiterLog('error', msg.slice(0, 160))
-    return { ok: false, glosses: {}, costUsd: 0, error: msg }
+    // A thrown request may or may not have been billed. Treat it as billed only
+    // when the failure came back from the API itself (a status error) rather
+    // than from connecting — a connection that never landed cannot be charged.
+    const billed = typeof (e as { status?: number })?.status === 'number'
+    return { ok: false, glosses: {}, costUsd: 0, error: msg, billed }
   }
 }
