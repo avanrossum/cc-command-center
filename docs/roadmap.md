@@ -218,6 +218,14 @@ Today only the *last-active* session auto-restores and every not-live node is tr
 
 ## Future direction (discussion, not scheduled) — Control agent (fleet conductor)
 
+**Foundation shipped (2026-07-19/20, merged for v0.10.0).** The "bigger control space" exploration
+built the read-only surfaces the Arbiter plugs into: the **gate ledger** (its input contract is the
+`gate.payload` substance — the verbatim command / question / blocker), the per-session **`whyGloss`
+seam** (wired, always empty today, rendered only when present), and the **companion why-board**
+where a plain-English gloss would surface. Build the narrator as an OPTIONAL layer over the always-on
+verbatim base so it degrades cleanly with no key. Full handoff:
+`docs/explorations/bigger-control-space/OUTCOME.md`.
+
 **Idea (user, 2026-07-08).** Wire a **control agent** into the app itself — an agent that can help make decisions, read the output of sessions, act as an arbiter / control surface for the whole fleet. It's "the bus, with a brain": the apex of the awareness work, driving the same primitives (read any session's transcript, inject into any managed session, route by the edge graph, query state, spawn/resume) that Phases 5/9 expose.
 
 **What it could do.** Triage the beacon bar ("who actually needs you, and why"), arbitrate/route messages between sessions, perform the Phase-10 context extraction (read a parent's transcript → produce the bounded brief for a tangent), summarize long-running sessions, and be a single natural-language control surface ("resume the schema-fix and tell it the migration path changed").

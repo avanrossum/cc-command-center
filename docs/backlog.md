@@ -86,6 +86,28 @@ remove-subtree cascade are the building blocks.
 
 
 
+## SHIPPED — the bigger control space (v0.9.25 → v0.10.0, 2026-07-19/20)
+
+Built on `feat/bigger-control-space` (a session running *inside* the app), merged to main.
+Full handoff for the Desktop session: `docs/explorations/bigger-control-space/OUTCOME.md`.
+All read-only surfaces; no Arbiter / API-key dependency.
+
+- ✅ **"Why" line**: every needs-you row/card carries the actual gated command (conservative,
+  parsed from the PTY buffer — coarse fallback rather than a guess), the real question (from the
+  transcript), or `blocked → child`.
+- ✅ **Refined state taxonomy**: permission ("open a door", latched) vs question ("needs your
+  brain" — AskUserQuestion + a turn ending on `?`, holds until you act, no silent idle fade).
+  AskUserQuestion is now detected (it fires no hook — added a buffer signature).
+- ✅ **Gate ledger** (registry v9): durable `gate` + `event_log`, FK-cascade **delete-on-removal**,
+  auto-seen (gated on window focus) / auto-resolve (debounce), bounded caps. Drives the "did I
+  handle it?" pip; survives restart. Hardened against a 12-bug adversarial review.
+- ✅ **Category identity** (registry v10): color + optional emoji (clickable grid) + short word +
+  full-name-on-hover, in the rail and on cross-category tags. The ＋ opens the same editor.
+- ✅ **Companion pane**: hideable panel right of the terminal — the Strip (duration swimlanes) + a
+  cross-category "needs you" why-board (this-category / ALL scope, default ALL). Beacon NEEDS-YOU
+  list hides while it's open. Arbiter gloss seam (`whyGloss`) wired but empty.
+- ⏳ Deferred: since-you-were-away briefing; ambient edge (optional, default off); radar (later).
+
 ## SHIPPED — this-phase wrap-up (v0.8.1 → v0.9.0, 2026-07-08)
 
 - ✅ **Selection → tangent** (v0.8.1): Cmd+K on a terminal selection spawns a tangential child
