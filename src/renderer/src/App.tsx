@@ -1388,9 +1388,6 @@ export function App() {
                   })
                 )}
               </div>
-              {/* Fills spare height so the fleet + Arbiter pin to the bottom on a
-                  tall window; collapses on a short one, where the companion scrolls. */}
-              <div className="comp-spacer" />
               {popped.has('subagents') ? (
                 <PopStub title="Subagents" onReturn={() => setPop('subagents', false)} />
               ) : (
