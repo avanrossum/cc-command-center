@@ -145,6 +145,40 @@ export function initRegistry(dbPath: string): void {
     db.exec(`ALTER TABLE node ADD COLUMN api_key_id INTEGER;`)
     db.pragma('user_version = 8')
   }
+  if (v < 9) {
+    // The gate ledger + durable activity log — the "did I handle that?" memory.
+    // A `gate` row is ONE needs-you moment, keyed by a stable fingerprint so it
+    // survives the 1.5s rescan and a full restart. seen_at / resolved_at are both
+    // AUTO-set (focus / absence) — there is no manual "mark done", so the ledger
+    // can never become an inbox. Both tables cascade-DELETE with their node, so a
+    // removed session takes its whole history with it: the transcript on disk is
+    // the real record, this layer is a convenience index and is deleted freely.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS gate (
+        fp TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES node(session_id) ON DELETE CASCADE,
+        category_id INTEGER,
+        kind TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        first_seen INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL,
+        seen_at INTEGER,
+        resolved_at INTEGER,
+        resolution TEXT
+      );
+      CREATE INDEX IF NOT EXISTS gate_open ON gate(session_id) WHERE resolved_at IS NULL;
+      CREATE TABLE IF NOT EXISTS event_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at INTEGER NOT NULL,
+        session_id TEXT REFERENCES node(session_id) ON DELETE CASCADE,
+        category_id INTEGER,
+        kind TEXT NOT NULL,
+        fp TEXT,
+        detail TEXT
+      );
+    `)
+    db.pragma('user_version = 9')
+  }
 }
 
 export function setNodeApiKey(sessionId: string, apiKeyId: number | null): void {
@@ -353,4 +387,148 @@ export function getNodeMap(): Map<string, NodeRow> {
   const m = new Map<string, NodeRow>()
   for (const r of rows) m.set(r.session_id, r)
   return m
+}
+
+// ---------- gate ledger: the "did I handle that?" memory ----------
+
+export interface OpenGate {
+  sessionId: string
+  categoryId: number | null
+  kind: 'permission' | 'question' | 'blocked'
+  payload: string // the substance; part of the fingerprint, so a reworded gate is a new row
+}
+
+export interface GateRow {
+  fp: string
+  session_id: string
+  category_id: number | null
+  kind: string
+  payload: string
+  first_seen: number
+  last_seen: number
+  seen_at: number | null
+  resolved_at: number | null
+}
+
+const RESOLVE_DEBOUNCE_MS = 3500 // a gate must be absent ~2+ scans (1.5s each) before it resolves
+const GATE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000 // resolved rows kept a week, then pruned
+const MAX_RESOLVED_GATES = 300 // global backstop on resolved rows
+const EVENTS_PER_SESSION = 60 // per-session ring cap on the activity log
+const MAX_EVENTS = 4000 // global backstop on the activity log
+let lastPruneAt = 0
+
+function gateFp(g: OpenGate): string {
+  // Stable identity: same session + kind + substance = the same gate across scans
+  // and a restart; a genuinely new / reworded gate mints a new fp (re-surfaces as
+  // new). uuid|kind|payload is injective — the uuid and kind never contain a pipe,
+  // so a payload with pipes stays one trailing field and can't collide.
+  return `${g.sessionId}|${g.kind}|${g.payload}`
+}
+
+function logEvent(
+  d: Database.Database,
+  g: { sessionId: string; categoryId: number | null; kind: string },
+  fp: string,
+  event: string,
+  at: number,
+): void {
+  d.prepare('INSERT INTO event_log (at, session_id, category_id, kind, fp, detail) VALUES (?,?,?,?,?,?)').run(
+    at,
+    g.sessionId,
+    g.categoryId,
+    event,
+    fp,
+    g.kind,
+  )
+}
+
+// Reconcile the ledger with the gates open right now. Upserts current gates
+// (auto-seen when the human is focused on that session), auto-resolves gates that
+// have been absent past the debounce, and prunes periodically. All in one
+// transaction. Query getUnhandledSessions() / getOpenGates() for the UI.
+export function syncGates(gates: OpenGate[], attachedSid: string | null, now: number): void {
+  const d = must()
+  d.transaction(() => {
+    for (const g of gates) {
+      const fp = gateFp(g)
+      const seenNow = attachedSid === g.sessionId ? now : null
+      const row = d.prepare('SELECT resolved_at, seen_at FROM gate WHERE fp=?').get(fp) as
+        | { resolved_at: number | null; seen_at: number | null }
+        | undefined
+      if (!row) {
+        d.prepare(
+          'INSERT INTO gate (fp, session_id, category_id, kind, payload, first_seen, last_seen, seen_at) VALUES (?,?,?,?,?,?,?,?)',
+        ).run(fp, g.sessionId, g.categoryId, g.kind, g.payload, now, now, seenNow)
+        logEvent(d, g, fp, 'gate_open', now)
+        if (seenNow) logEvent(d, g, fp, 'gate_seen', now)
+      } else if (row.resolved_at != null) {
+        // A previously-resolved gate is open again — a fresh occurrence.
+        d.prepare(
+          'UPDATE gate SET category_id=?, payload=?, first_seen=?, last_seen=?, seen_at=?, resolved_at=NULL, resolution=NULL WHERE fp=?',
+        ).run(g.categoryId, g.payload, now, now, seenNow, fp)
+        logEvent(d, g, fp, 'gate_open', now)
+        if (seenNow) logEvent(d, g, fp, 'gate_seen', now)
+      } else {
+        const newlySeen = row.seen_at == null && seenNow != null
+        d.prepare('UPDATE gate SET category_id=?, payload=?, last_seen=?, seen_at=COALESCE(seen_at, ?) WHERE fp=?').run(
+          g.categoryId,
+          g.payload,
+          now,
+          seenNow,
+          fp,
+        )
+        if (newlySeen) logEvent(d, g, fp, 'gate_seen', now)
+      }
+    }
+    // Auto-resolve: open gates not touched this scan for longer than the debounce.
+    const stale = d
+      .prepare('SELECT fp, session_id, category_id, kind FROM gate WHERE resolved_at IS NULL AND last_seen < ?')
+      .all(now - RESOLVE_DEBOUNCE_MS) as { fp: string; session_id: string; category_id: number | null; kind: string }[]
+    for (const s of stale) {
+      d.prepare("UPDATE gate SET resolved_at=?, resolution='cleared' WHERE fp=?").run(now, s.fp)
+      logEvent(d, { sessionId: s.session_id, categoryId: s.category_id, kind: s.kind }, s.fp, 'gate_resolved', now)
+    }
+    if (now - lastPruneAt > 60_000) {
+      lastPruneAt = now
+      pruneLedger(d, now)
+    }
+  })()
+}
+
+function pruneLedger(d: Database.Database, now: number): void {
+  // Resolved gates: age out, then a global count backstop. Open gates never pruned.
+  d.prepare('DELETE FROM gate WHERE resolved_at IS NOT NULL AND resolved_at < ?').run(now - GATE_RETENTION_MS)
+  d.prepare(
+    `DELETE FROM gate WHERE resolved_at IS NOT NULL AND fp NOT IN (
+       SELECT fp FROM gate WHERE resolved_at IS NOT NULL ORDER BY resolved_at DESC LIMIT ?
+     )`,
+  ).run(MAX_RESOLVED_GATES)
+  // Activity log: age out, per-session ring cap, then a global backstop.
+  d.prepare('DELETE FROM event_log WHERE at < ?').run(now - GATE_RETENTION_MS)
+  d.prepare(
+    `DELETE FROM event_log WHERE id IN (
+       SELECT id FROM (
+         SELECT id, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY id DESC) AS rn FROM event_log
+       ) WHERE rn > ?
+     )`,
+  ).run(EVENTS_PER_SESSION)
+  d.prepare('DELETE FROM event_log WHERE id NOT IN (SELECT id FROM event_log ORDER BY id DESC LIMIT ?)').run(MAX_EVENTS)
+}
+
+// Sessions with an open gate the human hasn't looked at yet — drives the pip.
+export function getUnhandledSessions(): Set<string> {
+  const rows = must()
+    .prepare('SELECT DISTINCT session_id FROM gate WHERE resolved_at IS NULL AND seen_at IS NULL')
+    .all() as { session_id: string }[]
+  return new Set(rows.map((r) => r.session_id))
+}
+
+// Currently-open gates (unresolved), oldest first. For the companion why-board and
+// the since-you-were-away briefing later; also used by the ledger tests.
+export function getOpenGates(): GateRow[] {
+  return must()
+    .prepare(
+      'SELECT fp, session_id, category_id, kind, payload, first_seen, last_seen, seen_at, resolved_at FROM gate WHERE resolved_at IS NULL ORDER BY first_seen',
+    )
+    .all() as GateRow[]
 }

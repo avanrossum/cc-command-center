@@ -33,6 +33,7 @@ interface Session {
   why?: string
   whyCoarse?: boolean
   whyGloss?: string // Arbiter seam — a plain-English gloss, rendered only when present
+  unhandled?: boolean // open gate you haven't looked at yet — shows a pip until seen
 }
 interface Category {
   id: number
@@ -727,7 +728,7 @@ export function App() {
               return (
               <li
                 key={s.sessionId}
-                className={`row state-${dstate(s)}${s.dormant ? ' dormant' : ''}${selected?.key === s.sessionId ? ' sel' : ''}${why ? ' has-why' : ''}`}
+                className={`row state-${dstate(s)}${s.dormant ? ' dormant' : ''}${selected?.key === s.sessionId ? ' sel' : ''}${why ? ' has-why' : ''}${s.unhandled ? ' unhandled' : ''}`}
                 style={{ paddingLeft: 10 + depth * 16 }}
                 title={s.stateReason}
                 onClick={() => openSession(s)}
@@ -736,6 +737,7 @@ export function App() {
                   setMenu({ x: e.clientX, y: e.clientY, session: s, mode: 'root' })
                 }}
               >
+                {s.unhandled && <span className="pip" title="you haven't looked at this yet" />}
                 {edgeType && (
                   <span className={`edge edge-${edgeType}`}>
                     {edgeType === 'blocking' ? '└─' : '└╌'}

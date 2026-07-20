@@ -55,9 +55,12 @@ import {
   apiKeyExists,
   setNodeApiKey,
   getNodeApiKey,
+  syncGates,
+  getUnhandledSessions,
   type ApiKeyRow,
   type Category,
   type Edge,
+  type OpenGate,
 } from './registry'
 
 let win: BrowserWindow | null = null
@@ -88,6 +91,7 @@ type EnrichedSession = LiveSession & {
   why?: string
   whyCoarse?: boolean // coarse label, no verbatim command (adopted / elicitation dialog)
   whyGloss?: string // reserved for the Arbiter; never populated by this path
+  unhandled?: boolean // has an open gate you haven't looked at yet (drives the pip)
 }
 interface Snapshot {
   home: string
@@ -567,10 +571,44 @@ function snapshot(): Snapshot {
     })
   }
 
+  // ---------- gate ledger sync: the "did I handle that?" memory ----------
+  // Blocked parents (a parent whose blocking child is unfinished) — the same rule
+  // the renderer uses for the blocked display state, computed here for the ledger.
+  const stateById = new Map(enriched.map((e) => [e.sessionId, e.state]))
+  const blockedChild = new Map<string, string>()
+  for (const e of edges) {
+    if (e.type !== 'blocking') continue
+    const cs = stateById.get(e.child_id)
+    if (cs === 'working' || cs === 'waiting') {
+      blockedChild.set(e.parent_id, names[e.child_id] || nodes.get(e.child_id)?.name || e.child_id.slice(0, 8))
+    }
+  }
+  const openGates: OpenGate[] = []
+  for (const e of enriched) {
+    if (e.dormant) continue
+    let gate: OpenGate | undefined
+    if (e.attention === 'permission')
+      gate = { sessionId: e.sessionId, categoryId: e.categoryId, kind: 'permission', payload: e.why ?? 'wants approval' }
+    else if (e.whyKind === 'question')
+      gate = { sessionId: e.sessionId, categoryId: e.categoryId, kind: 'question', payload: e.why ?? 'needs your answer' }
+    else if (blockedChild.has(e.sessionId))
+      gate = { sessionId: e.sessionId, categoryId: e.categoryId, kind: 'blocked', payload: blockedChild.get(e.sessionId)! }
+    if (gate) openGates.push(gate)
+  }
+  // The session the human is looking at — its open gate is auto-marked "seen".
+  const attachedSid = attachedKey ? terminals.get(attachedKey)?.sessionId ?? null : null
+  let unhandled = new Set<string>()
+  try {
+    syncGates(openGates, attachedSid, now)
+    unhandled = getUnhandledSessions()
+  } catch (err) {
+    console.error('[main] gate ledger sync failed', err)
+  }
+
   return {
     home: os.homedir(),
     scannedAt: Date.now(),
-    sessions: enriched,
+    sessions: enriched.map((e) => (unhandled.has(e.sessionId) ? { ...e, unhandled: true } : e)),
     categories: listCategories(),
     edges,
     messages: messageLog.slice(-40),

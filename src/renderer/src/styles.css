@@ -629,6 +629,7 @@ body {
   padding: 7px 10px;
   border-bottom: 1px solid var(--cc-hairline);
   cursor: pointer;
+  position: relative;
 }
 .row:last-child {
   border-bottom: 0;
@@ -839,6 +840,24 @@ body {
   color: var(--cc-faint);
   margin-top: 2px;
   white-space: normal;
+}
+
+/* Unhandled: an open gate you haven't looked at yet. A bright pip at the left
+   margin — a distinct "new / unseen" marker, NOT another status color. It clears
+   automatically the moment you open the session (auto-seen), and survives a
+   restart (the gate ledger remembers seen_at). */
+.pip {
+  position: absolute;
+  left: 3px;
+  top: 12px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--cc-text);
+  box-shadow: 0 0 6px rgba(232, 228, 220, 0.55);
+}
+.row.dormant .pip {
+  display: none;
 }
 
 /* ---- terminal area ---- */
