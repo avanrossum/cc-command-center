@@ -157,8 +157,6 @@ function descendantIds(sessionId: string, edges: Edge[]): string[] {
   return out
 }
 
-// Rail tag: initials from the name — one word → first 2 letters, multi-word →
-// first letters of the first two words. "Test"→TE, "Test 2"→T2, "A · B"→AB.
 // A readable default rail word from the category name — the first word, kept as-is
 // (not cryptic initials). The rail cell caps its width; the user can set a custom
 // short word + an emoji for anything that doesn't read well truncated.
@@ -742,7 +740,9 @@ export function App() {
       <div className="body">
         <nav className="rail">
           {groups.map((g) => {
-            const tag = g.id === null ? '·' : g.label || autoTag(g.name)
+            // Uncategorized reads as a word like every other rail tag — a bare
+            // dot gave no clue what the section was.
+            const tag = g.id === null ? 'Uncat' : g.label || autoTag(g.name)
             // The most-urgent "needs you" state in this category, so the rail dot
             // shows not just THAT a category needs you but WHY. Order MATCHES the
             // beacon's STATE.order so the two surfaces never disagree: needs-approval
