@@ -28,6 +28,7 @@ declare global {
       catDelete: (id: number) => Promise<boolean>
       catSetLabel: (id: number, label: string | null) => Promise<boolean>
       catSetColor: (id: number, color: string) => Promise<boolean>
+      catSetEmoji: (id: number, emoji: string | null) => Promise<boolean>
       catAssign: (sessionId: string, categoryId: number | null) => Promise<boolean>
       edgeSet: (
         childId: string,

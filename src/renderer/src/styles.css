@@ -475,14 +475,28 @@ body {
   height: var(--cc-cell-h);
   flex: none;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  font: 700 12px var(--cc-font-mono);
-  letter-spacing: 0.3px;
+  gap: 1px;
+  padding: 0 4px;
   color: var(--cat-color, var(--cc-cat-none));
   background: transparent;
   border: 0;
   cursor: pointer;
+  overflow: hidden;
+}
+.rail-emoji {
+  font-size: 17px;
+  line-height: 1;
+}
+.rail-tag {
+  font: 600 10px var(--cc-font-mono);
+  letter-spacing: 0.2px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .rail-cell:hover {
   background: var(--cc-fill-hover);
@@ -1479,6 +1493,16 @@ body {
 }
 .cat-in:focus {
   border-color: var(--cc-waiting);
+}
+.cat-idrow {
+  display: flex;
+  gap: 6px;
+}
+.cat-emoji-in {
+  width: 44px;
+  flex: none;
+  text-align: center;
+  font-size: 16px;
 }
 select.cat-in {
   appearance: none;

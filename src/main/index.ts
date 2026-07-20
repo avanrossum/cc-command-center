@@ -34,6 +34,7 @@ import {
   renameCategory,
   deleteCategory,
   setCategoryLabel,
+  setCategoryEmoji,
   setCategoryColor,
   ensureNode,
   assignCategory,
@@ -1724,6 +1725,11 @@ ipcMain.handle('cat:setLabel', (_e, id: number, label: string | null) => {
 })
 ipcMain.handle('cat:setColor', (_e, id: number, color: string) => {
   setCategoryColor(id, color)
+  pushSessions()
+  return true
+})
+ipcMain.handle('cat:setEmoji', (_e, id: number, emoji: string | null) => {
+  setCategoryEmoji(id, emoji)
   pushSessions()
   return true
 })

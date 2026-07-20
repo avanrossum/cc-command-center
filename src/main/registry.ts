@@ -12,7 +12,8 @@ export interface Category {
   name: string
   color: string
   sort: number
-  label: string | null // short rail tag; null → auto-initials from the name
+  label: string | null // short rail word; null → auto-derived from the name
+  emoji: string | null // optional glyph shown in the rail and on cross-category tags
 }
 
 export interface NodeRow {
@@ -179,6 +180,13 @@ export function initRegistry(dbPath: string): void {
     `)
     db.pragma('user_version = 9')
   }
+  if (v < 10) {
+    // Optional per-category emoji — part of the category's visual identity (color +
+    // emoji + short label) so it reads at a glance in the rail AND as a
+    // cross-category provenance tag.
+    db.exec(`ALTER TABLE category ADD COLUMN emoji TEXT;`)
+    db.pragma('user_version = 10')
+  }
 }
 
 export function setNodeApiKey(sessionId: string, apiKeyId: number | null): void {
@@ -230,6 +238,10 @@ export function setEdgeTrust(childId: string, trusted: boolean): void {
 
 export function setCategoryLabel(id: number, label: string | null): void {
   must().prepare('UPDATE category SET label=? WHERE id=?').run(label, id)
+}
+
+export function setCategoryEmoji(id: number, emoji: string | null): void {
+  must().prepare('UPDATE category SET emoji=? WHERE id=?').run(emoji, id)
 }
 
 export function setCategoryColor(id: number, color: string): void {
@@ -316,7 +328,7 @@ export function getEdges(): Edge[] {
 
 export function listCategories(): Category[] {
   return must()
-    .prepare('SELECT id, name, color, sort, label FROM category ORDER BY sort, id')
+    .prepare('SELECT id, name, color, sort, label, emoji FROM category ORDER BY sort, id')
     .all() as Category[]
 }
 
@@ -327,7 +339,7 @@ export function createCategory(name: string, color?: string): Category {
   const info = d
     .prepare('INSERT INTO category (name, color, sort, created_at) VALUES (?,?,?,?)')
     .run(name, col, count, Date.now())
-  return { id: Number(info.lastInsertRowid), name, color: col, sort: count, label: null }
+  return { id: Number(info.lastInsertRowid), name, color: col, sort: count, label: null, emoji: null }
 }
 
 export function renameCategory(id: number, name: string): void {

@@ -41,6 +41,7 @@ interface Category {
   color: string
   sort: number
   label: string | null
+  emoji: string | null
 }
 interface ApiKey {
   id: number
@@ -157,14 +158,16 @@ function descendantIds(sessionId: string, edges: Edge[]): string[] {
 
 // Rail tag: initials from the name — one word → first 2 letters, multi-word →
 // first letters of the first two words. "Test"→TE, "Test 2"→T2, "A · B"→AB.
+// A readable default rail word from the category name — the first word, kept as-is
+// (not cryptic initials). The rail cell caps its width; the user can set a custom
+// short word + an emoji for anything that doesn't read well truncated.
 function autoTag(name: string): string {
   const words = name
     .split(/[\s·/|,_-]+/)
     .map((w) => w.replace(/[^a-zA-Z0-9]/g, ''))
     .filter(Boolean)
   if (words.length === 0) return '?'
-  if (words.length === 1) return words[0].slice(0, 2).toUpperCase()
-  return (words[0][0] + words[1][0]).toUpperCase()
+  return words[0].slice(0, 7)
 }
 
 const CAT_PALETTE = [
@@ -206,6 +209,7 @@ export function App() {
     name: string
     color: string
     label: string | null
+    emoji: string | null
     x: number
     y: number
   } | null>(null)
@@ -457,6 +461,7 @@ export function App() {
       name: c.name,
       color: c.color,
       label: c.label,
+      emoji: c.emoji,
       rows: buildTree(byCat.get(c.id) ?? []),
     }))
     const uncat = {
@@ -464,6 +469,7 @@ export function App() {
       name: 'Uncategorized',
       color: '#6a6355',
       label: null as string | null,
+      emoji: null as string | null,
       rows: buildTree(byCat.get(null) ?? []),
     }
     return [...cats, uncat].filter((g) => g.id !== null || g.rows.length > 0)
@@ -681,11 +687,20 @@ export function App() {
                 onContextMenu={(e) => {
                   e.preventDefault()
                   if (g.id !== null)
-                    setCatEdit({ id: g.id, name: g.name, color: g.color, label: g.label, x: e.clientX, y: e.clientY })
+                    setCatEdit({
+                      id: g.id,
+                      name: g.name,
+                      color: g.color,
+                      label: g.label,
+                      emoji: g.emoji,
+                      x: e.clientX,
+                      y: e.clientY,
+                    })
                 }}
                 title={`${g.name} · ${g.rows.length}`}
               >
-                {tag}
+                {g.emoji && <span className="rail-emoji">{g.emoji}</span>}
+                <span className="rail-tag">{tag}</span>
               </button>
             )
           })}
@@ -1985,17 +2000,31 @@ function CategoryEditor({
   edit,
   setEdit,
 }: {
-  edit: { id: number; name: string; color: string; label: string | null; x: number; y: number }
+  edit: {
+    id: number
+    name: string
+    color: string
+    label: string | null
+    emoji: string | null
+    x: number
+    y: number
+  }
   setEdit: (v: null) => void
 }) {
   const [name, setName] = useState(edit.name)
   const [tag, setTag] = useState(edit.label ?? '')
+  const [emoji, setEmoji] = useState(edit.emoji ?? '')
   const [color, setColor] = useState(edit.color)
   const close = () => setEdit(null)
   const save = () => {
     const nm = name.trim()
     if (nm && nm !== edit.name) window.cc.catRename(edit.id, nm)
-    window.cc.catSetLabel(edit.id, tag.trim().slice(0, 3).toUpperCase() || null)
+    window.cc.catSetLabel(edit.id, tag.trim().slice(0, 8) || null)
+    // Keep only the first grapheme (a single emoji can span several code points —
+    // variation selectors, ZWJ sequences); empty clears it.
+    const g = emoji.trim()
+    const firstGrapheme = g ? [...new Intl.Segmenter().segment(g)][0]?.segment ?? null : null
+    window.cc.catSetEmoji(edit.id, firstGrapheme)
     close()
   }
   return (
@@ -2021,17 +2050,30 @@ function CategoryEditor({
             if (e.key === 'Escape') close()
           }}
         />
-        <input
-          className="cat-in"
-          value={tag}
-          maxLength={3}
-          placeholder={`Rail tag (default ${autoTag(edit.name)})`}
-          onChange={(e) => setTag(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') save()
-            if (e.key === 'Escape') close()
-          }}
-        />
+        <div className="cat-idrow">
+          <input
+            className="cat-in cat-emoji-in"
+            value={emoji}
+            placeholder="🙂"
+            aria-label="Category emoji (optional)"
+            onChange={(e) => setEmoji(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') save()
+              if (e.key === 'Escape') close()
+            }}
+          />
+          <input
+            className="cat-in"
+            value={tag}
+            maxLength={8}
+            placeholder={`Short word (default ${autoTag(edit.name)})`}
+            onChange={(e) => setTag(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') save()
+              if (e.key === 'Escape') close()
+            }}
+          />
+        </div>
         <div className="cat-colors">
           {CAT_PALETTE.map((col) => (
             <button

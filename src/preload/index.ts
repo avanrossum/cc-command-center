@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('cc', {
   catDelete: (id: number) => ipcRenderer.invoke('cat:delete', id),
   catSetLabel: (id: number, label: string | null) => ipcRenderer.invoke('cat:setLabel', id, label),
   catSetColor: (id: number, color: string) => ipcRenderer.invoke('cat:setColor', id, color),
+  catSetEmoji: (id: number, emoji: string | null) => ipcRenderer.invoke('cat:setEmoji', id, emoji),
   catAssign: (sessionId: string, categoryId: number | null) =>
     ipcRenderer.invoke('cat:assign', sessionId, categoryId),
 
