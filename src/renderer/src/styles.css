@@ -2202,9 +2202,9 @@ select.cat-in {
   overflow-y: auto;
 }
 .fleet-empty {
-  font-size: 10.5px;
-  color: var(--cc-dim2);
-  padding: 2px 0 4px;
+  font-size: 11px;
+  color: var(--cc-dim);
+  padding: 4px 0 6px;
 }
 .fleet-group {
   margin-bottom: 6px;
