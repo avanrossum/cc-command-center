@@ -215,6 +215,7 @@ export function App() {
   // Default OPEN; open/hidden state and scope persist across restarts.
   const [companionOpen, setCompanionOpen] = useState(true)
   const [companionScope, setCompanionScope] = useState<'category' | 'all'>('all')
+  const [stripOpen, setStripOpen] = useState(true)
   const showCompanion = (open: boolean) => {
     setCompanionOpen(open)
     window.cc.stateSet('companionOpen', String(open))
@@ -222,6 +223,10 @@ export function App() {
   const setScope = (sc: 'category' | 'all') => {
     setCompanionScope(sc)
     window.cc.stateSet('companionScope', sc)
+  }
+  const showStrip = (open: boolean) => {
+    setStripOpen(open)
+    window.cc.stateSet('stripOpen', String(open))
   }
   // Right-click a rail cell to edit it, or the ＋ to create one — same editor.
   // id === null puts the editor in create mode (name / emoji / word / color).
@@ -278,6 +283,7 @@ export function App() {
     window.cc.stateGet('activeSessionId').then((id) => setPendingRestore(id))
     window.cc.stateGet('companionOpen').then((v) => v === 'false' && setCompanionOpen(false))
     window.cc.stateGet('companionScope').then((v) => v === 'category' && setCompanionScope('category'))
+    window.cc.stateGet('stripOpen').then((v) => v === 'false' && setStripOpen(false))
     const offSessions = window.cc.onSessions((s) => setSnap(s as Snapshot))
     const offShow = window.cc.onTermShow((p) => {
       setRecover(null)
@@ -420,6 +426,54 @@ export function App() {
     () => (companionScope === 'all' ? needsYou : needsYou.filter((s) => s.categoryId === selectedCat)),
     [needsYou, companionScope, selectedCat],
   )
+
+  // The Strip: per-session duration swimlanes. A renderer-side ring buffer of each
+  // live session's coarse state, accumulated from the 1.5s snapshots (nothing
+  // persists this) — change-points only, kept to a rolling window. Lost on restart.
+  const STRIP_WINDOW = 6 * 60 * 1000
+  const stripHist = useRef<Map<string, { t: number; s: DisplayState }[]>>(new Map())
+  useEffect(() => {
+    const now = snap.scannedAt || Date.now()
+    const h = stripHist.current
+    const liveSet = new Set<string>()
+    for (const s of live) {
+      if (s.dormant) continue
+      liveSet.add(s.sessionId)
+      const d = dstate(s)
+      let arr = h.get(s.sessionId)
+      if (!arr) {
+        arr = []
+        h.set(s.sessionId, arr)
+      }
+      const last = arr[arr.length - 1]
+      if (!last || last.s !== d) arr.push({ t: now, s: d }) // record only on a state change
+      while (arr.length > 1 && arr[1].t < now - STRIP_WINDOW) arr.shift() // drop points that fell off the window
+    }
+    for (const k of [...h.keys()]) if (!liveSet.has(k)) h.delete(k) // forget gone sessions
+  }, [snap]) // eslint-disable-line react-hooks/exhaustive-deps
+  // The lanes shown in the Strip: live sessions in the current scope, most-urgent first.
+  const stripLanes = useMemo(
+    () =>
+      live
+        .filter((s) => !s.dormant && (companionScope === 'all' || s.categoryId === selectedCat))
+        .sort((a, b) => STATE[dstate(a)].order - STATE[dstate(b)].order || (a.name ?? '').localeCompare(b.name ?? ''))
+        .slice(0, 24),
+    [live, companionScope, selectedCat], // eslint-disable-line react-hooks/exhaustive-deps
+  )
+  // Right-aligned segments (now at the right edge); widths are fractions of the
+  // window, so a short history leaves the left end empty rather than stretching.
+  const stripSegs = (sid: string, now: number): { w: number; s: DisplayState }[] => {
+    const pts = stripHist.current.get(sid) ?? []
+    const windowStart = now - STRIP_WINDOW
+    const out: { w: number; s: DisplayState }[] = []
+    for (let i = 0; i < pts.length; i++) {
+      const start = Math.max(pts[i].t, windowStart)
+      const end = i + 1 < pts.length ? pts[i + 1].t : now
+      if (end <= windowStart) continue
+      out.push({ w: (end - start) / STRIP_WINDOW, s: pts[i].s })
+    }
+    return out
+  }
   const short = (cwd: string) => (snap.home ? cwd.replace(snap.home, '~') : cwd)
 
   const edgeByChild = useMemo(() => {
@@ -1028,6 +1082,42 @@ export function App() {
                 <button className="comp-hide" onClick={() => showCompanion(false)} title="Hide panel">
                   ⇥
                 </button>
+              </div>
+              <div className="comp-strip-wrap">
+                <button className="comp-section-head" onClick={() => showStrip(!stripOpen)}>
+                  <span className="chev">{stripOpen ? '▾' : '▸'}</span> activity
+                  <span className="sh-dim">· last 6m</span>
+                </button>
+                {stripOpen && (
+                  <div className="comp-strip">
+                    {stripLanes.length === 0 ? (
+                      <div className="strip-empty">no live sessions</div>
+                    ) : (
+                      stripLanes.map((s) => {
+                        const segs = stripSegs(s.sessionId, snap.scannedAt || Date.now())
+                        return (
+                          <button
+                            key={s.sessionId}
+                            className="strip-lane"
+                            onClick={() => openSession(s)}
+                            title={nameOf(s)}
+                          >
+                            <span className="strip-name">{nameOf(s)}</span>
+                            <span className="strip-track">
+                              {segs.map((seg, i) => (
+                                <span
+                                  key={i}
+                                  className={`strip-seg seg-${seg.s}`}
+                                  style={{ width: `${(seg.w * 100).toFixed(2)}%` }}
+                                />
+                              ))}
+                            </span>
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
+                )}
               </div>
               <div className="comp-board">
                 {boardItems.length === 0 ? (
