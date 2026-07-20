@@ -922,7 +922,10 @@ body {
   flex-direction: column;
   background: var(--cc-surface);
   border-left: 1px solid var(--cc-border);
-  overflow: hidden;
+  /* Scroll the whole column when it can't fit (small / windowed) instead of
+     clipping the bottom sections. On a tall window nothing overflows, so it
+     never scrolls and looks identical. */
+  overflow-y: auto;
 }
 .comp-head {
   display: flex;
@@ -1064,12 +1067,17 @@ body {
 }
 
 .comp-board {
-  flex: 1;
-  overflow-y: auto;
+  flex: none;
   padding: 8px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+/* Grows to fill spare height so the fleet + Arbiter sit at the bottom on a tall
+   window; collapses to nothing on a short one, where the companion scrolls. */
+.comp-spacer {
+  flex: 1;
+  min-height: 0;
 }
 .comp-empty {
   margin: auto;
@@ -2202,9 +2210,9 @@ select.cat-in {
   overflow-y: auto;
 }
 .fleet-empty {
-  font-size: 11px;
-  color: var(--cc-dim);
-  padding: 4px 0 6px;
+  font-size: 10.5px;
+  color: var(--cc-dim2);
+  padding: 2px 0 4px;
 }
 .fleet-group {
   margin-bottom: 6px;
@@ -2288,6 +2296,7 @@ select.cat-in {
 /* ---- pop-out companion panels (in-app floating cards, not OS windows) ---- */
 .poppable {
   position: relative;
+  flex: none;
 }
 /* Hover-revealed pop-out affordance, top-right of the panel. */
 .pop-out {
