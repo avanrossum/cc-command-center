@@ -2066,17 +2066,9 @@ function CategoryEditor({
           }}
         />
         <div className="cat-idrow">
-          <input
-            className="cat-in cat-emoji-in"
-            value={emoji}
-            placeholder="🙂"
-            aria-label="Category emoji (optional)"
-            onChange={(e) => setEmoji(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') save()
-              if (e.key === 'Escape') close()
-            }}
-          />
+          <div className="cat-in cat-emoji-in cat-emoji-display" aria-label="Category emoji — pick below">
+            {emoji.trim() ? emoji.trim() : <span className="cat-emoji-ph">🙂</span>}
+          </div>
           <input
             className="cat-in"
             value={tag}

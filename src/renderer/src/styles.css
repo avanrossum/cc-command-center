@@ -1504,6 +1504,16 @@ body {
   text-align: center;
   font-size: 16px;
 }
+.cat-emoji-display {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  user-select: none;
+}
+.cat-emoji-ph {
+  opacity: 0.3;
+}
 .cat-emoji-grid {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
