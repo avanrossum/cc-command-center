@@ -32,6 +32,50 @@ Lesson worth keeping: verify a scrub with a per-blob scan plus a decompressing p
 archives. Both `git grep` over refs and plain `grep` over binaries returned clean results on
 demonstrably contaminated data during this audit.
 
+## Next up — queued 2026-07-20 (user, end of session)
+
+### 1. Usage readouts: context of the visible session, plus 5h / 7d overall
+
+Surface `context_window.used_percentage` for the **currently visible** session, and the
+account-wide `rate_limits.five_hour` / `seven_day` percentages.
+
+**Design constraint found while scoping — read before building.** The data lives in the
+**statusLine payload**, which Claude Code hands to a `statusLine` command. Two ways to get it,
+only one of which is shippable:
+
+- ❌ **Read the user's own `~/.claude/usage-cache.json`.** It already has `five_hour_pct` /
+  `seven_day_pct`, but it is written by *this user's personal* `statusline.sh`. Depending on it
+  ships an app that only works for its author — the exact objection raised on 2026-07-14 about
+  wrapping a personal statusline.
+- ✅ **App-owned statusLine injected per session via `--settings`.** `--settings` is additive
+  (already proven with `apiKeyHelper`), so the app can add its own `statusLine` command that
+  writes the payload to `~/.claude/ccc/usage/<sessionId>.json`, mirroring the existing
+  `status-hook.sh` mechanism. Self-contained, no user setup.
+
+Caveat that shapes the UI: `--settings` only reaches **app-spawned** sessions. Adopted/external
+sessions have no payload, so the readout must degrade to "unknown" rather than showing zero.
+A global-settings install (like the status hooks) would cover everything, but would **overwrite
+an existing user statusLine** — do not do that without an explicit, reversible opt-in.
+
+### 2. Unified metered-spend view
+
+Currently `arbiter_spend` covers only the Arbiter. Per `roadmap.md:245`, one surface should cover
+**both** the Arbiter and metered API-key *sessions* (the statusLine payload carries
+`cost.total_cost_usd` per session — so this depends on item 1's transport).
+
+Shape the user asked for: lives **under the activity bars**, **collapsed by default showing total
+spend**, expands to the full breakdown. The Arbiter console's spend line then becomes one row in
+it rather than a separate readout.
+
+### 3. Arbiter reduces needs-you false positives
+
+The mechanistic detection is "impressively robust" in use, with **occasional false positives**.
+That is the concrete form of the spec's "driving the NEEDS-YOU flags" (`roadmap.md:242`) — the
+Arbiter's real job is not captioning a flag but confirming it: distinguishing a session that is
+genuinely waiting from one that merely looks parked (the done-vs-turn call the state-taxonomy work
+deferred to it). Needs a demotion path in the snapshot, and a bias toward leaving a flag up when
+unsure — a missed flag costs more than a spurious one.
+
 ## Quick wins (logged)
 
 - ✅ **Context-window selector on spawn (SHIPPED v0.9.25, 2026-07-20).** New sessions could pick
