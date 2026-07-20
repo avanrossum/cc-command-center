@@ -2149,3 +2149,124 @@ select.cat-in {
   border-color: var(--cc-border);
   background: var(--cc-surface-2);
 }
+
+/* ---- Fleet activity (subagents), bottom of the companion pane ---- */
+.fleet {
+  flex: none;
+  border-top: 1px solid var(--cc-border);
+  background: var(--cc-surface-2);
+  display: flex;
+  flex-direction: column;
+  max-height: 38%;
+}
+.fleet-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--cc-dim);
+  text-align: left;
+}
+.fleet-head:hover {
+  background: var(--cc-fill-hover);
+}
+.fleet-head .chev {
+  font-size: 8px;
+  color: var(--cc-meta);
+}
+.fleet-name {
+  color: var(--cc-text);
+  font-weight: 600;
+}
+.fleet-count {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  font-family: var(--cc-font-mono);
+  font-size: 10.5px;
+  color: var(--cc-meta);
+}
+.fleet-body {
+  padding: 2px 10px 8px;
+  overflow-y: auto;
+}
+.fleet-empty {
+  font-size: 10.5px;
+  color: var(--cc-dim2);
+  padding: 2px 0 4px;
+}
+.fleet-group {
+  margin-bottom: 6px;
+}
+.fleet-owner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 3px 0;
+  cursor: pointer;
+  font: 600 10.5px var(--cc-font-ui);
+  color: var(--cc-dim);
+  text-align: left;
+}
+.fleet-owner:hover {
+  color: var(--cc-text);
+}
+.fleet-owner-n {
+  font-family: var(--cc-font-mono);
+  font-size: 9px;
+  color: var(--cc-meta);
+  border: 1px solid var(--cc-border);
+  border-radius: 20px;
+  padding: 0 5px;
+}
+.fleet-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 2px 4px;
+  font-size: 11px;
+  color: var(--cc-text);
+}
+.fleet-sub.sub-done {
+  color: var(--cc-dim2);
+}
+.fleet-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+.fs-running {
+  background: var(--cc-working);
+  animation: cc-pulse 2.4s infinite;
+}
+.fs-done {
+  background: var(--cc-idle);
+}
+.fs-stalled {
+  background: var(--cc-permission);
+}
+.fleet-desc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fleet-bg {
+  flex: none;
+  font: 8px var(--cc-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--cc-meta);
+  border: 1px solid var(--cc-border);
+  border-radius: 3px;
+  padding: 0 3px;
+}

@@ -33,6 +33,14 @@ interface Session {
   why?: string
   whyCoarse?: boolean
   whyGloss?: string // Arbiter seam — a plain-English gloss, rendered only when present
+  subtasks?: {
+    id: string
+    description: string
+    subagentType?: string
+    background: boolean
+    status: 'running' | 'done' | 'stalled'
+    startedAt?: number
+  }[]
   unhandled?: boolean // open gate you haven't looked at yet — shows a pip until seen
 }
 interface Category {
@@ -1243,6 +1251,10 @@ export function App() {
                   })
                 )}
               </div>
+              <FleetActivity
+                sessions={live.filter((s) => companionScope === 'all' || s.categoryId === selectedCat)}
+                onOpen={openSession}
+              />
               <ArbiterConsole
                 panel={snap.arbiter}
                 enabled={snap.settings?.arbiterEnabled ?? false}
@@ -2014,6 +2026,74 @@ const EFFORT_OPTS = ['', 'low', 'medium', 'high', 'xhigh', 'max']
 // where the insight lives — the gloss renders inline on the session it describes.
 // This is where you audit the agent: what it is doing, and what it has cost.
 // Collapsed to a single line unless opened, so it stays quiet.
+// Fleet activity: the subagents every session in scope has spawned, and their
+// status. Arbiter-style — a quiet collapsed line ("N running" / "no subagents"),
+// click to expand into the full list grouped by the session that owns each one.
+function FleetActivity({
+  sessions,
+  onOpen,
+}: {
+  sessions: Session[]
+  onOpen: (s: Session) => void
+}): React.ReactElement {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    window.cc.stateGet('subsOpen').then((v) => v === 'true' && setOpen(true))
+  }, [])
+  const toggle = (): void => {
+    const n = !open
+    setOpen(n)
+    window.cc.stateSet('subsOpen', String(n))
+  }
+  // Only sessions that actually have subagents, each keeping its own list.
+  const groups = sessions
+    .filter((s) => (s.subtasks?.length ?? 0) > 0)
+    .map((s) => ({ session: s, subs: s.subtasks! }))
+  const running = groups.reduce(
+    (n, g) => n + g.subs.filter((t) => t.status === 'running' || t.status === 'stalled').length,
+    0,
+  )
+  const total = groups.reduce((n, g) => n + g.subs.length, 0)
+  const label =
+    total === 0
+      ? 'no subagents'
+      : running > 0
+        ? `${running} running`
+        : `${total} done`
+  return (
+    <div className={`fleet${open ? ' open' : ''}`}>
+      <button className="fleet-head" onClick={toggle} title="Subagents spawned across the fleet">
+        <span className="chev">{open ? '▾' : '▸'}</span>
+        <span className="fleet-name">subagents</span>
+        <span className="fleet-count">{label}</span>
+      </button>
+      {open && (
+        <div className="fleet-body">
+          {groups.length === 0 ? (
+            <div className="fleet-empty">No session has spawned a subagent recently.</div>
+          ) : (
+            groups.map((g) => (
+              <div className="fleet-group" key={g.session.sessionId}>
+                <button className="fleet-owner" onClick={() => onOpen(g.session)}>
+                  {g.session.name ?? `pid ${g.session.pid}`}
+                  <span className="fleet-owner-n">{g.subs.length}</span>
+                </button>
+                {g.subs.map((t) => (
+                  <div className={`fleet-sub sub-${t.status}`} key={t.id}>
+                    <span className={`fleet-dot fs-${t.status}`} />
+                    <span className="fleet-desc">{t.description}</span>
+                    {t.background && <span className="fleet-bg">bg</span>}
+                  </div>
+                ))}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ArbiterConsole({
   panel,
   enabled,

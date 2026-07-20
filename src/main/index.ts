@@ -73,6 +73,7 @@ import {
   type OpenGate,
 } from './registry'
 import { runArbiter, arbiterInputFingerprint, type ArbiterSessionInput } from './arbiter'
+import { scanSubtasks, type SubtaskInfo } from './engine/subtasks'
 
 let win: BrowserWindow | null = null
 let pollTimer: NodeJS.Timeout | null = null
@@ -105,6 +106,7 @@ type EnrichedSession = LiveSession & {
   whyCoarse?: boolean // coarse label, no verbatim command (adopted / elicitation dialog)
   whyGloss?: string // reserved for the Arbiter; never populated by this path
   unhandled?: boolean // has an open gate you haven't looked at yet (drives the pip)
+  subtasks?: SubtaskInfo[] // subagents this session has spawned (fleet activity view)
 }
 interface Snapshot {
   home: string
@@ -586,6 +588,9 @@ function snapshot(): Snapshot {
       // session; the renderer shows the verbatim `why` regardless, so a missing
       // gloss (no key, capped, still running) degrades to the base experience.
       whyGloss: arbiterGloss.get(s.sessionId),
+      // Subagents this session spawned, from its transcript. mtime-cached in the
+      // scanner, so this is cheap on the scans where nothing changed.
+      subtasks: s.transcriptPath ? scanSubtasks(s.transcriptPath, now) : undefined,
     }
   })
 
