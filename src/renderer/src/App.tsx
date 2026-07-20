@@ -211,6 +211,18 @@ export function App() {
   // The category rail selects ONE collection; its tree shows in the pane below.
   const [selectedCat, setSelectedCat] = useState<number | null>(null)
   const initCatRef = useRef(false)
+  // Companion pane (right of the terminal): the cross-fleet "needs you" board.
+  // Default OPEN; open/hidden state and scope persist across restarts.
+  const [companionOpen, setCompanionOpen] = useState(true)
+  const [companionScope, setCompanionScope] = useState<'category' | 'all'>('category')
+  const showCompanion = (open: boolean) => {
+    setCompanionOpen(open)
+    window.cc.stateSet('companionOpen', String(open))
+  }
+  const setScope = (sc: 'category' | 'all') => {
+    setCompanionScope(sc)
+    window.cc.stateSet('companionScope', sc)
+  }
   // Right-click a rail cell to edit it, or the ＋ to create one — same editor.
   // id === null puts the editor in create mode (name / emoji / word / color).
   const [catEdit, setCatEdit] = useState<{
@@ -264,6 +276,8 @@ export function App() {
     window.cc.appVersion().then((v) => setVersion(v.full))
     window.cc.getSessions().then((s) => setSnap(s as Snapshot))
     window.cc.stateGet('activeSessionId').then((id) => setPendingRestore(id))
+    window.cc.stateGet('companionOpen').then((v) => v === 'false' && setCompanionOpen(false))
+    window.cc.stateGet('companionScope').then((v) => v === 'all' && setCompanionScope('all'))
     const offSessions = window.cc.onSessions((s) => setSnap(s as Snapshot))
     const offShow = window.cc.onTermShow((p) => {
       setRecover(null)
@@ -398,6 +412,14 @@ export function App() {
         .sort((a, b) => STATE[dstate(a)].order - STATE[dstate(b)].order),
     [live, blockedSet], // eslint-disable-line react-hooks/exhaustive-deps
   )
+  const catById = useMemo(() => new Map(snap.categories.map((c) => [c.id, c])), [snap.categories])
+  // The companion why-board: the same needs-you set, scoped to the current category
+  // or the whole fleet ("All"). A cross-category roll-up, each card tagged with its
+  // category — never merged.
+  const boardItems = useMemo(
+    () => (companionScope === 'all' ? needsYou : needsYou.filter((s) => s.categoryId === selectedCat)),
+    [needsYou, companionScope, selectedCat],
+  )
   const short = (cwd: string) => (snap.home ? cwd.replace(snap.home, '~') : cwd)
 
   const edgeByChild = useMemo(() => {
@@ -486,7 +508,14 @@ export function App() {
 
   const selectedGroup =
     groups.find((g) => g.id === selectedCat) ??
-    groups[0] ?? { id: null as number | null, name: 'Uncategorized', color: '#6a6355', rows: [] as TreeRow[] }
+    groups[0] ?? {
+      id: null as number | null,
+      name: 'Uncategorized',
+      color: '#6a6355',
+      label: null as string | null,
+      emoji: null as string | null,
+      rows: [] as TreeRow[],
+    }
 
   // First time sessions load, land on the fullest category rather than an empty one.
   useEffect(() => {
@@ -813,6 +842,7 @@ export function App() {
         </aside>
 
         <main className="terminalarea">
+          <div className="termstack">
           {selected ? (
             <>
               <div className="termbar">
@@ -970,6 +1000,104 @@ export function App() {
                 offshoot of another. Opening a session running in iTerm resumes a managed copy here.
               </p>
             </div>
+          )}
+          </div>
+          {companionOpen ? (
+            <aside className="companion">
+              <div className="comp-head">
+                <div className="comp-scope">
+                  <button
+                    className={companionScope === 'category' ? 'on' : ''}
+                    onClick={() => setScope('category')}
+                    title="This category only"
+                  >
+                    {selectedGroup.emoji ? `${selectedGroup.emoji} ` : ''}
+                    {selectedGroup.id === null ? 'Uncat' : selectedGroup.label || autoTag(selectedGroup.name)}
+                  </button>
+                  <button
+                    className={companionScope === 'all' ? 'on' : ''}
+                    onClick={() => setScope('all')}
+                    title="Everything that needs you, across all categories"
+                  >
+                    All{needsYou.length > 0 ? ` · ${needsYou.length}` : ''}
+                  </button>
+                </div>
+                <span className="grow" />
+                <button className="comp-hide" onClick={() => showCompanion(false)} title="Hide panel">
+                  ⇥
+                </button>
+              </div>
+              <div className="comp-board">
+                {boardItems.length === 0 ? (
+                  <div className="comp-empty">
+                    <div className="comp-empty-mark">✓</div>
+                    <div>Nothing needs you{companionScope === 'category' ? ' in this category' : ''}.</div>
+                  </div>
+                ) : (
+                  boardItems.map((s) => {
+                    const why = whyOf(s)
+                    const cat = s.categoryId != null ? catById.get(s.categoryId) : undefined
+                    return (
+                      <button
+                        key={s.sessionId}
+                        className={`wcard ns-${dstate(s)}${s.unhandled ? ' unhandled' : ''}`}
+                        onClick={() => openSession(s)}
+                      >
+                        <div className="wc-top">
+                          <span className={`cc-dot cc-dot--${dstate(s)}`} />
+                          <span className="wc-name">{nameOf(s)}</span>
+                          {cat && (
+                            <span className="wc-cat" style={{ '--cat-color': cat.color } as CSSProperties}>
+                              {cat.emoji && <span className="wc-cat-emoji">{cat.emoji}</span>}
+                              {cat.label || autoTag(cat.name)}
+                            </span>
+                          )}
+                          <span className="wc-age">{fmtAge(s.transcriptMtimeMs, snap.scannedAt)}</span>
+                        </div>
+                        {why && (
+                          <div className={`wc-why why-${why.kind}`} title={why.text}>
+                            {why.kind === 'permission' &&
+                              (why.coarse ? (
+                                <>
+                                  {why.text} <span className="whytag">coarse</span>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="whyverb">wants</span> <code>{why.text}</code>
+                                </>
+                              ))}
+                            {why.kind === 'question' &&
+                              (why.coarse ? (
+                                <>
+                                  {why.text} <span className="whytag">coarse</span>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="whyverb">asked</span> {why.text}
+                                </>
+                              ))}
+                            {why.kind === 'blocked' && (
+                              <>
+                                <span className="whyverb">blocked →</span> {why.text}
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </button>
+                    )
+                  })
+                )}
+              </div>
+            </aside>
+          ) : (
+            <button
+              className={`comp-spine${needsYou.length > 0 ? ' active' : ''}`}
+              onClick={() => showCompanion(true)}
+              title="Show the needs-you panel"
+            >
+              {needsYou.length > 0 && <span className="comp-spine-count">{needsYou.length}</span>}
+              <span className="comp-spine-label">NEEDS YOU</span>
+            </button>
           )}
         </main>
       </div>

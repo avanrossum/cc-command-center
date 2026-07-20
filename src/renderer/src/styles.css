@@ -874,14 +874,228 @@ body {
   display: none;
 }
 
-/* ---- terminal area ---- */
+/* ---- terminal area: terminal stack + the companion needs-you pane ---- */
 .terminalarea {
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   background: var(--term-bg);
   position: relative;
+}
+.termstack {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* ---- companion pane: the cross-fleet "needs you" board ---- */
+.companion {
+  width: 322px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--cc-surface);
+  border-left: 1px solid var(--cc-border);
+  overflow: hidden;
+}
+.comp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--cc-hairline);
+  flex: none;
+}
+.comp-scope {
+  display: flex;
+  gap: 4px;
+}
+.comp-scope button {
+  font: 600 11px var(--cc-font-mono);
+  color: var(--cc-dim);
+  background: var(--cc-surface-2);
+  border: 1px solid var(--cc-border);
+  border-radius: 6px;
+  padding: 4px 9px;
+  cursor: pointer;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.comp-scope button.on {
+  color: var(--cc-text);
+  border-color: var(--cc-waiting);
+  background: rgba(96, 165, 250, 0.12);
+}
+.comp-hide {
+  background: transparent;
+  border: 0;
+  color: var(--cc-dim);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+}
+.comp-hide:hover {
+  color: var(--cc-text);
+}
+.comp-board {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.comp-empty {
+  margin: auto;
+  text-align: center;
+  color: var(--cc-faint);
+  font-size: 12.5px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 16px;
+}
+.comp-empty-mark {
+  font-size: 22px;
+  color: var(--cc-working);
+  opacity: 0.65;
+}
+
+/* why-card: one needs-you session, with substance + category tag */
+.wcard {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--cc-surface-2);
+  border: 1px solid var(--cc-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  position: relative;
+}
+.wcard:hover {
+  background: var(--cc-fill-hover);
+}
+.wcard.ns-permission {
+  box-shadow: inset 2.5px 0 0 var(--cc-permission);
+}
+.wcard.ns-waiting {
+  box-shadow: inset 2.5px 0 0 var(--cc-waiting);
+}
+.wcard.ns-blocked {
+  box-shadow: inset 2.5px 0 0 var(--cc-blocked);
+}
+/* seen (not unhandled) recedes; unhandled reads at full strength */
+.wcard:not(.unhandled) {
+  opacity: 0.6;
+}
+.wc-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.wc-name {
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wc-cat {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font: 600 9.5px var(--cc-font-mono);
+  color: var(--cat-color);
+  border: 1px solid color-mix(in srgb, var(--cat-color) 42%, transparent);
+  border-radius: 20px;
+  padding: 1px 6px;
+  flex: none;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wc-cat-emoji {
+  font-size: 10px;
+}
+.wc-age {
+  margin-left: auto;
+  font: 10px var(--cc-font-mono);
+  color: var(--cc-faint);
+  flex: none;
+}
+.wc-why {
+  font-family: var(--cc-font-mono);
+  font-size: 11px;
+  margin-top: 5px;
+  line-height: 1.4;
+  color: var(--cc-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wc-why.why-permission {
+  color: var(--cc-permission);
+}
+.wc-why.why-question {
+  color: var(--cc-waiting);
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.wc-why.why-blocked {
+  color: var(--cc-blocked);
+}
+.wc-why code {
+  background: rgba(245, 158, 11, 0.1);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+/* collapsed spine: a thin clickable strip that reopens the pane */
+.comp-spine {
+  width: 26px;
+  flex: none;
+  background: var(--cc-surface);
+  border: 0;
+  border-left: 1px solid var(--cc-border);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--cc-faint);
+  padding: 0;
+}
+.comp-spine:hover {
+  background: var(--cc-fill-hover);
+  color: var(--cc-dim);
+}
+.comp-spine.active {
+  color: var(--cc-permission);
+}
+.comp-spine-label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font: 600 9.5px var(--cc-font-mono);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+.comp-spine-count {
+  font: 700 11px var(--cc-font-mono);
+  background: var(--cc-permission);
+  color: #1a1408;
+  border-radius: 10px;
+  padding: 1px 5px;
 }
 
 /* ---- gone-session recovery overlay ---- */
