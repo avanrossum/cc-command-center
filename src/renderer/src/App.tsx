@@ -1255,6 +1255,7 @@ export function App() {
               </div>
               <FleetActivity
                 sessions={live.filter((s) => companionScope === 'all' || s.categoryId === selectedCat)}
+                now={snap.scannedAt || Date.now()}
                 onOpen={openSession}
               />
               <ArbiterConsole
@@ -2044,11 +2045,17 @@ const EFFORT_OPTS = ['', 'low', 'medium', 'high', 'xhigh', 'max']
 // Fleet activity: the subagents every session in scope has spawned, and their
 // status. Arbiter-style — a quiet collapsed line ("N running" / "no subagents"),
 // click to expand into the full list grouped by the session that owns each one.
+// An all-done group whose newest subagent started longer ago than this is stale
+// history — hidden entirely so a finished workflow stops taking up the panel.
+const FLEET_DONE_TTL_MS = 15 * 60 * 1000
+
 function FleetActivity({
   sessions,
+  now,
   onOpen,
 }: {
   sessions: Session[]
+  now: number
   onOpen: (s: Session) => void
 }): React.ReactElement {
   const [open, setOpen] = useState(false)
@@ -2060,21 +2067,24 @@ function FleetActivity({
     setOpen(n)
     window.cc.stateSet('subsOpen', String(n))
   }
-  // Only sessions that actually have subagents, each keeping its own list.
+  // Per session: split the active subagents (shown as rows — the live signal)
+  // from the done ones (collapsed to a count, so a 40-agent workflow doesn't
+  // flood the panel). A group with nothing active and only stale done work is
+  // dropped entirely.
   const groups = sessions
     .filter((s) => (s.subtasks?.length ?? 0) > 0)
-    .map((s) => ({ session: s, subs: s.subtasks! }))
-  const running = groups.reduce(
-    (n, g) => n + g.subs.filter((t) => t.status === 'running' || t.status === 'stalled').length,
-    0,
-  )
-  const total = groups.reduce((n, g) => n + g.subs.length, 0)
+    .map((s) => {
+      const subs = s.subtasks!
+      const active = subs.filter((t) => t.status === 'running' || t.status === 'stalled')
+      const done = subs.filter((t) => t.status === 'done')
+      const newest = subs.reduce((m, t) => Math.max(m, t.startedAt ?? 0), 0)
+      return { session: s, active, doneCount: done.length, newest }
+    })
+    .filter((g) => g.active.length > 0 || now - g.newest <= FLEET_DONE_TTL_MS)
+
+  const running = groups.reduce((n, g) => n + g.active.length, 0)
   const label =
-    total === 0
-      ? 'no subagents'
-      : running > 0
-        ? `${running} running`
-        : `${total} done`
+    groups.length === 0 ? 'no subagents' : running > 0 ? `${running} running` : 'idle'
   return (
     <div className={`fleet${open ? ' open' : ''}`}>
       <button className="fleet-head" onClick={toggle} title="Subagents spawned across the fleet">
@@ -2085,15 +2095,15 @@ function FleetActivity({
       {open && (
         <div className="fleet-body">
           {groups.length === 0 ? (
-            <div className="fleet-empty">No session has spawned a subagent recently.</div>
+            <div className="fleet-empty">No session has a subagent running.</div>
           ) : (
             groups.map((g) => (
               <div className="fleet-group" key={g.session.sessionId}>
                 <button className="fleet-owner" onClick={() => onOpen(g.session)}>
                   {g.session.name ?? `pid ${g.session.pid}`}
-                  <span className="fleet-owner-n">{g.subs.length}</span>
+                  {g.active.length > 0 && <span className="fleet-owner-n">{g.active.length}</span>}
                 </button>
-                {g.subs.map((t) => (
+                {g.active.map((t) => (
                   <div className={`fleet-sub sub-${t.status}`} key={t.id}>
                     <span className={`fleet-dot fs-${t.status}`} />
                     <span className="fleet-desc">{t.description}</span>
@@ -2101,6 +2111,11 @@ function FleetActivity({
                     {t.background && <span className="fleet-bg">bg</span>}
                   </div>
                 ))}
+                {g.doneCount > 0 && (
+                  <div className="fleet-donerow">
+                    {g.doneCount} done{g.active.length === 0 ? ' · idle' : ''}
+                  </div>
+                )}
               </div>
             ))
           )}

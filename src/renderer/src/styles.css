@@ -2270,3 +2270,11 @@ select.cat-in {
   border-radius: 3px;
   padding: 0 3px;
 }
+
+/* Collapsed "N done" line per fleet group — done subagents don't get a row each. */
+.fleet-donerow {
+  padding: 2px 0 2px 12px;
+  font-size: 10px;
+  color: var(--cc-dim2);
+  font-family: var(--cc-font-mono);
+}
