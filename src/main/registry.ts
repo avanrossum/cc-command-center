@@ -629,7 +629,18 @@ function logEvent(
 // (auto-seen when the human is focused on that session), auto-resolves gates that
 // have been absent past the debounce, and prunes periodically. All in one
 // transaction. Query getUnhandledSessions() / getOpenGates() for the UI.
-export function syncGates(gates: OpenGate[], attachedSid: string | null, now: number): void {
+// `liveSessionIds` is the set the scan could actually OBSERVE this tick. Only
+// those sessions' gates are eligible for auto-resolve: a gate is resolved by
+// watching it disappear, and a session that isn't running cannot be watched.
+// Without this, an app restart (where every session starts dormant) resolved the
+// entire ledger within one debounce — silently discarding every unhandled
+// needs-you moment the user had not yet dealt with.
+export function syncGates(
+  gates: OpenGate[],
+  attachedSid: string | null,
+  now: number,
+  liveSessionIds?: Set<string>,
+): void {
   const d = must()
   d.transaction(() => {
     for (const g of gates) {
@@ -667,14 +678,16 @@ export function syncGates(gates: OpenGate[], attachedSid: string | null, now: nu
     // The `last_seen > now` arm handles a backward clock step: a gate that vanished
     // before the step has a "future" last_seen and would otherwise never resolve
     // (pip stuck). A genuinely-open gate is touched this scan so last_seen === now.
-    const stale = d
-      .prepare('SELECT fp, session_id, category_id, kind FROM gate WHERE resolved_at IS NULL AND (last_seen < ? OR last_seen > ?)')
-      .all(now - RESOLVE_DEBOUNCE_MS, now) as {
-      fp: string
-      session_id: string
-      category_id: number | null
-      kind: string
-    }[]
+    const stale = (
+      d
+        .prepare('SELECT fp, session_id, category_id, kind FROM gate WHERE resolved_at IS NULL AND (last_seen < ? OR last_seen > ?)')
+        .all(now - RESOLVE_DEBOUNCE_MS, now) as {
+        fp: string
+        session_id: string
+        category_id: number | null
+        kind: string
+      }[]
+    ).filter((row) => !liveSessionIds || liveSessionIds.has(row.session_id))
     for (const s of stale) {
       d.prepare("UPDATE gate SET resolved_at=?, resolution='cleared' WHERE fp=?").run(now, s.fp)
       logEvent(d, { sessionId: s.session_id, categoryId: s.category_id, kind: s.kind }, s.fp, 'gate_resolved', now)
@@ -708,6 +721,40 @@ function pruneLedger(d: Database.Database, now: number): void {
 }
 
 // Sessions with an open gate the human hasn't looked at yet — drives the pip.
+export interface HeldGate {
+  sessionId: string
+  kind: string
+  payload: string
+  firstSeen: number
+  seen: boolean
+}
+
+// Open gates belonging to sessions that are NOT currently running. These are the
+// needs-you moments a restart would otherwise hide: the state is on disk, the
+// session just isn't up yet.
+export function getHeldGates(excludeSessionIds: Set<string>): HeldGate[] {
+  const rows = must()
+    .prepare(
+      'SELECT session_id, kind, payload, first_seen, seen_at FROM gate WHERE resolved_at IS NULL ORDER BY first_seen DESC',
+    )
+    .all() as {
+    session_id: string
+    kind: string
+    payload: string
+    first_seen: number
+    seen_at: number | null
+  }[]
+  return rows
+    .filter((r) => !excludeSessionIds.has(r.session_id))
+    .map((r) => ({
+      sessionId: r.session_id,
+      kind: r.kind,
+      payload: r.payload,
+      firstSeen: r.first_seen,
+      seen: r.seen_at != null,
+    }))
+}
+
 export function getUnhandledSessions(): Set<string> {
   const rows = must()
     .prepare('SELECT DISTINCT session_id FROM gate WHERE resolved_at IS NULL AND seen_at IS NULL')

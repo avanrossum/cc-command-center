@@ -66,6 +66,7 @@ import {
   getNodeApiKey,
   syncGates,
   getUnhandledSessions,
+  getHeldGates,
   type ApiKeyRow,
   type Category,
   type Edge,
@@ -670,11 +671,34 @@ function snapshot(): Snapshot {
   for (const k of questionCache.keys()) if (!liveIds.has(k)) questionCache.delete(k)
   let unhandled = lastUnhandled // retain the last-known pips if this scan's sync throws
   try {
-    syncGates(openGates, seenSid, now)
+    // Only sessions we could actually observe this scan are eligible for
+    // auto-resolve. Otherwise a restart (everything dormant) wipes the ledger.
+    syncGates(openGates, seenSid, now, new Set(sessions.map((x) => x.sessionId).filter(Boolean) as string[]))
     unhandled = getUnhandledSessions()
     lastUnhandled = unhandled
   } catch (err) {
     console.error('[main] gate ledger sync failed', err)
+  }
+
+  // A dormant session carries no live state, but the gate ledger still knows what
+  // it was waiting on. Re-attach that so a restart shows the same needs-you set
+  // the user left behind — dimmed and marked resumable in the UI, not lost.
+  try {
+    const liveNow = new Set(sessions.map((x) => x.sessionId).filter(Boolean) as string[])
+    const held = new Map<string, ReturnType<typeof getHeldGates>[number]>()
+    for (const g of getHeldGates(liveNow)) if (!held.has(g.sessionId)) held.set(g.sessionId, g)
+    for (const e of enriched) {
+      if (!e.dormant) continue
+      const g = held.get(e.sessionId)
+      if (!g) continue
+      e.why = g.payload
+      e.whyKind = g.kind === 'question' ? 'question' : 'permission'
+      e.attention = g.kind === 'blocked' ? undefined : (e.whyKind as AttentionKind)
+      e.whyCoarse = true // recalled from the ledger, not observed live right now
+      if (!g.seen) e.unhandled = true
+    }
+  } catch (err) {
+    console.error('[main] held-gate decoration failed', err)
   }
 
   const cats = listCategories()

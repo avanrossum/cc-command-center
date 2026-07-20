@@ -419,15 +419,22 @@ export function App() {
   // whyKind==='question'), or a parent blocked on an unfinished child. A turn that
   // ended WITHOUT a question is NOT included — that's the replied-and-idle noise
   // the ledger was built to drop.
+  // Dormant sessions are included when the ledger still holds an unresolved gate
+  // for them. After a restart everything the app owns starts dormant, and the
+  // thing you were in the middle of is exactly what you must not have to go
+  // hunting for — so it stays on the list, dimmed and marked resumable, and
+  // sorts below anything actually running.
   const needsYou = useMemo(
     () =>
       live
         .filter(
           (s) =>
-            !s.dormant &&
-            (s.attention === 'permission' || s.whyKind === 'question' || blockedSet.has(s.sessionId)),
+            s.attention === 'permission' || s.whyKind === 'question' || blockedSet.has(s.sessionId),
         )
-        .sort((a, b) => STATE[dstate(a)].order - STATE[dstate(b)].order),
+        .sort((a, b) => {
+          if (!!a.dormant !== !!b.dormant) return a.dormant ? 1 : -1
+          return STATE[dstate(a)].order - STATE[dstate(b)].order
+        }),
     [live, blockedSet], // eslint-disable-line react-hooks/exhaustive-deps
   )
   const catById = useMemo(() => new Map(snap.categories.map((c) => [c.id, c])), [snap.categories])
@@ -712,13 +719,20 @@ export function App() {
                 return (
                   <button
                     key={s.sessionId}
-                    className={`needs-item ns-${dstate(s)}`}
+                    className={`needs-item ns-${dstate(s)}${s.dormant ? ' held' : ''}`}
                     onClick={() => jumpTo(s)}
-                    title={s.stateReason}
+                    title={
+                      s.dormant
+                        ? 'Was waiting on you before the restart — click to resume'
+                        : s.stateReason
+                    }
                   >
                     <span className="ns-idx">{String(i + 1).padStart(2, '0')}</span>
                     <span className={`cc-dot cc-dot--${dstate(s)}`} />
                     <span className="ns-name">{s.name ?? `pid ${s.pid}`}</span>
+                    {/* Recalled from the ledger rather than observed live: it earns
+                        its place on the list, but must not look like a live gate. */}
+                    {s.dormant && <span className="ns-held">resume</span>}
                     <span
                       className="cdot"
                       style={{ background: cat?.color ?? 'var(--cc-cat-none)' }}

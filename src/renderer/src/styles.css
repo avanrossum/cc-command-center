@@ -2091,3 +2091,24 @@ select.cat-in {
 .arb-paused {
   background: var(--cc-dim2);
 }
+
+/* A needs-you item recalled from the gate ledger for a session that isn't
+   running yet: same information, visibly not-live. Dimmed rather than removed —
+   after a restart this is the thing you were in the middle of. */
+.needs-item.held {
+  opacity: 0.62;
+  border-left-style: dashed;
+}
+.needs-item.held:hover {
+  opacity: 1;
+}
+.ns-held {
+  flex: none;
+  font: 8.5px var(--cc-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--cc-meta);
+  border: 1px solid var(--cc-border);
+  border-radius: 20px;
+  padding: 0 5px;
+}
