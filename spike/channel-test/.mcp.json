@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "ccc": {
-      "command": "/opt/homebrew/bin/node",
-      "args": ["/Users/avanrossum/Developer/claude-command-center/spike/cc-channel.mjs"]
-    }
-  }
-}

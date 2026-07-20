@@ -1,24 +1,36 @@
 # Backlog — next features (specs)
 
-## Pre-release cleanup — QUEUED, runs before The Arbiter (user, 2026-07-20)
+## ✅ Pre-release cleanup — DONE (2026-07-20, before The Arbiter)
 
-Sequence the user set: (1) the `feat/bigger-control-space` worktree merges → (2) this cleanup
-(subagents) → (3) build The Arbiter. Do NOT reorder — the history rewrite in this step would
-break the worktree's base if run before it merges.
+Sequence the user set and we followed: (1) `feat/bigger-control-space` merged → (2) this cleanup
+→ (3) build The Arbiter.
 
-- **MipYip → MipYip everywhere.** MipYip is effectively dead; MipYip is the live brand.
-  Replace `MipYip` / `mipyip` across source, docs, `package.json`, `src/main/about.ts`,
-  and any branding strings. (`LICENSE` is already correct — `Copyright 2026 MipYip, LLC`.)
-  Careful: the owner's email `alex@mipyip.com` may appear; confirm the replacement address
-  before rewriting contact details.
-- **Scrub git history.** Rewrite to remove the client name (`client`) — commits `eaccf5f`,
-  `edac156`, `477cdf9` — and any MipYip references the user wants gone. Requires
-  filter-repo/filter-branch; **only after the worktree merges**, and force-push coordination if
-  a remote exists by then.
-- **Drop `spike/`.** The Phase 0 throwaway (Channels-injection experiment, verdict: blocked →
-  the app uses send-keys/bracketed paste instead). 11 tracked files, unreferenced by the app,
-  and `spike/channel-test/.mcp.json` hardcodes an absolute `/Users/avanrossum/...` path that
-  leaks the username and breaks for anyone who clones. Deleting the directory resolves it.
+What ran, and what the audit found:
+
+- **Branding consolidated on MipYip.** The dead brand is gone from file contents, commit
+  messages, and commit/tag identity. Audit correction: `package.json` and `src/main/about.ts`
+  were *already* migrated, so the source-rebranding item here was stale. The real exposure was
+  in commit metadata, which no content-level search would have caught.
+- **History rewritten** with `git-filter-repo` across all commits, tags re-pointed, unreachable
+  objects pruned (`reflog expire` + `gc --prune=now`). A five-angle parallel audit plus a
+  completeness critic found the contamination was near-total rather than the three commits
+  originally listed — `git log -S` had under-reported it, because a term introduced once and
+  never edited again never changes its occurrence count.
+- **`release/` and `out/` deleted** (4.6 GB). Packaged `.zip`/`.dmg` builds embedded the old
+  client name inside a **compressed** `app.asar`, which is invisible to `grep` — `grep -c` on a
+  zip returns 0 while `unzip -p | grep -c` returns 7. These were gitignored, so no history
+  rewrite would ever have touched them, and they are exactly what gets attached to a GitHub
+  release. **Rule going forward: never publish a build produced before this date.**
+- **`spike/` dropped.** Phase 0 throwaway (Channels-injection experiment, verdict: blocked → the
+  app uses send-keys/bracketed paste instead). Unreferenced by the app; its `.mcp.json` also
+  hardcoded absolute local paths.
+- **Not scrubbed, deliberately:** `/Users/avanrossum` paths. The repo lives at
+  `github.com/avanrossum/...`, so the username is public by definition — removing it would be
+  theater. Author *display names* were likewise left intact; only the email domain changed.
+
+Lesson worth keeping: verify a scrub with a per-blob scan plus a decompressing pass over
+archives. Both `git grep` over refs and plain `grep` over binaries returned clean results on
+demonstrably contaminated data during this audit.
 
 ## Quick wins (logged)
 

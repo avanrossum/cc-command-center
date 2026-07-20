@@ -7,7 +7,7 @@ const COMPANY_URL = 'https://mipyip.com'
 // Private repository. Update this if the repo moves or is renamed. The link
 // opens in the user's default browser (GitHub handles auth); it 404s for
 // anyone without access, which is expected while the repo is private.
-const REPO_URL = 'https://github.com/mipyip/claude-command-center'
+const REPO_URL = 'https://github.com/avanrossum/claude-command-center'
 
 let aboutWin: BrowserWindow | null = null
 
