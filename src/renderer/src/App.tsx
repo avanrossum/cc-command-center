@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import { insertablePath } from './util'
 import { TerminalView } from './Terminal'
 import { THEMES, themeByName, DEFAULT_THEME_NAME } from './themes'
@@ -238,6 +239,18 @@ export function App() {
   const [stripOpen, setStripOpen] = useState(true)
   // Strip time window in minutes — adjustable granularity. Persisted.
   const [stripWinMin, setStripWinMin] = useState(5)
+  // Companion panels the user has popped out into floating cards. Persisted, so
+  // a popped layout survives a restart.
+  const [popped, setPopped] = useState<Set<string>>(new Set())
+  const setPop = (id: string, on: boolean): void => {
+    setPopped((cur) => {
+      const n = new Set(cur)
+      if (on) n.add(id)
+      else n.delete(id)
+      window.cc.stateSet('poppedPanels', [...n].join(','))
+      return n
+    })
+  }
   const showCompanion = (open: boolean) => {
     setCompanionOpen(open)
     window.cc.stateSet('companionOpen', String(open))
@@ -308,6 +321,9 @@ export function App() {
     window.cc.stateGet('companionOpen').then((v) => v === 'false' && setCompanionOpen(false))
     window.cc.stateGet('companionScope').then((v) => v === 'category' && setCompanionScope('category'))
     window.cc.stateGet('stripOpen').then((v) => v === 'false' && setStripOpen(false))
+    window.cc.stateGet('poppedPanels').then((v) => {
+      if (v) setPopped(new Set(v.split(',').filter(Boolean)))
+    })
     window.cc.stateGet('stripWinMin').then((v) => {
       const n = v ? Number(v) : NaN
       if (Number.isFinite(n) && n > 0) setStripWinMin(n)
@@ -1137,6 +1153,13 @@ export function App() {
                   ⇥
                 </button>
               </div>
+              <Poppable
+                id="strip"
+                title="Activity"
+                popped={popped.has('strip')}
+                onPop={() => setPop('strip', true)}
+                onReturn={() => setPop('strip', false)}
+              >
               <div className="comp-strip-wrap">
                 <div className="comp-section-head strip-head">
                   <button className="sh-toggle" onClick={() => showStrip(!stripOpen)}>
@@ -1191,6 +1214,7 @@ export function App() {
                   </div>
                 )}
               </div>
+              </Poppable>
               <div className="comp-board">
                 {boardItems.length === 0 ? (
                   <div className="comp-empty">
@@ -1253,11 +1277,21 @@ export function App() {
                   })
                 )}
               </div>
-              <FleetActivity
-                sessions={live.filter((s) => companionScope === 'all' || s.categoryId === selectedCat)}
-                now={snap.scannedAt || Date.now()}
-                onOpen={openSession}
-              />
+              <Poppable
+                id="subagents"
+                title="Subagents"
+                popped={popped.has('subagents')}
+                onPop={() => setPop('subagents', true)}
+                onReturn={() => setPop('subagents', false)}
+              >
+                <FleetActivity
+                  sessions={live.filter(
+                    (s) => companionScope === 'all' || s.categoryId === selectedCat,
+                  )}
+                  now={snap.scannedAt || Date.now()}
+                  onOpen={openSession}
+                />
+              </Poppable>
               <ArbiterConsole
                 panel={snap.arbiter}
                 enabled={snap.settings?.arbiterEnabled ?? false}
@@ -2045,6 +2079,128 @@ const EFFORT_OPTS = ['', 'low', 'medium', 'high', 'xhigh', 'max']
 // Fleet activity: the subagents every session in scope has spawned, and their
 // status. Arbiter-style — a quiet collapsed line ("N running" / "no subagents"),
 // click to expand into the full list grouped by the session that owns each one.
+// A floating, draggable card that holds a popped-out companion panel. Rendered
+// via a portal to <body> so it sits over the terminal area regardless of where
+// the source panel lived. NOT an OS window — deliberately in-app (the OS-window
+// version is deferred). Position is per-panel and persisted, so a popped panel
+// comes back where you left it.
+function FloatCard({
+  id,
+  title,
+  onReturn,
+  children,
+}: {
+  id: string
+  title: string
+  onReturn: () => void
+  children: React.ReactNode
+}): React.ReactElement {
+  const clampPos = (p: { x: number; y: number }): { x: number; y: number } => ({
+    // Keep the header on-screen so a card can never be dragged fully out of reach.
+    x: Math.min(Math.max(0, p.x), window.innerWidth - 80),
+    y: Math.min(Math.max(0, p.y), window.innerHeight - 40),
+  })
+  // Default: down the right edge, offset per panel so two don't overlap.
+  const [pos, setPos] = useState<{ x: number; y: number }>(() => ({
+    x: Math.max(40, window.innerWidth - 400),
+    y: id === 'subagents' ? 360 : 96,
+  }))
+  const drag = useRef<{ dx: number; dy: number } | null>(null)
+  const posRef = useRef(pos)
+  posRef.current = pos
+  useEffect(() => {
+    window.cc.stateGet(`floatpos:${id}`).then((v) => {
+      if (!v) return
+      try {
+        const p = JSON.parse(v)
+        if (typeof p?.x === 'number' && typeof p?.y === 'number') setPos(clampPos(p))
+      } catch {
+        /* ignore */
+      }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id])
+  const onPointerDown = (e: React.PointerEvent): void => {
+    if ((e.target as HTMLElement).closest('.fc-return')) return // don't drag on the button
+    drag.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y }
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+  const onPointerMove = (e: React.PointerEvent): void => {
+    if (!drag.current) return
+    setPos(clampPos({ x: e.clientX - drag.current.dx, y: e.clientY - drag.current.dy }))
+  }
+  const onPointerUp = (): void => {
+    if (!drag.current) return
+    drag.current = null
+    window.cc.stateSet(`floatpos:${id}`, JSON.stringify(posRef.current))
+  }
+  return (
+    <div className="floatcard" style={{ left: pos.x, top: pos.y }}>
+      <div
+        className="fc-head"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+      >
+        <span className="fc-grip">⠿</span>
+        <span className="fc-title">{title}</span>
+        <span className="grow" />
+        <button className="fc-return" onClick={onReturn} title="Dock back into the sidebar">
+          return to sidebar
+        </button>
+      </div>
+      <div className="fc-body">{children}</div>
+    </div>
+  )
+}
+
+// Wraps a companion panel so it can pop out. Inline it shows a small pop-out
+// affordance; popped, it leaves a stub in the sidebar (so the slot never
+// vanishes — you always see it's out, and how to get it back) and portals the
+// real panel into a floating card.
+function Poppable({
+  id,
+  title,
+  popped,
+  onPop,
+  onReturn,
+  children,
+}: {
+  id: string
+  title: string
+  popped: boolean
+  onPop: () => void
+  onReturn: () => void
+  children: React.ReactNode
+}): React.ReactElement {
+  if (popped) {
+    return (
+      <>
+        <div className="pop-stub">
+          <span className="pop-stub-txt">{title} — in separate window</span>
+          <button className="pop-stub-btn" onClick={onReturn}>
+            return to sidebar
+          </button>
+        </div>
+        {createPortal(
+          <FloatCard id={id} title={title} onReturn={onReturn}>
+            {children}
+          </FloatCard>,
+          document.body,
+        )}
+      </>
+    )
+  }
+  return (
+    <div className="poppable">
+      <button className="pop-out" onClick={onPop} title="Pop out to a floating panel">
+        ⇱
+      </button>
+      {children}
+    </div>
+  )
+}
+
 // An all-done group whose newest subagent started longer ago than this is stale
 // history — hidden entirely so a finished workflow stops taking up the panel.
 const FLEET_DONE_TTL_MS = 15 * 60 * 1000

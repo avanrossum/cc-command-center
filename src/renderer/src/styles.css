@@ -2278,3 +2278,109 @@ select.cat-in {
   color: var(--cc-dim2);
   font-family: var(--cc-font-mono);
 }
+
+/* ---- pop-out companion panels (in-app floating cards, not OS windows) ---- */
+.poppable {
+  position: relative;
+}
+/* Hover-revealed pop-out affordance, top-right of the panel. */
+.pop-out {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  z-index: 3;
+  opacity: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--cc-dim);
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-r-sm);
+  cursor: pointer;
+  transition: opacity var(--cc-dur-fast);
+}
+.poppable:hover .pop-out {
+  opacity: 1;
+}
+.pop-out:hover {
+  color: var(--cc-text);
+  border-color: var(--cc-dim2);
+}
+/* The stub left behind in the sidebar while a panel is popped out. */
+.pop-stub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--cc-hairline);
+  font-size: 11px;
+  color: var(--cc-dim2);
+}
+.pop-stub-txt {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+}
+.pop-stub-btn,
+.fc-return {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--cc-text);
+  background: var(--cc-surface-2);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-r-sm);
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.pop-stub-btn:hover,
+.fc-return:hover {
+  border-color: var(--cc-dim2);
+}
+/* The floating card. */
+.floatcard {
+  position: fixed;
+  /* Above the terminal and companion, but BELOW modal scrims (40-46) and toasts
+     (60) so a floated panel never covers an open dialog. */
+  z-index: 30;
+  width: 360px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-r-md);
+  box-shadow: var(--cc-e-2);
+  resize: both;
+  overflow: hidden;
+}
+.fc-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  background: var(--cc-surface-2);
+  border-bottom: 1px solid var(--cc-border);
+  cursor: move;
+  touch-action: none; /* pointer drag, not scroll */
+  user-select: none;
+}
+.fc-grip {
+  color: var(--cc-faint);
+  font-size: 12px;
+}
+.fc-title {
+  font: 600 11px var(--cc-font-mono);
+  letter-spacing: 0.3px;
+  color: var(--cc-text);
+}
+.fc-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
