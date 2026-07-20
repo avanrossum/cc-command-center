@@ -596,6 +596,7 @@ export interface GateRow {
 const RESOLVE_DEBOUNCE_MS = 3500 // a gate must be absent ~2+ scans (1.5s each) before it resolves
 const GATE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000 // resolved rows kept a week, then pruned
 const MAX_RESOLVED_GATES = 300 // global backstop on resolved rows
+const MAX_OPEN_GATES = 400 // ceiling on HELD rows, so unresumed sessions can't accumulate forever
 const EVENTS_PER_SESSION = 60 // per-session ring cap on the activity log
 const MAX_EVENTS = 4000 // global backstop on the activity log
 let lastPruneAt = 0
@@ -701,7 +702,30 @@ export function syncGates(
 }
 
 function pruneLedger(d: Database.Database, now: number): void {
-  // Resolved gates: age out, then a global count backstop. Open gates never pruned.
+  // Open gates are held indefinitely for sessions that aren't running (a gate is
+  // resolved by OBSERVING it clear, and a dormant session can't be observed) —
+  // so they need their own bound, or a session that is never resumed again keeps
+  // its row forever. Two backstops:
+  //
+  //  1. Age. Once a session passes the dormant window it is filtered out of the
+  //     UI entirely, so a held gate for it is unreachable and unactionable.
+  //     Retire it as 'stale' and let the resolved-row pruning below age it out.
+  //  2. Count. A hard ceiling on open rows regardless of age, retiring the
+  //     oldest first, in case something pathological produces gates faster than
+  //     they clear.
+  //
+  // Sessions the user EXPRESSLY removes need neither: gate.session_id is
+  // ON DELETE CASCADE against node, so deleting the node takes its gates with it.
+  d.prepare(
+    "UPDATE gate SET resolved_at=?, resolution='stale' WHERE resolved_at IS NULL AND last_seen < ?",
+  ).run(now, now - GATE_RETENTION_MS)
+  d.prepare(
+    `UPDATE gate SET resolved_at=?, resolution='stale' WHERE resolved_at IS NULL AND fp NOT IN (
+       SELECT fp FROM gate WHERE resolved_at IS NULL ORDER BY last_seen DESC LIMIT ?
+     )`,
+  ).run(now, MAX_OPEN_GATES)
+
+  // Resolved gates: age out, then a global count backstop.
   d.prepare('DELETE FROM gate WHERE resolved_at IS NOT NULL AND resolved_at < ?').run(now - GATE_RETENTION_MS)
   d.prepare(
     `DELETE FROM gate WHERE resolved_at IS NOT NULL AND fp NOT IN (
