@@ -112,6 +112,7 @@ type EnrichedSession = LiveSession & {
   whyGloss?: string // reserved for the Arbiter; never populated by this path
   unhandled?: boolean // has an open gate you haven't looked at yet (drives the pip)
   subtasks?: SubtaskInfo[] // subagents this session has spawned (fleet activity view)
+  contextPct?: number | null // context window used %, from the session's statusLine payload
 }
 interface Snapshot {
   home: string
@@ -125,6 +126,12 @@ interface Snapshot {
   recentFolders: string[]
   apiKeys: ApiKeyRow[]
   arbiter: ArbiterPanel
+  usage: UsageAccount // account-wide rate limits for the header readout
+}
+// Account-wide 5h / 7d usage, from the freshest session's statusLine payload.
+interface UsageAccount {
+  fiveHour: { pct: number; resetsAt: number } | null
+  sevenDay: { pct: number; resetsAt: number } | null
 }
 // Everything the Arbiter console renders. Spend is always present — it is the
 // one thing that must be visible whether the agent is on, off, or capped.
@@ -391,16 +398,28 @@ function getDecryptedKey(id: number): string | null {
 // per-session capability token (NOT the key) + apiKeyHelper via --settings. The
 // caller registers the token (and its onExit revoker) after spawn. Returns empty
 // pieces when no/invalid key is chosen.
+// Per-session --settings for every app-spawned session. ALWAYS carries the
+// usage statusLine (so the app can read context % + rate limits); adds the
+// apiKeyHelper only when the session runs on a stored key. --settings is
+// additive, so this overrides only the statusLine for THIS session and leaves
+// the user's global settings (and their own statusLine on other sessions)
+// untouched.
 function keySpawnConfig(apiKeyId?: number): {
   env: Record<string, string>
   args: string[]
   token?: string
 } {
-  if (apiKeyId == null || !apiKeyExists(apiKeyId)) return { env: {}, args: [] }
+  const settings: { statusLine: unknown; apiKeyHelper?: string } = {
+    statusLine: { type: 'command', command: USAGE_LINE_PATH },
+  }
+  if (apiKeyId == null || !apiKeyExists(apiKeyId)) {
+    return { env: {}, args: ['--settings', JSON.stringify(settings)] }
+  }
   const token = randomBytes(24).toString('hex')
+  settings.apiKeyHelper = KEYHELPER_PATH
   return {
     env: { CCC_KEY_TOKEN: token, CCC_KEYD_SOCK: KEYD_SOCK },
-    args: ['--settings', JSON.stringify({ apiKeyHelper: KEYHELPER_PATH })],
+    args: ['--settings', JSON.stringify(settings)],
     token,
   }
 }
@@ -474,6 +493,7 @@ function snapshot(): Snapshot {
   const managedIds = managedSessionIds()
   const names = getSessionNames()
   const hookStates = readHookStates()
+  const usage = readUsageStates()
   const enriched: EnrichedSession[] = sessions.map((s) => {
     const managed = managedIds.has(s.sessionId)
     // Only managed sessions have a live PTY buffer to scan; adopted/external
@@ -598,6 +618,7 @@ function snapshot(): Snapshot {
       // Subagents this session spawned, from its transcript. mtime-cached in the
       // scanner, so this is cheap on the scans where nothing changed.
       subtasks: s.transcriptPath ? scanSubtasks(s.transcriptPath, now) : undefined,
+      contextPct: usage.perSession.get(s.sessionId)?.contextPct,
     }
   })
 
@@ -750,6 +771,7 @@ function snapshot(): Snapshot {
     recentFolders: getRecentFolders(),
     apiKeys: listApiKeys(),
     arbiter: { status: arbiterStatus, spend: getArbiterSpend(), log: getArbiterLog(40) },
+    usage: { fiveHour: usage.fiveHour, sevenDay: usage.sevenDay },
   }
 }
 
@@ -2421,6 +2443,125 @@ function readHookStates(): Map<string, { state: string; at: number; kind?: strin
   return map
 }
 
+// ---------- usage readouts (context %, account 5h/7d) ----------
+// Claude Code hands a rich JSON payload to a session's `statusLine` command:
+// per-session context_window.used_percentage, and account-wide
+// rate_limits.{five_hour,seven_day}. The ONLY way to read it is to BE that
+// command, so the app injects its own statusLine per session via the additive
+// `--settings` (app-spawned sessions only — never a global install that would
+// clobber the user's own statusLine, and never the user's personal usage cache
+// which wouldn't ship to anyone else). The script captures the payload to a
+// per-session file the app reads each scan, and prints a compact terminal line.
+const USAGE_DIR = join(os.homedir(), '.claude', 'ccc', 'usage')
+const USAGE_LINE_PATH = join(os.homedir(), '.claude', 'ccc', 'usage-line.sh')
+const USAGE_MAX_AGE_MS = 10 * 60 * 1000 // rate-limit numbers go stale fast; drop old files
+
+// Extraction mirrors the status hook: grep -o emits matches in document order,
+// so a scoped object grab (`"context_window":{[^}]*}`) then the numeric field is
+// robust even though `used_percentage` also appears under the rate limits.
+const USAGE_LINE_SCRIPT = `#!/bin/bash
+# CC Command Center usage statusLine — written by the app; do not edit by hand.
+# stdin: the statusLine JSON payload. Captures it for the app UI (per-session
+# context % + account 5h/7d) and prints a compact line for the terminal.
+IN=$(cat 2>/dev/null) || IN=""
+SID=$(printf '%s' "$IN" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\\([^"]*\\)"$/\\1/')
+if [ -n "$SID" ]; then
+  DIR="$HOME/.claude/ccc/usage"
+  mkdir -p "$DIR" 2>/dev/null
+  printf '%s' "$IN" > "$DIR/$SID.json.tmp" 2>/dev/null && mv -f "$DIR/$SID.json.tmp" "$DIR/$SID.json" 2>/dev/null
+fi
+MODEL=$(printf '%s' "$IN" | grep -o '"display_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\\([^"]*\\)"$/\\1/')
+CTX=$(printf '%s' "$IN" | grep -o '"context_window":{[^}]*}' | grep -o '"used_percentage":[0-9][0-9]*' | grep -o '[0-9][0-9]*')
+FH=$(printf '%s' "$IN" | grep -o '"five_hour":{[^}]*}' | grep -o '"used_percentage":[0-9][0-9]*' | grep -o '[0-9][0-9]*')
+SD=$(printf '%s' "$IN" | grep -o '"seven_day":{[^}]*}' | grep -o '"used_percentage":[0-9][0-9]*' | grep -o '[0-9][0-9]*')
+LINE="CC"
+[ -n "$MODEL" ] && LINE="$LINE · $MODEL"
+[ -n "$CTX" ] && LINE="$LINE · ctx $CTX%"
+[ -n "$FH" ] && LINE="$LINE · 5h $FH%"
+[ -n "$SD" ] && LINE="$LINE · 7d $SD%"
+printf '%s' "$LINE"
+exit 0
+`
+
+function ensureUsageLineScript(): void {
+  try {
+    mkdirSync(USAGE_DIR, { recursive: true })
+    writeFileSync(USAGE_LINE_PATH, USAGE_LINE_SCRIPT, { mode: 0o755 })
+    chmodSync(USAGE_LINE_PATH, 0o755) // mode ignored on an existing file
+  } catch (e) {
+    console.error('[main] write usage-line script failed', e)
+  }
+}
+
+interface UsageState {
+  contextPct: number | null
+  contextSize: number | null
+}
+interface RateLimit {
+  pct: number
+  resetsAt: number // unix seconds
+}
+interface UsageReadout {
+  perSession: Map<string, UsageState>
+  fiveHour: RateLimit | null
+  sevenDay: RateLimit | null
+}
+
+function readUsageStates(): UsageReadout {
+  const perSession = new Map<string, UsageState>()
+  let fiveHour: RateLimit | null = null
+  let sevenDay: RateLimit | null = null
+  let freshest = 0
+  let files: string[] = []
+  try {
+    files = readdirSync(USAGE_DIR).filter((f) => f.endsWith('.json'))
+  } catch {
+    return { perSession, fiveHour, sevenDay }
+  }
+  const now = Date.now()
+  for (const f of files) {
+    const fp = join(USAGE_DIR, f)
+    try {
+      const st = statSync(fp)
+      if (now - st.mtimeMs > USAGE_MAX_AGE_MS) {
+        unlinkSync(fp)
+        continue
+      }
+      const j = JSON.parse(readFileSync(fp, 'utf8')) as {
+        context_window?: { used_percentage?: unknown; context_window_size?: unknown }
+        rate_limits?: {
+          five_hour?: { used_percentage?: unknown; resets_at?: unknown }
+          seven_day?: { used_percentage?: unknown; resets_at?: unknown }
+        }
+      }
+      const cw = j?.context_window
+      perSession.set(f.slice(0, -5), {
+        contextPct: typeof cw?.used_percentage === 'number' ? cw.used_percentage : null,
+        contextSize: typeof cw?.context_window_size === 'number' ? cw.context_window_size : null,
+      })
+      // Rate limits are account-wide, so any session's payload carries them —
+      // take the freshest file's, so the readout reflects the latest known state.
+      const rl = j?.rate_limits
+      if (rl && st.mtimeMs > freshest) {
+        freshest = st.mtimeMs
+        const fh = rl.five_hour
+        const sd = rl.seven_day
+        fiveHour =
+          typeof fh?.used_percentage === 'number' && typeof fh?.resets_at === 'number'
+            ? { pct: fh.used_percentage, resetsAt: fh.resets_at }
+            : fiveHour
+        sevenDay =
+          typeof sd?.used_percentage === 'number' && typeof sd?.resets_at === 'number'
+            ? { pct: sd.used_percentage, resetsAt: sd.resets_at }
+            : sevenDay
+      }
+    } catch {
+      /* mid-write or malformed — skip this scan */
+    }
+  }
+  return { perSession, fiveHour, sevenDay }
+}
+
 // When a link is blessed, tell the (app-managed) parent it can now message this
 // child down the link. Parent→child needs the parent to have an outbox, which
 // only app-spawned sessions do — adopted parents keep child→parent only.
@@ -2834,6 +2975,7 @@ app.whenReady().then(() => {
     /* ignore */
   }
   ensureStatusHookScript() // keep the hook script current with this app version
+  ensureUsageLineScript() // the per-session usage statusLine (context % + 5h/7d)
   ensureKeyHelperScript() // API-key helper, current with this app version
   startKeyDaemon() // owner-only socket that serves decrypted keys to sessions
   setDockIcon()

@@ -43,6 +43,7 @@ interface Session {
     startedAt?: number
   }[]
   unhandled?: boolean // open gate you haven't looked at yet — shows a pip until seen
+  contextPct?: number | null // context window used %, from the session's statusLine
 }
 interface Category {
   id: number
@@ -105,6 +106,10 @@ interface Snapshot {
   recentFolders?: string[]
   apiKeys?: ApiKey[]
   arbiter?: ArbiterPanel
+  usage?: {
+    fiveHour: { pct: number; resetsAt: number } | null
+    sevenDay: { pct: number; resetsAt: number } | null
+  }
 }
 interface Selected {
   key: string
@@ -154,6 +159,55 @@ function fmtAge(ms: number | undefined, now: number): string {
   const h = Math.round(m / 60)
   if (h < 48) return `${h}h`
   return `${Math.round(h / 24)}d`
+}
+
+// Time until a rate-limit window resets. resetsAt is unix SECONDS.
+function fmtResetIn(resetsAtSec: number, nowMs: number): string {
+  const ms = resetsAtSec * 1000 - nowMs
+  if (ms <= 0) return 'now'
+  const m = Math.floor(ms / 60000)
+  const h = Math.floor(m / 60)
+  const d = Math.floor(h / 24)
+  if (d > 0) return `${d}d${h % 24}h`
+  if (h > 0) return `${h}h${m % 60}m`
+  return `${m}m`
+}
+// >=85% is the auto-compact / near-limit danger zone the user flagged; 65% warns.
+const ctxTone = (pct: number | null | undefined): '' | 'warm' | 'hot' =>
+  pct == null ? '' : pct >= 85 ? 'hot' : pct >= 65 ? 'warm' : ''
+
+// Account-wide 5h / 7d usage: a small bar + % + reset countdown, in the beacon.
+function UsageMeter({
+  usage,
+  now,
+}: {
+  usage: Snapshot['usage']
+  now: number
+}): React.ReactElement | null {
+  if (!usage || (!usage.fiveHour && !usage.sevenDay)) return null
+  const bar = (label: string, r: { pct: number; resetsAt: number } | null): React.ReactElement | null => {
+    if (!r) return null
+    const tone = r.pct >= 85 ? 'hot' : r.pct >= 65 ? 'warm' : ''
+    return (
+      <div
+        className="um-item"
+        title={`${label} rate limit: ${r.pct}% used · resets in ${fmtResetIn(r.resetsAt, now)}`}
+      >
+        <span className="um-label">{label}</span>
+        <span className="um-bar">
+          <span className={`um-fill ${tone}`} style={{ width: `${Math.min(100, r.pct)}%` }} />
+        </span>
+        <span className={`um-pct ${tone}`}>{r.pct}%</span>
+        <span className="um-reset">{fmtResetIn(r.resetsAt, now)}</span>
+      </div>
+    )
+  }
+  return (
+    <div className="usagemeter">
+      {bar('5h', usage.fiveHour)}
+      {bar('7d', usage.sevenDay)}
+    </div>
+  )
 }
 
 const bySort = (a: Session, b: Session) =>
@@ -876,6 +930,7 @@ export function App() {
             {snap.awarenessPaused ? '⏸' : '✉'} {snap.messages?.length ?? 0}
           </button>
         )}
+        <UsageMeter usage={snap.usage} now={snap.scannedAt || Date.now()} />
         <button className="gearbtn" onClick={() => setSettingsOpen(true)} title="Settings">
           ⚙
         </button>
@@ -1039,7 +1094,20 @@ export function App() {
                 {s.dormant ? (
                   <span className="meta resume">resume</span>
                 ) : (
-                  <span className="meta">{fmtAge(s.transcriptMtimeMs, snap.scannedAt)}</span>
+                  <span className="meta">
+                    {typeof s.contextPct === 'number' && (
+                      <span
+                        className={`ctxchip ${ctxTone(s.contextPct)}`}
+                        title={`context window ${s.contextPct}% used${
+                          s.contextPct >= 85 ? ' — near auto-compact' : ''
+                        }`}
+                      >
+                        {s.contextPct >= 85 ? '⚠ ' : ''}
+                        {s.contextPct}%
+                      </span>
+                    )}
+                    {fmtAge(s.transcriptMtimeMs, snap.scannedAt)}
+                  </span>
                 )}
               </li>
               )
@@ -1062,6 +1130,17 @@ export function App() {
                   ) : (
                     <span className="tnote tnote-dim">resumed session</span>
                   ))}
+                {(() => {
+                  const pct = snap.sessions.find((x) => x.sessionId === selected.sessionId)?.contextPct
+                  return typeof pct === 'number' ? (
+                    <span
+                      className={`tctx ${ctxTone(pct)}`}
+                      title={`context window ${pct}% used${pct >= 85 ? ' — near auto-compact' : ''}`}
+                    >
+                      ctx {pct}%{pct >= 85 ? ' ⚠' : ''}
+                    </span>
+                  ) : null
+                })()}
                 <span className="grow" />
                 <ThemePicker current={selThemeName} onPick={pickTheme} />
                 <button className="tclose" onClick={closeTerminal} title="Close terminal">

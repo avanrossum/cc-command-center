@@ -2384,3 +2384,97 @@ select.cat-in {
   min-height: 0;
   overflow-y: auto;
 }
+
+/* ---- usage readouts (context %, account 5h/7d) ---- */
+/* Account 5h / 7d rate limits, in the beacon. */
+.usagemeter {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0 12px;
+  border-left: 1px solid var(--cc-hairline);
+  -webkit-app-region: no-drag;
+  justify-content: center;
+}
+.um-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 9.5px var(--cc-font-mono);
+  color: var(--cc-meta);
+}
+.um-label {
+  width: 16px;
+  color: var(--cc-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.um-bar {
+  width: 54px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--cc-surface-2);
+  border: 1px solid var(--cc-border);
+  overflow: hidden;
+}
+.um-fill {
+  display: block;
+  height: 100%;
+  background: var(--cc-working);
+  transition: width var(--cc-dur-base);
+}
+.um-fill.warm {
+  background: var(--cc-permission);
+}
+.um-fill.hot {
+  background: var(--cc-blocked);
+}
+.um-pct {
+  min-width: 26px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--cc-dim);
+}
+.um-pct.warm {
+  color: var(--cc-permission);
+}
+.um-pct.hot {
+  color: var(--cc-blocked);
+  font-weight: 700;
+}
+.um-reset {
+  color: var(--cc-faint);
+  min-width: 40px;
+}
+/* Per-session context % chip in the sidebar row. */
+.ctxchip {
+  font: 9px var(--cc-font-mono);
+  color: var(--cc-faint);
+  font-variant-numeric: tabular-nums;
+  margin-right: 5px;
+}
+.ctxchip.warm {
+  color: var(--cc-permission);
+}
+.ctxchip.hot {
+  color: var(--cc-blocked);
+  font-weight: 700;
+}
+/* Current session context, in the terminal bar. */
+.tctx {
+  font: 10.5px var(--cc-font-mono);
+  color: var(--cc-dim);
+  font-variant-numeric: tabular-nums;
+  padding: 2px 7px;
+  border: 1px solid var(--cc-border);
+  border-radius: 20px;
+}
+.tctx.warm {
+  color: var(--cc-permission);
+  border-color: var(--cc-permission);
+}
+.tctx.hot {
+  color: var(--cc-blocked);
+  border-color: var(--cc-blocked);
+  font-weight: 700;
+}
