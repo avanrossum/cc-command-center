@@ -1006,6 +1006,8 @@ body {
 .strip-track {
   display: flex;
   justify-content: flex-end;
+  gap: 1.5px; /* the track's dark bg shows through as a divider, so adjacent
+                 same-brightness states (green ↔ blue) never visually merge */
   height: 11px;
   border-radius: 3px;
   overflow: hidden;
@@ -1014,7 +1016,7 @@ body {
 .strip-seg {
   height: 100%;
   flex: none;
-  min-width: 1px;
+  min-width: 2px;
 }
 .seg-working {
   background: var(--cc-working);
