@@ -1,5 +1,25 @@
 # Backlog — next features (specs)
 
+## Pre-release cleanup — QUEUED, runs before The Arbiter (user, 2026-07-20)
+
+Sequence the user set: (1) the `feat/bigger-control-space` worktree merges → (2) this cleanup
+(subagents) → (3) build The Arbiter. Do NOT reorder — the history rewrite in this step would
+break the worktree's base if run before it merges.
+
+- **MipYip → MipYip everywhere.** MipYip is effectively dead; MipYip is the live brand.
+  Replace `MipYip` / `mipyip` across source, docs, `package.json`, `src/main/about.ts`,
+  and any branding strings. (`LICENSE` is already correct — `Copyright 2026 MipYip, LLC`.)
+  Careful: the owner's email `alex@mipyip.com` may appear; confirm the replacement address
+  before rewriting contact details.
+- **Scrub git history.** Rewrite to remove the client name (`client`) — commits `eaccf5f`,
+  `edac156`, `477cdf9` — and any MipYip references the user wants gone. Requires
+  filter-repo/filter-branch; **only after the worktree merges**, and force-push coordination if
+  a remote exists by then.
+- **Drop `spike/`.** The Phase 0 throwaway (Channels-injection experiment, verdict: blocked →
+  the app uses send-keys/bracketed paste instead). 11 tracked files, unreferenced by the app,
+  and `spike/channel-test/.mcp.json` hardcodes an absolute `/Users/avanrossum/...` path that
+  leaks the username and breaks for anyone who clones. Deleting the directory resolves it.
+
 ## Quick wins (logged)
 
 - ✅ **Rename a session from the sidebar (SHIPPED v0.9.24, 2026-07-18).** Right-click a session
