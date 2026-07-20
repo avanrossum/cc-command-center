@@ -2446,18 +2446,26 @@ select.cat-in {
   color: var(--cc-faint);
   min-width: 40px;
 }
-/* Per-session context % chip in the sidebar row. */
+/* Per-session context % chip in the sidebar row. Was 9px/faint and genuinely
+   hard to read a digit in — bumped to a legible size, a brighter tier, and a
+   subtle pill so it reads as its own value next to the age. */
 .ctxchip {
-  font: 9px var(--cc-font-mono);
-  color: var(--cc-faint);
+  font: 600 10.5px var(--cc-font-mono);
+  color: var(--cc-dim);
   font-variant-numeric: tabular-nums;
-  margin-right: 5px;
+  letter-spacing: 0.3px;
+  margin-right: 6px;
+  padding: 1px 5px;
+  border-radius: 10px;
+  background: var(--cc-surface-2);
 }
 .ctxchip.warm {
   color: var(--cc-permission);
+  background: rgba(245, 158, 11, 0.12);
 }
 .ctxchip.hot {
   color: var(--cc-blocked);
+  background: rgba(224, 112, 200, 0.15);
   font-weight: 700;
 }
 /* Current session context, in the terminal bar. */
