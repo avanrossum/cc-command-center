@@ -2397,14 +2397,12 @@ function CategoryEditor({
         {edit.id !== null &&
           (confirmDel ? (
             <>
-              {/* Say what actually happens. Sessions are NOT deleted — node.category_id
-                  falls back to NULL via ON DELETE SET NULL, so they land in Uncat. */}
+              {/* Deleting a category terminates its sessions. Say so plainly, and
+                  say what to do about it — the count is the load-bearing part. */}
               <div className="menunote">
                 {edit.count === 0
                   ? 'Delete this category?'
-                  : `${edit.count} session${edit.count === 1 ? '' : 's'} move${
-                      edit.count === 1 ? 's' : ''
-                    } to Uncat. No session is deleted.`}
+                  : `Terminates ${edit.count} session${edit.count === 1 ? '' : 's'}. Move any you want to keep to another category first.`}
               </div>
               <button
                 className="menuitem danger"
@@ -2413,7 +2411,9 @@ function CategoryEditor({
                   close()
                 }}
               >
-                Delete “{edit.name}”
+                {edit.count === 0
+                  ? `Delete “${edit.name}”`
+                  : `Delete “${edit.name}” + ${edit.count}`}
               </button>
               <button className="menuitem" onClick={() => setConfirmDel(false)}>
                 Cancel

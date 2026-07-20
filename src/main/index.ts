@@ -1715,10 +1715,23 @@ ipcMain.handle('session:setName', (_e, sessionId: string, name: string) => {
   pushSessions()
   return true
 })
+// Deleting a category TERMINATES the sessions in it. The schema would happily
+// release them to Uncategorized (ON DELETE SET NULL), but that isn't the intent:
+// a category is a workspace, and "delete it" means the work is done. Move
+// anything worth keeping to another category first — the confirm says so.
+//
+// Scope is deliberately the category's OWN sessions, not descendants: a
+// tangential offshoot can live in a different category, and deleting one
+// workspace must not reach into another. Orphaned edges cascade away with the
+// node, so a surviving child is simply parentless.
 ipcMain.handle('cat:delete', (_e, id: number) => {
+  const ids = [...getNodeMap().entries()]
+    .filter(([, n]) => n.category_id === id)
+    .map(([sessionId]) => sessionId)
+  const removed = removeSessionsHard(ids)
   deleteCategory(id)
   pushSessions()
-  return true
+  return { removed }
 })
 ipcMain.handle('cat:setLabel', (_e, id: number, label: string | null) => {
   setCategoryLabel(id, label)
@@ -2292,9 +2305,11 @@ function descendantsOf(sessionId: string): string[] {
 // Remove a session AND its whole subtree: kill each managed terminal (no hanging
 // PTYs), purge dead session files, drop the registry node, deny-list it. Returns
 // every removed session id so the UI can drop the active terminal if it was one.
-ipcMain.handle('session:remove', (_e, sessionId: string) => {
-  if (!sessionId) return { removed: [] as string[] }
-  const ids = [sessionId, ...descendantsOf(sessionId)]
+// Hard-remove sessions: kill the live pty, purge dead session files, drop the
+// registry node (edges/gates/event_log cascade), drop the hook-status file, and
+// deny-list the id so an alive-but-transcript-gone ghost can't re-adopt. Shared
+// by session:remove and cat:delete so the two can never drift apart.
+function removeSessionsHard(ids: string[]): string[] {
   const set = getRemovedSet()
   for (const id of ids) {
     const t = findManagedTerm(id) // robust: matches the term key OR the sessionId
@@ -2316,9 +2331,15 @@ ipcMain.handle('session:remove', (_e, sessionId: string) => {
     } catch {
       /* none written */
     }
-    set.add(id) // deny-list so an alive-but-transcript-gone ghost can't re-adopt
+    set.add(id)
   }
   setAppState('removedSessions', JSON.stringify([...set]))
+  return ids
+}
+
+ipcMain.handle('session:remove', (_e, sessionId: string) => {
+  if (!sessionId) return { removed: [] as string[] }
+  const ids = removeSessionsHard([sessionId, ...descendantsOf(sessionId)])
   pushSessions()
   return { removed: ids }
 })
