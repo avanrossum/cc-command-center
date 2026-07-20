@@ -42,6 +42,12 @@ interface Category {
   sort: number
   label: string | null
   emoji: string | null
+  arbiter_context: number // 1 → this category's session substance may go to the API
+}
+interface ArbiterPanel {
+  status: 'idle' | 'running' | 'capped' | 'error' | 'off'
+  spend: { todayUsd: number; totalUsd: number; calls: number; lastAt: number | null }
+  log: { id: number; at: number; kind: string; text: string }[]
 }
 interface ApiKey {
   id: number
@@ -70,6 +76,9 @@ interface AppSettings {
   lastModel: string
   lastEffort: string
   lastContext: string
+  arbiterEnabled: boolean
+  arbiterKeyId: number | null
+  arbiterCapUsd: number
   statusHooksInstalled: boolean
   spawnAutoMode: boolean
 }
@@ -84,6 +93,7 @@ interface Snapshot {
   settings?: AppSettings
   recentFolders?: string[]
   apiKeys?: ApiKey[]
+  arbiter?: ArbiterPanel
 }
 interface Selected {
   key: string
@@ -236,6 +246,7 @@ export function App() {
     label: string | null
     emoji: string | null
     count: number // sessions currently in it — shown before a delete
+    arbiterContext: number // 1 → substance from this category may go to the API
     x: number
     y: number
   } | null>(null)
@@ -547,6 +558,7 @@ export function App() {
       color: c.color,
       label: c.label,
       emoji: c.emoji,
+      arbiter_context: c.arbiter_context ?? 0,
       rows: buildTree(byCat.get(c.id) ?? []),
     }))
     const uncat = {
@@ -555,6 +567,7 @@ export function App() {
       color: '#6a6355',
       label: null as string | null,
       emoji: null as string | null,
+      arbiter_context: 0, // Uncategorized is never cleared to send substance
       rows: buildTree(byCat.get(null) ?? []),
     }
     return [...cats, uncat].filter((g) => g.id !== null || g.rows.length > 0)
@@ -781,6 +794,7 @@ export function App() {
                       label: g.label,
                       emoji: g.emoji,
                       count: g.rows.length,
+                      arbiterContext: g.arbiter_context ?? 0,
                       x: e.clientX,
                       y: e.clientY,
                     })
@@ -804,6 +818,7 @@ export function App() {
                 label: null,
                 emoji: null,
                 count: 0,
+                arbiterContext: 0,
                 x: r.right + 6,
                 y: Math.max(48, Math.min(r.top, window.innerHeight - 380)),
               })
@@ -1185,6 +1200,11 @@ export function App() {
                   })
                 )}
               </div>
+              <ArbiterConsole
+                panel={snap.arbiter}
+                enabled={snap.settings?.arbiterEnabled ?? false}
+                capUsd={snap.settings?.arbiterCapUsd ?? 0}
+              />
             </aside>
           ) : (
             <button
@@ -1218,6 +1238,7 @@ export function App() {
               label: null,
               emoji: null,
               count: 0,
+              arbiterContext: 0,
               x: pos.x,
               y: pos.y,
             })
@@ -1433,6 +1454,57 @@ function SettingsModal({
           >
             {hooksInstalled ? 'Remove' : 'Install…'}
           </button>
+        </div>
+
+        <div className="setsection">
+          <b>The Arbiter</b>
+          <span className="setsub">
+            An optional agent that writes a plain-English line explaining why each session is
+            waiting on you. It runs on <b>metered API billing</b>, not your subscription, and reads
+            only categories you tick in the category editor — everything else sends state alone. It
+            takes no action on any session.
+          </span>
+          <label className="setrow">
+            <input
+              type="checkbox"
+              checked={settings?.arbiterEnabled ?? false}
+              disabled={apiKeys.length === 0}
+              onChange={(e) => window.cc.arbiterSetEnabled(e.target.checked)}
+            />
+            <span>
+              Enabled
+              {apiKeys.length === 0 && <span className="setsub"> — add an API key first</span>}
+            </span>
+          </label>
+          <div className="setrow">
+            <span className="setlabel">Key</span>
+            <select
+              className="cat-in"
+              value={settings?.arbiterKeyId ?? ''}
+              onChange={(e) =>
+                window.cc.arbiterSetKey(e.target.value === '' ? null : Number(e.target.value))
+              }
+            >
+              <option value="">none</option>
+              {apiKeys.map((k) => (
+                <option key={k.id} value={k.id}>
+                  {k.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="setrow">
+            <span className="setlabel">Daily cap</span>
+            <input
+              className="cat-in"
+              type="number"
+              min="0"
+              step="0.25"
+              defaultValue={settings?.arbiterCapUsd ?? 1}
+              onBlur={(e) => window.cc.arbiterSetCap(Number(e.target.value))}
+            />
+            <span className="setsub">USD — it stops at this, it does not just warn. 0 = no cap.</span>
+          </div>
         </div>
 
         <div className="setsection">
@@ -1892,6 +1964,84 @@ const MODEL_OPTS = [
   { v: '__custom__', label: 'Custom…' },
 ]
 const EFFORT_OPTS = ['', 'low', 'medium', 'high', 'xhigh', 'max']
+// The Arbiter console: docked at the bottom of the companion pane. This is NOT
+// where the insight lives — the gloss renders inline on the session it describes.
+// This is where you audit the agent: what it is doing, and what it has cost.
+// Collapsed to a single line unless opened, so it stays quiet.
+function ArbiterConsole({
+  panel,
+  enabled,
+  capUsd,
+}: {
+  panel: ArbiterPanel | undefined
+  enabled: boolean
+  capUsd: number
+}): React.ReactElement | null {
+  const [open, setOpen] = useState(false)
+  const [poking, setPoking] = useState(false)
+  if (!panel) return null
+  const { status, spend, log } = panel
+  const today = `$${spend.todayUsd.toFixed(spend.todayUsd < 1 ? 4 : 2)}`
+  const capped = status === 'capped'
+  const poke = async () => {
+    setPoking(true)
+    try {
+      await window.cc.arbiterPoke()
+    } finally {
+      setPoking(false)
+    }
+  }
+  return (
+    <div className={`arb${open ? ' open' : ''}`}>
+      <button className="arb-head" onClick={() => setOpen(!open)} title="Arbiter">
+        <span className={`arb-dot arb-${status}`} />
+        <span className="arb-name">Arbiter</span>
+        <span className="arb-status">
+          {!enabled
+            ? 'off'
+            : capped
+              ? 'capped'
+              : status === 'running'
+                ? 'reading…'
+                : status === 'error'
+                  ? 'error'
+                  : 'idle'}
+        </span>
+        {/* Spend is always visible, on or off — it is the number that must never surprise. */}
+        <span className={`arb-spend${capped ? ' over' : ''}`} title={`${spend.calls} calls`}>
+          {today}
+          {capUsd > 0 ? ` / $${capUsd.toFixed(2)}` : ''}
+        </span>
+      </button>
+      {open && (
+        <div className="arb-body">
+          {enabled ? (
+            <button className="arb-poke" onClick={poke} disabled={poking || status === 'running'}>
+              {poking || status === 'running' ? 'reading…' : 'Read now'}
+            </button>
+          ) : (
+            <div className="arb-note">Enable in Settings, with an API key and a daily cap.</div>
+          )}
+          <div className="arb-log">
+            {log.length === 0 ? (
+              <div className="arb-note">nothing yet</div>
+            ) : (
+              log.map((l) => (
+                <div key={l.id} className={`arb-line arb-${l.kind}`}>
+                  <span className="arb-t">
+                    {new Date(l.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  <span className="arb-txt">{l.text}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 const CONTEXT_OPTS = [
   { v: '', label: 'Default' },
   { v: '1m', label: '1M' },
@@ -2281,6 +2431,7 @@ function CategoryEditor({
     label: string | null
     emoji: string | null
     count: number
+    arbiterContext: number
     x: number
     y: number
   }
@@ -2295,6 +2446,7 @@ function CategoryEditor({
   // Deleting a category used to fire on a single click, silently. It's a
   // container holding sessions, so it asks first and says where they go.
   const [confirmDel, setConfirmDel] = useState(false)
+  const [arbCtx, setArbCtx] = useState(edit.arbiterContext === 1)
   const close = () => setEdit(null)
   const save = async () => {
     const nm = name.trim()
@@ -2394,6 +2546,26 @@ function CategoryEditor({
         <button className="menuitem" onClick={save}>
           {isCreate ? 'Create' : 'Save'}
         </button>
+        {/* The privacy gate. Off by default and per-category, so client work
+            never reaches the API unless it is switched on deliberately. */}
+        {edit.id !== null && (
+          <label className="arb-optin" title="Send this category's pending commands and questions to the Arbiter">
+            <input
+              type="checkbox"
+              checked={arbCtx}
+              onChange={(e) => {
+                setArbCtx(e.target.checked)
+                window.cc.catSetArbiterContext(edit.id as number, e.target.checked)
+              }}
+            />
+            <span>
+              Arbiter may read this category
+              <span className="arb-optin-sub">
+                {arbCtx ? 'sends commands and questions' : 'sends state only'}
+              </span>
+            </span>
+          </label>
+        )}
         {edit.id !== null &&
           (confirmDel ? (
             <>

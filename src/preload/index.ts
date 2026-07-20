@@ -30,6 +30,12 @@ contextBridge.exposeInMainWorld('cc', {
     ipcRenderer.invoke('session:setName', sessionId, name),
   catDelete: (id: number) => ipcRenderer.invoke('cat:delete', id),
   catSetLabel: (id: number, label: string | null) => ipcRenderer.invoke('cat:setLabel', id, label),
+  catSetArbiterContext: (id: number, on: boolean) =>
+    ipcRenderer.invoke('cat:setArbiterContext', id, on),
+  arbiterSetEnabled: (on: boolean) => ipcRenderer.invoke('arbiter:setEnabled', on),
+  arbiterSetKey: (keyId: number | null) => ipcRenderer.invoke('arbiter:setKey', keyId),
+  arbiterSetCap: (usd: number) => ipcRenderer.invoke('arbiter:setCap', usd),
+  arbiterPoke: () => ipcRenderer.invoke('arbiter:poke'),
   catSetColor: (id: number, color: string) => ipcRenderer.invoke('cat:setColor', id, color),
   catSetEmoji: (id: number, emoji: string | null) => ipcRenderer.invoke('cat:setEmoji', id, emoji),
   catAssign: (sessionId: string, categoryId: number | null) =>

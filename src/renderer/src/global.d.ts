@@ -27,6 +27,11 @@ declare global {
       sessionSetName: (sessionId: string, name: string) => Promise<boolean>
       catDelete: (id: number) => Promise<{ removed: string[] }>
       catSetLabel: (id: number, label: string | null) => Promise<boolean>
+      catSetArbiterContext: (id: number, on: boolean) => Promise<boolean>
+      arbiterSetEnabled: (on: boolean) => Promise<boolean>
+      arbiterSetKey: (keyId: number | null) => Promise<boolean>
+      arbiterSetCap: (usd: number) => Promise<boolean>
+      arbiterPoke: () => Promise<boolean>
       catSetColor: (id: number, color: string) => Promise<boolean>
       catSetEmoji: (id: number, emoji: string | null) => Promise<boolean>
       catAssign: (sessionId: string, categoryId: number | null) => Promise<boolean>

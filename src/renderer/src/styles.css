@@ -355,6 +355,12 @@ body {
 .setrow input[type='checkbox'] {
   margin-top: 2px;
 }
+.setlabel {
+  flex: none;
+  min-width: 72px;
+  padding-top: 5px;
+  color: var(--cc-dim);
+}
 .setrow > span {
   display: flex;
   flex-direction: column;
@@ -1806,6 +1812,141 @@ body {
 }
 .menuitem.danger:hover {
   background: rgba(240, 133, 125, 0.14);
+}
+
+/* Per-category privacy toggle inside the category editor. */
+.arb-optin {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 7px 8px 4px;
+  font-size: 11.5px;
+  color: var(--cc-text);
+  cursor: pointer;
+}
+.arb-optin input {
+  margin-top: 1px;
+  flex: none;
+}
+.arb-optin-sub {
+  display: block;
+  font-size: 10.5px;
+  color: var(--cc-dim2);
+  margin-top: 1px;
+}
+
+/* ---- Arbiter console (bottom of the companion pane) ---- */
+/* flex:none keeps it pinned while the why-board above scrolls. */
+.arb {
+  flex: none;
+  border-top: 1px solid var(--cc-border);
+  background: var(--cc-surface-2);
+  display: flex;
+  flex-direction: column;
+  max-height: 42%;
+}
+.arb-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--cc-dim);
+  text-align: left;
+}
+.arb-head:hover {
+  background: var(--cc-fill-hover);
+}
+.arb-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--cc-dim2);
+}
+.arb-running {
+  background: var(--cc-cat-terracotta, #e2724a);
+}
+.arb-idle {
+  background: #4ac08a;
+}
+.arb-capped,
+.arb-error {
+  background: var(--cc-permission, #f59e0b);
+}
+.arb-name {
+  color: var(--cc-text);
+  font-weight: 600;
+}
+.arb-status {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Monospace so the running total doesn't jitter as digits change. */
+.arb-spend {
+  font-family: var(--cc-font-mono);
+  font-size: 10.5px;
+  flex: none;
+}
+.arb-spend.over {
+  color: var(--cc-permission, #f59e0b);
+}
+.arb-body {
+  padding: 0 10px 8px;
+  overflow-y: auto;
+}
+.arb-poke {
+  width: 100%;
+  padding: 5px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--cc-text);
+  background: var(--cc-surface);
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-r-sm);
+  cursor: pointer;
+}
+.arb-poke:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.arb-note {
+  font-size: 10.5px;
+  color: var(--cc-dim2);
+  line-height: 1.4;
+  padding: 2px 0;
+}
+.arb-log {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.arb-line {
+  display: flex;
+  gap: 6px;
+  font-size: 10.5px;
+  font-family: var(--cc-font-mono);
+  color: var(--cc-dim);
+  line-height: 1.35;
+}
+.arb-line.arb-error {
+  color: #f0857d;
+  background: transparent;
+}
+.arb-t {
+  flex: none;
+  color: var(--cc-dim2);
+}
+.arb-txt {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* ---- category editor popover ---- */
