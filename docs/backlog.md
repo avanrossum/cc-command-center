@@ -34,6 +34,18 @@ demonstrably contaminated data during this audit.
 
 ## Next up — queued 2026-07-20 (user, end of session)
 
+### 1. ✅ Usage readouts (SHIPPED v0.13.0, 2026-07-20)
+
+Done via the app-owned statusLine path below (option ✅): a `usage-line.sh` injected per session
+through the additive `--settings`, capturing Claude Code's statusLine payload to
+`~/.claude/ccc/usage/<session_id>.json`. Per-session `context_window.used_percentage` → a ctx% chip
+on each sidebar row + a pill in the terminal bar (warm ≥65%, hot+⚠ ≥85%). Account
+`rate_limits.{five_hour,seven_day}` → a 5h/7d meter in the beacon (bar + % + reset countdown).
+Limits held: app-spawned sessions only (adopted show no chip); the 5h/7d meter needs one app
+session to have run recently. Capture verified end-to-end against a live interactive session.
+
+--- original spec (kept for the transport rationale, which item 2 reuses) ---
+
 ### 1. Usage readouts: context of the visible session, plus 5h / 7d overall
 
 Surface `context_window.used_percentage` for the **currently visible** session, and the
