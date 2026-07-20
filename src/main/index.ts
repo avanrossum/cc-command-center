@@ -114,6 +114,7 @@ interface AppSettings {
   firstRunSeen: boolean
   lastModel: string // remembered New-session model choice ('' = default)
   lastEffort: string // remembered reasoning effort ('' = default)
+  lastContext: string // remembered context window ('' = default, '1m' = [1m] suffix)
   statusHooksInstalled: boolean // hook-driven status wired into ~/.claude/settings.json
   spawnAutoMode: boolean // last "start child in auto mode" choice (default ON)
 }
@@ -125,6 +126,7 @@ function getSettings(): AppSettings {
     firstRunSeen: getAppState('firstRunSeen') === 'true',
     lastModel: getAppState('lastModel') || '',
     lastEffort: getAppState('lastEffort') || '',
+    lastContext: getAppState('lastContext') || '',
     statusHooksInstalled: getAppState('statusHooksInstalled') === 'true',
     spawnAutoMode: getAppState('spawnAutoMode') !== 'false', // default ON
   }
@@ -652,24 +654,24 @@ function snapshot(): Snapshot {
 // grouping is visible without hand-assigning. Real use starts empty.
 function maybeSeed(): void {
   if (!process.env.CCC_SEED || listCategories().length > 0) return
-  const sf = createCategory('Salesforce · Client')
+  const clientWork = createCategory('Client Work')
   const exp = createCategory('Experiments')
   const proj = createCategory('Command Center')
   try {
-    const client: string[] = []
+    const clientSessions: string[] = []
     for (const s of scanLiveSessions()) {
       if (!s.sessionId) continue
       ensureNode(s.sessionId, { cwd: s.cwd, name: s.name })
-      if (s.cwd.includes('client')) {
-        assignCategory(s.sessionId, sf.id)
-        client.push(s.sessionId)
+      if (s.cwd.includes('/clients/')) {
+        assignCategory(s.sessionId, clientWork.id)
+        clientSessions.push(s.sessionId)
       } else if (s.cwd.includes('/experiments/')) assignCategory(s.sessionId, exp.id)
       else if (s.cwd.includes('claude-command-center')) assignCategory(s.sessionId, proj.id)
     }
     // demo tree: a blocking child and a tangential offshoot under one session
-    if (client.length >= 3) {
-      setParent(client[1], client[0], 'blocking')
-      setParent(client[2], client[0], 'tangential')
+    if (clientSessions.length >= 3) {
+      setParent(clientSessions[1], clientSessions[0], 'blocking')
+      setParent(clientSessions[2], clientSessions[0], 'tangential')
     }
   } catch (e) {
     console.error('[main] seed error', e)

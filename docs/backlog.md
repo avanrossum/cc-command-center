@@ -1,7 +1,41 @@
 # Backlog — next features (specs)
 
+## Pre-release cleanup — QUEUED, runs before The Arbiter (user, 2026-07-20)
+
+Sequence the user set: (1) the `feat/bigger-control-space` worktree merges → (2) this cleanup
+(subagents) → (3) build The Arbiter. Do NOT reorder — the history rewrite in this step would
+break the worktree's base if run before it merges.
+
+- **MipYip → MipYip everywhere.** MipYip is effectively dead; MipYip is the live brand.
+  Replace `MipYip` / `mipyip` across source, docs, `package.json`, `src/main/about.ts`,
+  and any branding strings. (`LICENSE` is already correct — `Copyright 2026 MipYip, LLC`.)
+  Careful: the owner's email `alex@mipyip.com` may appear; confirm the replacement address
+  before rewriting contact details.
+- **Scrub git history.** Rewrite to remove the client name (`client`) — commits `eaccf5f`,
+  `edac156`, `477cdf9` — and any MipYip references the user wants gone. Requires
+  filter-repo/filter-branch; **only after the worktree merges**, and force-push coordination if
+  a remote exists by then.
+- **Drop `spike/`.** The Phase 0 throwaway (Channels-injection experiment, verdict: blocked →
+  the app uses send-keys/bracketed paste instead). 11 tracked files, unreferenced by the app,
+  and `spike/channel-test/.mcp.json` hardcodes an absolute `/Users/avanrossum/...` path that
+  leaks the username and breaks for anyone who clones. Deleting the directory resolves it.
+
 ## Quick wins (logged)
 
+- ✅ **Context-window selector on spawn (SHIPPED v0.9.25, 2026-07-20).** New sessions could pick
+  a model but not a context window, so every spawn landed on the default window. Claude Code
+  selects the 1M variant with a **`[1m]` suffix on the model string** (`--model opus[1m]`) —
+  verified empirically: `claude --model 'opus[1m]' -p … --output-format json` reports
+  `"claude-opus-4-8[1m]"` with `contextWindow: 1000000`, and the statusLine payload's
+  `model.display_name` reads `Opus 4.8 (1M context)` vs plain `Opus 4.8`. In the CLI bundle the
+  alias allowlist is `["sonnet","opus","haiku","fable","best","sonnet[1m]","opus[1m]","fable[1m]","opusplan"]`
+  and the display gate is `endsWith("[1m]") && supports_1m_suffix`, so the suffix attaches to
+  aliases *and* full ids (`claude-opus-4-8[1m]`) but **not Haiku** (no 1M variant). A third
+  "Context" dropdown sits beside Model/Effort, remembered via a new `lastContext` app-state key
+  (kept separate from `lastModel` so the two restore independently). Disabled when the model is
+  Default or Haiku. NB: `modelUsage.contextWindow` and the statusLine `context_window_size` both
+  report the *model's* max (1000000) regardless of the suffix — the display_name is the reliable
+  signal that 1M is actually engaged.
 - ✅ **Rename a session from the sidebar (SHIPPED v0.9.24, 2026-07-18).** Right-click a session
   → "Rename…" → a small popover (`SessionNameEditor`, mirrors the category editor); blank restores
   the generated title. `session:setName` IPC → `setSessionName`; the open terminal header stays in
