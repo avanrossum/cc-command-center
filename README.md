@@ -1,99 +1,166 @@
 # CC Command Center
 
-A macOS desktop app for running and orchestrating many concurrent Claude Code CLI sessions from one
-window. Each session gets a real terminal inside the app. The app tracks what every session is
-doing, how sessions relate to each other, and which ones are waiting on you.
+**Run and orchestrate many Claude Code sessions from one window — and never lose track of which one needs you.**
+
+A macOS app that hosts every Claude Code CLI session in one place, each in a real terminal, and keeps a live picture of what they are all doing, how they relate, and which are waiting on you. Built for the person running five, ten, twenty sessions at once who keeps losing the thread of which one they were in the middle of.
+
+> **📸 [hero placeholder]** — a wide screenshot of the full app: beacon bar across the top, category rail on the left, an active terminal, the companion pane on the right. This is the one-image "what is this" shot.
+<!-- ![CC Command Center](docs/media/hero.png) -->
+
+> **Not an official Anthropic product.** This is an independent, third-party tool. It is not affiliated with, endorsed by, or supported by Anthropic. "Claude" and "Claude Code" are Anthropic's. This app orchestrates the Claude Code CLI you already run; the optional Arbiter feature makes metered calls to the Anthropic API under your own key, billed to you at API rates.
+
+---
+
+## Why it exists
+
+Running many agent sessions creates one specific problem: **you lose track of what you were doing.** Which session is waiting on you? What was it waiting *for*? Did you already handle that one? What did you set running last night and forget about?
+
+Most of this app is one answer to that question — externalize the state your working memory keeps dropping, so "out of sight" stops meaning "gone." It survives restarts on purpose, because a thing you can't see is a thing you'll forget.
+
+---
+
+## See the whole fleet at a glance
+
+The **beacon bar** across the top is a live status board: which sessions need you, and why. A session surfaces when it is parked on a permission dialog, when it asked you a question, or when it is blocked on an unfinished child. Sessions that are just working stay quiet.
+
+> **📸 [placeholder]** — a 10-second capture of the beacon bar: a session flips from "working" to "needs approval" and appears in the needs-you list with its reason.
+<!-- ![Status board](docs/media/beacon.png) -->
+
+**It survives a restart.** Close the app mid-flow, reopen it, and the sessions that were waiting on you are *still there* in the needs-you list — dimmed, tagged "resume," ready to pick back up. You don't have to remember what you were in the middle of; the app remembers for you.
+
+> **📸 [placeholder]** — quit the app with a session waiting, reopen, show the same session still in the needs-you list marked "resume."
+<!-- ![Survives restart](docs/media/restart.png) -->
+
+---
+
+## Keep separate work separate
+
+Sessions live in **hard-separated categories** — personal, business, per-client, however you define them — with a rail to switch between them and set each one's color, emoji, and short label. A blocking child inherits its parent's category, so a subtree of work can't accidentally drift across the boundary between, say, two different clients.
+
+> **📸 [placeholder]** — the category rail with a few categories, switching between them, and the category editor open showing color / emoji / label.
+<!-- ![Categories](docs/media/categories.png) -->
+
+---
+
+## Structure work as a tree
+
+Spawn a **child session** to go work on one thing without staining the context you're in — seeded with a handoff note carrying just enough to pick up the idea. Links are typed: a **blocking** child means the parent isn't done until the child is; a **tangential** child is a decoupled side-exploration that never blocks the parent.
+
+Resume one member of a task tree after a restart and the **whole family comes back up** — parent, children, and siblings — so the sessions that talk to each other are all live again, not stranded half-dormant.
+
+> **📹 [placeholder]** — spawn a blocking child from a parent with a handoff note, show the typed edge in the tree, then restart and show the family resuming together.
+<!-- ![Session tree](docs/media/tree.png) -->
+
+---
+
+## Sessions that talk to each other
+
+Sessions can message each other through the app over a filesystem mailbox — a parent hands its child a task, the child reports back when done. Delivery is **trust-gated per link**: you bless a link once, and after that messages flow without approving each one, but every hop is written to a message log with its outcome, and a global kill switch stops all of it instantly.
+
+This is the "Human In The Middle" idea (see below) made concrete: you sit at a node in the mesh, able to read, hold, or inject every message.
+
+> **📹 [placeholder]** — a parent messaging a child ("@child do X"), the child replying, and the message log showing both hops as delivered.
+<!-- ![Awareness bus](docs/media/bus.png) -->
+
+---
+
+## Know what's actually happening
+
+**Hook-driven status.** Sessions report their own state through Claude Code hooks, which the app fuses with a transcript reader and a terminal-buffer scan into one honest signal: working / your turn / needs approval / idle. Stale signals age out, so nothing gets pinned in the wrong state.
+
+**Fleet activity.** Every subagent your sessions spawn, what it's working on, and whether it's running, done, or stalled — grouped by the session that owns it. A quiet collapsed line ("3 running") that expands into the full picture.
+
+> **📸 [placeholder]** — the fleet-activity panel expanded, showing a couple of sessions with their subagents, some running (pulsing), some done.
+<!-- ![Fleet activity](docs/media/fleet.png) -->
+
+**The activity strip.** A per-session timeline of the last few minutes, at adjustable granularity (5m / 10m / 25m) — a glanceable heartbeat of the whole fleet.
+
+> **📸 [placeholder]** — the activity strip with several sessions' swimlanes, and the granularity selector switching between 5m / 10m / 25m.
+<!-- ![Activity strip](docs/media/strip.png) -->
+
+---
+
+## Bill it your way
+
+Launch a session against a specific named **Anthropic API key** so its usage bills to that key instead of your subscription, and pick its **model and context window** (including 1M-context variants) right from the spawn dialog. Keys are stored encrypted in the macOS Keychain and never shown again after entry.
+
+> **📸 [placeholder]** — the new-session dialog showing model, effort, and context-window selectors; and the API-keys section of settings.
+<!-- ![Per-session billing](docs/media/keys.png) -->
+
+---
+
+## The Arbiter (optional)
+
+An optional control agent that writes a plain-English line explaining *why* each session is waiting on you — turning "needs approval" into "wants to delete the migrations folder." It runs on **metered API billing**, not your subscription, and it is built to never surprise you:
+
+- **Off by default.** Nothing runs until you enable it and point it at a key.
+- **Opt-in privacy, per category.** It reads only categories you explicitly tick. Everything else sends state alone — no session content leaves your machine.
+- **A hard spend cap.** You set a daily ceiling; it *stops* at the cap, it doesn't just warn. Spend is tracked and always visible as it accrues.
+- **Pausable.** Stop it from its own window without tearing down the setup.
+- **Read-only.** It explains; it takes no action on any session.
+
+> **📸 [placeholder]** — the Arbiter console expanded: a session's why-line inline, the spend readout ($x.xx / cap), and the pause / read-now controls.
+<!-- ![The Arbiter](docs/media/arbiter.png) -->
+
+---
 
 ## HITM — Human In The Middle
 
-The organizing idea is Human In The Middle multi-agent orchestration. Human-In-The-Loop puts the
-human at the edge of an automated pipeline, as a gate that approves or rejects. HITM puts the human
-at a node in the mesh: sitting inside a session, able to message any other session, be messaged,
-spawn new ones, and watch the whole bus.
+The organizing idea. Human-In-the-**Loop** puts the human at the *edge* of an automated pipeline, as a gate that approves or rejects. Human-In-the-**Middle** puts the human at a *node in the mesh*: inside a session, able to message any other session, be messaged, spawn new ones, and watch the whole bus.
 
-The name is taken from the security sense of "man in the middle" on purpose. An attacker in the
-middle of a channel can read traffic, drop or alter it, and inject its own. The app gives those
-three powers to the human deliberately:
+The name is the security sense of "man in the middle" on purpose. An attacker in the middle of a channel can do three things — read traffic, drop or alter it, inject its own. The app gives those three powers to the human, deliberately:
 
 - **read** — a message log of every routing decision, both directions, delivered / held / dropped.
 - **drop or alter** — a global kill switch, per-link untrust, the trust gate, a rate guard.
 - **inject** — cross-session send, broadcast, spawn-child-with-context, selection-to-tangent.
 
-See [`docs/concepts.md`](docs/concepts.md) for the full rationale, including an adversarial test of
-whether sessions hold to their own brief when another session argues against it.
+See [`docs/concepts.md`](docs/concepts.md) for the full rationale.
 
-## Features
+---
 
-- **Status board ("beacon")** — a bar showing which sessions need you and why. A session surfaces
-  when it is parked on a permission or approval dialog, or when it is blocked on an unfinished
-  blocking child. Ended turns show as "Your turn" separately.
-- **Hard-separated categories** — sessions are bucketed into categories (personal, business,
-  clients, whatever you define) with a rail for switching between them. A blocking child inherits
-  its parent's category, so a blocking subtree cannot drift across the separation.
-- **Session tree with typed edges** — parent to child links are either *blocking* (the parent's work
-  is not done until the child's is) or *tangential* (a decoupled side exploration that never blocks
-  the parent).
-- **Live terminal hosting** — each managed session runs in a PTY (`node-pty`) rendered with
-  xterm.js. Sessions already running outside the app can be adopted, with reduced fidelity.
-- **Awareness bus** — sessions can message each other through the app using a filesystem mailbox.
-  Delivery is trust-gated per link: an untrusted link holds the message rather than delivering or
-  discarding it, and every hop is written to the message log with its outcome.
-- **Hook-driven status** — sessions report their state through Claude Code hooks
-  (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `Notification`), which the app maps to
-  working / your turn / needs approval / idle. Hook signals are fused with a transcript reader and a
-  terminal buffer scan, and are aged out so a stale signal cannot pin a session in the wrong state.
-- **Per-session API-key billing** — a session can be launched against a specific named Anthropic API
-  key, so its usage bills to that key instead of your subscription.
-- **Spawn child sessions with a handoff note** — start a child in its own context, seeded with just
-  enough detail to pick up the idea, without staining the context you are working in.
+## Security & privacy
+
+This is a single-user desktop app; the security boundary is your user account. It handles credentials and edits your global Claude config, so the handling is deliberate and documented in full in [`SECURITY.md`](SECURITY.md). The essentials:
+
+- **API keys are encrypted at rest** with Electron `safeStorage` (macOS Keychain). If secure storage is unavailable, the app refuses to store the key rather than falling back to plaintext. A key is never shown again after entry and never sent to the renderer process.
+- **Per-session key access goes through a local, owner-only (`0600`) socket** using a per-session capability token that's revoked when the session exits — the session gets a token, not the key.
+- **Edits to `~/.claude/settings.json` are conservative**: backed up first (a hard precondition), atomic, malformed input refused rather than repaired, unrelated keys preserved, and the auto-granted permission rule scoped to the mailbox trees only.
+- **No telemetry.** The app phones home to nothing. The awareness bus is local files; the message log is local. The only outbound network call is the optional Arbiter, to the Anthropic API, under your own key.
+- **Known residual risk, stated plainly:** a session running on a metered API key can read that key — and so can any code that session runs, including a shell command from prompt injection. This is inherent to giving a session a credential, not a bug a patch removes. Use narrowly-scoped keys with a Console spend limit for anything untrusted, and rotate promptly. Full discussion in [`SECURITY.md`](SECURITY.md).
+
+**Reporting a vulnerability:** open a private GitHub Security Advisory (Security → Advisories → Report a vulnerability). Don't open a public issue for a vulnerability.
+
+---
 
 ## Requirements
 
-- macOS on Apple Silicon.
-- The Claude Code CLI, installed and working.
-- Either a Claude subscription or an Anthropic API key.
+- macOS on **Apple Silicon**.
+- The **Claude Code CLI**, installed and working.
+- A Claude subscription and/or an Anthropic API key.
 
 ## Install
 
-Download the signed and notarized `.dmg` from the Releases page. This is the recommended path; the
-maintainer publishes notarized builds.
-
-Otherwise, build from source.
+Download the signed and notarized `.dmg` from the [Releases](../../releases) page — the recommended path. Or build from source below.
 
 ## Build from source
 
 Requires Node (with npm).
 
-```
+```sh
 npm install
 npm run dev      # run in development
 npm run build    # build to out/
-npm run dist     # build and package a .dmg / .zip into release/
+npm run dist     # build and package a signed .dmg / .zip into release/
 ```
 
-`npm run dist` runs electron-builder with signing and notarization enabled. That requires the
-maintainer's Apple Developer credentials (`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`,
-`APPLE_TEAM_ID`), so third-party builds will be unsigned. An unsigned build still runs locally after
-you clear Gatekeeper on it.
+`npm run dist` signs and notarizes, which needs the maintainer's Apple Developer credentials, so third-party builds are unsigned. An unsigned build still runs after you clear Gatekeeper on it.
 
 ## Expectations
 
-This is a solo project.
+This is a solo project. It integrates with parts of Claude Code that are not a public API — the transcript format, the session registry files, hook payload shapes, terminal rendering. Those change between Claude Code releases without notice, and breakage after an upstream release is expected and normal, not a sign the project is abandoned.
 
-It integrates with parts of Claude Code that are not public API: the transcript file format, the
-session registry files, hook payload shapes, and terminal rendering behavior. Those change between
-Claude Code releases without notice. Breakage after an upstream release is expected and normal, not
-a sign the project is abandoned.
-
-Pull requests are welcome, especially compatibility fixes for new Claude Code versions. There is no
-support SLA. Issues may sit.
-
-## Security
-
-The app stores Anthropic API keys and modifies your global `~/.claude/settings.json`. See
-[`SECURITY.md`](SECURITY.md) for what it does, how to report a vulnerability, and the known residual
-risk of running a session on a metered key.
+Pull requests are welcome, especially compatibility fixes for new Claude Code versions. There is no support SLA; issues may sit.
 
 ## License
 
-Apache-2.0. See [`LICENSE`](LICENSE).
+[Apache-2.0](LICENSE). © 2026 MipYip, LLC.
