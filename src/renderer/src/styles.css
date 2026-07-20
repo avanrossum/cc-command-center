@@ -2074,3 +2074,20 @@ select.cat-in {
   background: var(--border);
   margin: 5px 4px;
 }
+
+/* Pause / Read-now sit side by side in the Arbiter console. */
+.arb-btns {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.arb-btns .arb-poke {
+  margin-bottom: 0;
+}
+.arb-poke.on {
+  color: var(--cc-permission, #f59e0b);
+  border-color: var(--cc-permission, #f59e0b);
+}
+.arb-paused {
+  background: var(--cc-dim2);
+}

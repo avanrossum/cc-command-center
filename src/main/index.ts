@@ -119,7 +119,7 @@ interface Snapshot {
 // Everything the Arbiter console renders. Spend is always present — it is the
 // one thing that must be visible whether the agent is on, off, or capped.
 interface ArbiterPanel {
-  status: 'idle' | 'running' | 'capped' | 'error' | 'off'
+  status: 'idle' | 'running' | 'capped' | 'error' | 'off' | 'paused'
   spend: ArbiterSpendSummary
   log: ArbiterLogRow[]
 }
@@ -137,6 +137,10 @@ interface AppSettings {
   arbiterEnabled: boolean
   arbiterKeyId: number | null
   arbiterCapUsd: number // hard daily ceiling in USD; 0 disables the cap
+  // Distinct from `enabled`. Disabling is configuration (Settings, forgets the
+  // key); pausing is an operator action from the Arbiter's own window — stop
+  // spending right now, keep everything set up, resume in one click.
+  arbiterPaused: boolean
 }
 // App settings persist in app_state (registry kv). Defaults applied here.
 function getSettings(): AppSettings {
@@ -150,6 +154,7 @@ function getSettings(): AppSettings {
     statusHooksInstalled: getAppState('statusHooksInstalled') === 'true',
     spawnAutoMode: getAppState('spawnAutoMode') !== 'false', // default ON
     arbiterEnabled: getAppState('arbiterEnabled') === 'true', // default OFF
+    arbiterPaused: getAppState('arbiterPaused') === 'true',
     arbiterKeyId: getAppState('arbiterKeyId') ? Number(getAppState('arbiterKeyId')) : null,
     // Explicit parse: `|| 1.0` turned a deliberate 0 ("no cap", per the UI copy)
     // into a silent $1 cap.
@@ -767,7 +772,7 @@ let arbiterRunning = false
 // settings (disable, key swap, context grant/revoke). A run compares the
 // generation across its await and discards a result the user has since revoked.
 let arbiterGeneration = 0
-let arbiterStatus: 'idle' | 'running' | 'capped' | 'error' | 'off' = 'off'
+let arbiterStatus: 'idle' | 'running' | 'capped' | 'error' | 'off' | 'paused' = 'off'
 const ARBITER_DEBOUNCE_MS = 2500
 
 function scheduleArbiter(inputs: ArbiterSessionInput[]): void {
@@ -777,6 +782,12 @@ function scheduleArbiter(inputs: ArbiterSessionInput[]): void {
   // as off rather than sit at 'idle' pretending to work.
   if (!s.arbiterEnabled || s.arbiterKeyId === null || !apiKeyExists(s.arbiterKeyId)) {
     arbiterStatus = 'off'
+    return
+  }
+  // Paused stops new spend but keeps the configuration and the glosses already
+  // paid for, so resuming is instant and costs nothing.
+  if (s.arbiterPaused) {
+    arbiterStatus = 'paused'
     return
   }
   const fp = arbiterInputFingerprint(inputs)
@@ -1016,14 +1027,22 @@ function openTerminal(key: string, opts: OpenOpts): void {
     // its metered billing instead of silently reverting to the subscription.
     const apiKeyId = opts.sessionId ? (getNodeApiKey(opts.sessionId) ?? undefined) : undefined
     const kc = keySpawnConfig(apiKeyId)
+    // A RESUMED session needs an outbox exactly as much as a fresh one. Without
+    // it the session cannot write to the awareness bus, and — the bug this
+    // fixes — any app→session note that has to quote the outbox path is
+    // silently dropped, because notifyParentOfTrustedChild bails on a missing
+    // outbox. After an app restart that made a resumed parent permanently
+    // unable to be told it had a new child.
+    const ob = mintOutbox()
     const p = pty.spawn(cmd, [...kc.args, ...resumeArgs], {
       name: 'xterm-256color',
       cols: opts.cols || 120,
       rows: opts.rows || 30,
       cwd: opts.cwd || os.homedir(),
-      env: { ...buildEnv(), ...kc.env },
+      env: { ...buildEnv(), ...kc.env, CC_OUTBOX: ob.path },
     })
     registerKeyToken(kc.token, apiKeyId, p)
+    registerOutbox(p.pid, ob)
     console.log(`[main] terminal ${key}: spawned ${cmd} ${resumeArgs.join(' ')} in ${opts.cwd}`)
     term = wireTerm(key, p, { sessionId: opts.sessionId, cwd: opts.cwd })
   }
@@ -1071,8 +1090,9 @@ function launchSession(
   // Every app-spawned session gets an outbox so it can take part in the awareness
   // bus in BOTH directions — message its parent (plain text) or a named child
   // (@name). The file is created lazily when the session first writes to it.
-  const token = `cc-${Date.now()}-${outboxCounter++}`
-  const outboxPath = join(MAIL_DIR, `${token}.msg`)
+  const ob = mintOutbox()
+  const token = ob.token
+  const outboxPath = ob.path
   // Run this session on a chosen API key (metered billing) via apiKeyHelper — the
   // key is fetched from the key daemon at runtime, never placed in the env.
   // --settings is additive, so the session still gets the global status hooks.
@@ -1085,8 +1105,7 @@ function launchSession(
     env: { ...buildEnv(), ...extraEnv, ...kc.env, CC_OUTBOX: outboxPath },
   })
   registerKeyToken(kc.token, apiKeyId, p)
-  outboxOwner.set(token, p.pid)
-  outboxByPid.set(p.pid, { token, path: outboxPath })
+  registerOutbox(p.pid, ob)
   const key = `new:${p.pid}`
   console.log(`[main] new session: spawned ${cmd} ${args.join(' ')} in ${cwd} pid=${p.pid}`)
   wireTerm(key, p, { cwd })
@@ -1115,6 +1134,16 @@ let outboxCounter = 0
 let awarenessPaused = false // global kill switch — hold all routing + delivery
 const outboxOwner = new Map<string, number>() // outbox token -> owning session pid
 const outboxByPid = new Map<number, { token: string; path: string }>() // pid -> its outbox
+// Minting is separate from registration because the path must go into the pty's
+// env BEFORE spawn, while the pid only exists after it.
+function mintOutbox(): { token: string; path: string } {
+  const token = `cc-${Date.now()}-${outboxCounter++}`
+  return { token, path: join(MAIL_DIR, `${token}.msg`) }
+}
+function registerOutbox(pid: number, ob: { token: string; path: string }): void {
+  outboxOwner.set(ob.token, pid)
+  outboxByPid.set(pid, ob)
+}
 
 interface Delivery {
   to: string // target session id
@@ -1909,6 +1938,23 @@ ipcMain.handle('arbiter:setKey', (_e, keyId: number | null) => {
   pushSessions()
   return true
 })
+ipcMain.handle('arbiter:setPaused', (_e, paused: boolean) => {
+  setAppState('arbiterPaused', paused ? 'true' : 'false')
+  if (paused) {
+    // Cancel anything already scheduled — pausing must stop the next charge,
+    // not merely stop scheduling further ones.
+    if (arbiterTimer) {
+      clearTimeout(arbiterTimer)
+      arbiterTimer = null
+    }
+    arbiterPendingFp = ''
+    arbiterGeneration++ // drop an in-flight result rather than render it
+    arbiterStatus = 'paused'
+  }
+  appendArbiterLog('config', paused ? 'paused' : 'resumed')
+  pushSessions()
+  return true
+})
 ipcMain.handle('arbiter:setCap', (_e, usd: number) => {
   const v = Number.isFinite(usd) && usd >= 0 ? usd : 0
   setAppState('arbiterCapUsd', String(v))
@@ -2320,10 +2366,15 @@ function deliverPendingNotes(sessions: LiveSession[]): void {
   const now = Date.now()
   for (let i = pendingParentNotes.length - 1; i >= 0; i--) {
     const n = pendingParentNotes[i]
-    if (now - n.at > 120_000) {
+    // A parent mid-task can easily stay busy longer than two minutes, and the
+    // note was being dropped with no trace — the link looked wired up while the
+    // parent never learned it had a child. Wait far longer, and say so if it
+    // still has to be abandoned.
+    if (now - n.at > 600_000) {
       pendingParentNotes.splice(i, 1)
+      logMsg('CC', n.to, 'child-link note expired undelivered (parent stayed busy 10m)', 'expired')
       continue
-    } // expired
+    }
     const target = sessions.find((s) => s.sessionId === n.to)
     const term = findManagedTerm(n.to)
     if (!target || !term || term.exited) continue // parent not open yet — wait

@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('cc', {
   arbiterSetEnabled: (on: boolean) => ipcRenderer.invoke('arbiter:setEnabled', on),
   arbiterSetKey: (keyId: number | null) => ipcRenderer.invoke('arbiter:setKey', keyId),
   arbiterSetCap: (usd: number) => ipcRenderer.invoke('arbiter:setCap', usd),
+  arbiterSetPaused: (paused: boolean) => ipcRenderer.invoke('arbiter:setPaused', paused),
   arbiterPoke: () => ipcRenderer.invoke('arbiter:poke'),
   catSetColor: (id: number, color: string) => ipcRenderer.invoke('cat:setColor', id, color),
   catSetEmoji: (id: number, emoji: string | null) => ipcRenderer.invoke('cat:setEmoji', id, emoji),

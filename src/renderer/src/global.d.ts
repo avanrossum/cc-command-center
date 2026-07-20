@@ -31,6 +31,7 @@ declare global {
       arbiterSetEnabled: (on: boolean) => Promise<boolean>
       arbiterSetKey: (keyId: number | null) => Promise<boolean>
       arbiterSetCap: (usd: number) => Promise<boolean>
+      arbiterSetPaused: (paused: boolean) => Promise<boolean>
       arbiterPoke: () => Promise<boolean>
       catSetColor: (id: number, color: string) => Promise<boolean>
       catSetEmoji: (id: number, emoji: string | null) => Promise<boolean>

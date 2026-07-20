@@ -45,7 +45,7 @@ interface Category {
   arbiter_context: number // 1 → this category's session substance may go to the API
 }
 interface ArbiterPanel {
-  status: 'idle' | 'running' | 'capped' | 'error' | 'off'
+  status: 'idle' | 'running' | 'capped' | 'error' | 'off' | 'paused'
   spend: { todayUsd: number; totalUsd: number; calls: number; lastAt: number | null }
   log: { id: number; at: number; kind: string; text: string }[]
 }
@@ -79,6 +79,7 @@ interface AppSettings {
   arbiterEnabled: boolean
   arbiterKeyId: number | null
   arbiterCapUsd: number
+  arbiterPaused: boolean
   statusHooksInstalled: boolean
   spawnAutoMode: boolean
 }
@@ -1203,6 +1204,7 @@ export function App() {
               <ArbiterConsole
                 panel={snap.arbiter}
                 enabled={snap.settings?.arbiterEnabled ?? false}
+                paused={snap.settings?.arbiterPaused ?? false}
                 capUsd={snap.settings?.arbiterCapUsd ?? 0}
               />
             </aside>
@@ -1973,10 +1975,12 @@ const EFFORT_OPTS = ['', 'low', 'medium', 'high', 'xhigh', 'max']
 function ArbiterConsole({
   panel,
   enabled,
+  paused,
   capUsd,
 }: {
   panel: ArbiterPanel | undefined
   enabled: boolean
+  paused: boolean
   capUsd: number
 }): React.ReactElement | null {
   const [open, setOpen] = useState(false)
@@ -2001,13 +2005,15 @@ function ArbiterConsole({
         <span className="arb-status">
           {!enabled
             ? 'off'
-            : capped
-              ? 'capped'
-              : status === 'running'
-                ? 'reading…'
-                : status === 'error'
-                  ? 'error'
-                  : 'idle'}
+            : paused
+              ? 'paused'
+              : capped
+                ? 'capped'
+                : status === 'running'
+                  ? 'reading…'
+                  : status === 'error'
+                    ? 'error'
+                    : 'idle'}
         </span>
         {/* Spend is always visible, on or off — it is the number that must never surprise. */}
         <span className={`arb-spend${capped ? ' over' : ''}`} title={`${spend.calls} calls`}>
@@ -2018,9 +2024,25 @@ function ArbiterConsole({
       {open && (
         <div className="arb-body">
           {enabled ? (
-            <button className="arb-poke" onClick={poke} disabled={poking || status === 'running'}>
-              {poking || status === 'running' ? 'reading…' : 'Read now'}
-            </button>
+            <div className="arb-btns">
+              {/* Pause is an operator control, not configuration: it stops spend
+                  now and keeps the key, the cap, and the glosses already paid
+                  for. Disabling lives in Settings. */}
+              <button
+                className={`arb-poke${paused ? ' on' : ''}`}
+                onClick={() => window.cc.arbiterSetPaused(!paused)}
+                title={paused ? 'Resume — starts spending again' : 'Pause — stops spending, keeps setup'}
+              >
+                {paused ? 'Resume' : 'Pause'}
+              </button>
+              <button
+                className="arb-poke"
+                onClick={poke}
+                disabled={poking || status === 'running' || paused}
+              >
+                {poking || status === 'running' ? 'reading…' : 'Read now'}
+              </button>
+            </div>
           ) : (
             <div className="arb-note">Enable in Settings, with an API key and a daily cap.</div>
           )}
