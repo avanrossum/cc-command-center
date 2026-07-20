@@ -226,6 +226,8 @@ export function App() {
   const [companionOpen, setCompanionOpen] = useState(true)
   const [companionScope, setCompanionScope] = useState<'category' | 'all'>('all')
   const [stripOpen, setStripOpen] = useState(true)
+  // Strip time window in minutes — adjustable granularity. Persisted.
+  const [stripWinMin, setStripWinMin] = useState(5)
   const showCompanion = (open: boolean) => {
     setCompanionOpen(open)
     window.cc.stateSet('companionOpen', String(open))
@@ -296,6 +298,10 @@ export function App() {
     window.cc.stateGet('companionOpen').then((v) => v === 'false' && setCompanionOpen(false))
     window.cc.stateGet('companionScope').then((v) => v === 'category' && setCompanionScope('category'))
     window.cc.stateGet('stripOpen').then((v) => v === 'false' && setStripOpen(false))
+    window.cc.stateGet('stripWinMin').then((v) => {
+      const n = v ? Number(v) : NaN
+      if (Number.isFinite(n) && n > 0) setStripWinMin(n)
+    })
     const offSessions = window.cc.onSessions((s) => setSnap(s as Snapshot))
     const offShow = window.cc.onTermShow((p) => {
       setRecover(null)
@@ -449,7 +455,11 @@ export function App() {
   // The Strip: per-session duration swimlanes. A renderer-side ring buffer of each
   // live session's coarse state, accumulated from the 1.5s snapshots (nothing
   // persists this) — change-points only, kept to a rolling window. Lost on restart.
-  const STRIP_WINDOW = 6 * 60 * 1000
+  // The buffer always retains the LARGEST selectable window, so raising the
+  // granularity later reveals history already captured rather than an empty
+  // left edge. The current selection only crops what is rendered.
+  const STRIP_MAX_WINDOW = 25 * 60 * 1000
+  const STRIP_WINDOW = stripWinMin * 60 * 1000
   const stripHist = useRef<Map<string, { t: number; s: DisplayState }[]>>(new Map())
   useEffect(() => {
     const now = snap.scannedAt || Date.now()
@@ -466,7 +476,7 @@ export function App() {
       }
       const last = arr[arr.length - 1]
       if (!last || last.s !== d) arr.push({ t: now, s: d }) // record only on a state change
-      while (arr.length > 1 && arr[1].t < now - STRIP_WINDOW) arr.shift() // drop points that fell off the window
+      while (arr.length > 1 && arr[1].t < now - STRIP_MAX_WINDOW) arr.shift() // drop points past the max window
     }
     for (const k of [...h.keys()]) if (!liveSet.has(k)) h.delete(k) // forget gone sessions
   }, [snap]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1118,10 +1128,28 @@ export function App() {
                 </button>
               </div>
               <div className="comp-strip-wrap">
-                <button className="comp-section-head" onClick={() => showStrip(!stripOpen)}>
-                  <span className="chev">{stripOpen ? '▾' : '▸'}</span> activity
-                  <span className="sh-dim">· last 6m</span>
-                </button>
+                <div className="comp-section-head strip-head">
+                  <button className="sh-toggle" onClick={() => showStrip(!stripOpen)}>
+                    <span className="chev">{stripOpen ? '▾' : '▸'}</span> activity
+                  </button>
+                  {stripOpen && (
+                    <span className="strip-gran">
+                      {[5, 10, 25].map((m) => (
+                        <button
+                          key={m}
+                          className={`sg-opt${stripWinMin === m ? ' on' : ''}`}
+                          onClick={() => {
+                            setStripWinMin(m)
+                            window.cc.stateSet('stripWinMin', String(m))
+                          }}
+                          title={`show the last ${m} minutes`}
+                        >
+                          {m}m
+                        </button>
+                      ))}
+                    </span>
+                  )}
+                </div>
                 {stripOpen && (
                   <div className="comp-strip">
                     {stripLanes.length === 0 ? (

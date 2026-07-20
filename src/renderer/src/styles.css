@@ -2112,3 +2112,40 @@ select.cat-in {
   border-radius: 20px;
   padding: 0 5px;
 }
+
+/* Strip header: the collapse toggle on the left, granularity selector on the right. */
+.strip-head {
+  justify-content: space-between;
+}
+.strip-head .sh-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+.strip-gran {
+  display: flex;
+  gap: 2px;
+}
+.sg-opt {
+  font: 9px var(--cc-font-mono);
+  color: var(--cc-meta);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 1px 5px;
+  cursor: pointer;
+}
+.sg-opt:hover {
+  color: var(--cc-text);
+}
+.sg-opt.on {
+  color: var(--cc-text);
+  border-color: var(--cc-border);
+  background: var(--cc-surface-2);
+}
