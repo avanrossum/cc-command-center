@@ -1799,6 +1799,7 @@ body {
   font-size: 11px;
   padding: 6px 8px;
   line-height: 1.4;
+  overflow-wrap: anywhere; /* a long unbroken category name can't overflow */
 }
 .menuitem.danger {
   color: #f0857d;
@@ -1810,6 +1811,16 @@ body {
 /* ---- category editor popover ---- */
 .cateditor {
   min-width: 248px;
+  /* A fixed-position box with width:auto sizes shrink-to-fit, i.e. to its
+     widest UNWRAPPED line — so the delete confirm's sentence stretched the
+     popover instead of wrapping inside it. Cap the width and the text wraps. */
+  max-width: 264px;
+}
+/* The delete confirm embeds the category name, so it has to wrap rather than
+   push the capped popover wider. */
+.cateditor .menuitem {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .cat-in {
   width: 100%;
