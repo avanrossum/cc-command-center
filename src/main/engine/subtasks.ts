@@ -1,52 +1,60 @@
 import fs from 'node:fs'
+import path from 'node:path'
 
-// Fleet activity: the subagents a session has spawned, from its transcript.
+// Fleet activity: the subagents a session has spawned, from two sources.
 //
-// A subagent is a `tool_use` block named "Agent" (the SDK Agent tool) or "Task"
-// (the built-in). Its `input.description` is the human-readable "what it's
-// working on". Completion is a later `tool_result` block carrying the same
-// `tool_use_id`. All of this lives in the transcript the state engine already
-// tails — this module reads the same file, cached on mtime so it re-parses only
-// when the transcript changed.
+// 1. THE TRANSCRIPT. A subagent started with the Agent/Task tool is a `tool_use`
+//    block in the main transcript; its `input.description` is the "what it's
+//    working on", and a later `tool_result` with the same id means done.
 //
-// Data shape confirmed empirically against real transcripts (2026-07-20):
-//   - tool name is "Agent" in this environment; "Task" matched too for portability
-//   - message.content is a list ~96% of the time but a BARE STRING otherwise —
-//     iterating it blindly throws, so string content is skipped
-//   - a background task's tool_use can sit far back in the file, hence the
-//     multi-MB bounded scan rather than the state engine's 64KB tail
+// 2. WORKFLOW JOURNALS. The Workflow tool does NOT record its agents as Agent
+//    tool_use blocks — it shows one `Workflow` tool_use, and its agents live in
+//    `<session>/subagents/workflows/wf_*/`. Each run has a `journal.jsonl`
+//    (a `started` then a `result` line per agent — result present = done) and a
+//    per-agent `agent-<id>.jsonl` whose first user message is the agent's prompt.
+//    Reading the transcript alone misses every workflow agent, which is why a
+//    session that ran a workflow showed nothing.
+//
+// All of this is confirmed against real files (2026-07-20). Notable traps found
+// by looking rather than assuming: the tool is named `Agent` (not `Task`) here;
+// `message.content` is a bare string ~4% of the time, not always a list; the
+// journal's `key` is a content hash, NOT the human label — the useful
+// description is the agent's first user message.
 
 export type SubtaskStatus = 'running' | 'done' | 'stalled'
+export type SubtaskSource = 'task' | 'workflow'
 
 export interface SubtaskInfo {
-  id: string // the tool_use id — stable identity
+  id: string // tool_use id (task) or agentId (workflow) — stable identity
   description: string
   subagentType?: string
   background: boolean
+  source: SubtaskSource
   status: SubtaskStatus
-  startedAt?: number // ms epoch from the record timestamp
+  startedAt?: number
 }
 
 const AGENT_TOOL_NAMES = new Set(['Agent', 'Task'])
-// A running subagent whose transcript hasn't advanced in this long reads as
-// stalled rather than live — the session was likely interrupted mid-task.
 const STALLED_MS = 5 * 60 * 1000
-// Bound the scan. Covers the 99th-percentile transcript (~4.4MB measured across
-// 1834 real transcripts; median 73KB) with headroom. A subagent whose ENTIRE
-// lifecycle — spawn and result — predates the last MAX_SCAN_BYTES of a very
-// large transcript is not shown. That is deliberate (this view is about recent
-// activity) and safe: a tool_use and its tool_result both fall after the window
-// start, so anything partially in-window is seen whole and nothing is ever
-// mislabelled — the only effect is that ancient, already-finished work is
-// omitted rather than shown wrong.
+// Bound the transcript scan. Covers the 99th-percentile transcript (~4.4MB
+// measured across 1834 real transcripts; median 73KB). A subagent whose entire
+// lifecycle predates the window is omitted, never mislabelled — a tool_use and
+// its tool_result both fall after the window start.
 const MAX_SCAN_BYTES = 8 * 1024 * 1024
+// Per session, across both sources, so a 100-agent workflow can't flood the panel.
+const MAX_SUBTASKS = 40
+// Head read of an agent transcript — must hold the whole first line (the prompt),
+// which can be large for a real workflow agent, not just a toy "reply PING".
+const AGENT_HEAD_BYTES = 64 * 1024
 
-interface CacheEntry {
+// ---- transcript (Agent/Task tool) -----------------------------------------
+
+interface TxCache {
   mtimeMs: number
   size: number
-  subtasks: SubtaskInfo[]
+  tasks: { info: SubtaskInfo; mtimeMs: number }[]
 }
-const cache = new Map<string, CacheEntry>()
+const txCache = new Map<string, TxCache>()
 
 function tsToMs(ts: unknown): number | undefined {
   if (typeof ts !== 'string') return undefined
@@ -54,44 +62,40 @@ function tsToMs(ts: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined
 }
 
-// Parse a transcript for its subagents. Cheap on repeat calls: returns the
-// cached result unless the file's mtime or size changed.
-export function scanSubtasks(path: string, now = Date.now()): SubtaskInfo[] {
-  let stat: fs.Stats
-  try {
-    stat = fs.statSync(path)
-  } catch {
-    cache.delete(path)
-    return []
-  }
-  const cached = cache.get(path)
-  // Recompute 'stalled' on every call (it depends on `now`, not the file), but
-  // only re-READ the file when it actually changed.
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-    return applyStall(cached.subtasks, stat.mtimeMs, now)
-  }
-
-  const from = Math.max(0, stat.size - MAX_SCAN_BYTES)
-  let buf: string
+function readWindow(path: string, size: number, maxBytes: number): { buf: string; from: number } | null {
+  const from = Math.max(0, size - maxBytes)
   try {
     const fd = fs.openSync(path, 'r')
     try {
-      const len = stat.size - from
+      const len = size - from
       const b = Buffer.alloc(len)
       fs.readSync(fd, b, 0, len, from)
-      buf = b.toString('utf8')
+      return { buf: b.toString('utf8'), from }
     } finally {
       fs.closeSync(fd)
     }
   } catch {
-    return cached ? applyStall(cached.subtasks, stat.mtimeMs, now) : []
+    return null
   }
+}
 
+function scanTranscript(transcriptPath: string): { info: SubtaskInfo; mtimeMs: number }[] {
+  let stat: fs.Stats
+  try {
+    stat = fs.statSync(transcriptPath)
+  } catch {
+    txCache.delete(transcriptPath)
+    return []
+  }
+  const cached = txCache.get(transcriptPath)
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.tasks
+
+  const win = readWindow(transcriptPath, stat.size, MAX_SCAN_BYTES)
+  if (!win) return cached?.tasks ?? []
+  const lines = win.buf.split('\n')
+  const start = win.from > 0 ? 1 : 0 // partial first line when we started mid-file
   const uses = new Map<string, SubtaskInfo>()
   const doneIds = new Set<string>()
-  const lines = buf.split('\n')
-  // If we started mid-file, the first line is probably a partial record — skip it.
-  const start = from > 0 ? 1 : 0
   for (let i = start; i < lines.length; i++) {
     const line = lines[i].trim()
     if (!line) continue
@@ -101,22 +105,22 @@ export function scanSubtasks(path: string, now = Date.now()): SubtaskInfo[] {
     } catch {
       continue
     }
-    const msg = r.message as { content?: unknown } | undefined
-    const content = msg?.content
-    if (!Array.isArray(content)) continue // bare-string content carries no tool blocks
+    const content = (r.message as { content?: unknown } | undefined)?.content
+    if (!Array.isArray(content)) continue
     for (const block of content) {
       if (!block || typeof block !== 'object') continue
       const b = block as Record<string, unknown>
       if (b.type === 'tool_use' && AGENT_TOOL_NAMES.has(b.name as string)) {
         const id = b.id as string
-        const input = (b.input ?? {}) as Record<string, unknown>
         if (!id) continue
+        const input = (b.input ?? {}) as Record<string, unknown>
         uses.set(id, {
           id,
           description: (input.description as string) || 'subagent',
           subagentType: input.subagent_type as string | undefined,
           background: input.run_in_background === true,
-          status: 'running', // provisional; resolved against doneIds below
+          source: 'task',
+          status: 'running',
           startedAt: tsToMs(r.timestamp),
         })
       } else if (b.type === 'tool_result') {
@@ -125,29 +129,188 @@ export function scanSubtasks(path: string, now = Date.now()): SubtaskInfo[] {
       }
     }
   }
+  const tasks = [...uses.values()].map((info) => ({
+    info: { ...info, status: doneIds.has(info.id) ? ('done' as const) : ('running' as const) },
+    mtimeMs: stat.mtimeMs,
+  }))
+  txCache.set(transcriptPath, { mtimeMs: stat.mtimeMs, size: stat.size, tasks })
+  return tasks
+}
 
-  const subtasks: SubtaskInfo[] = []
-  for (const [id, info] of uses) {
-    subtasks.push({ ...info, status: doneIds.has(id) ? 'done' : 'running' })
+// ---- workflow journals -----------------------------------------------------
+
+interface WfCache {
+  sig: string
+  agents: { info: SubtaskInfo; mtimeMs: number }[]
+}
+const wfCache = new Map<string, WfCache>()
+
+// An agent's prompt is line 1, written once and never changed — so cache it by
+// path forever. Without this, an active workflow (whose signature changes every
+// time any sibling agent finishes) would re-read every agent's head each tick.
+const promptCache = new Map<string, { desc?: string; startedAt?: number }>()
+
+// Read the agent's first user message — its prompt — as the description. The
+// prompt is at the HEAD of the file (line 1), so this reads from offset 0, not
+// the tail like the transcript scan.
+function agentPrompt(agentFile: string): { desc?: string; startedAt?: number } {
+  const hit = promptCache.get(agentFile)
+  if (hit) return hit
+  let head: string
+  try {
+    const fd = fs.openSync(agentFile, 'r')
+    try {
+      const b = Buffer.alloc(AGENT_HEAD_BYTES)
+      const n = fs.readSync(fd, b, 0, AGENT_HEAD_BYTES, 0)
+      head = b.toString('utf8', 0, n)
+    } finally {
+      fs.closeSync(fd)
+    }
+  } catch {
+    return {}
   }
-  // Most-recent first — the newest spawn is what the user is most likely tracking.
-  subtasks.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
-
-  cache.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, subtasks })
-  return applyStall(subtasks, stat.mtimeMs, now)
+  for (const line of head.split('\n')) {
+    const t = line.trim()
+    if (!t) continue
+    let r: Record<string, unknown>
+    try {
+      r = JSON.parse(t)
+    } catch {
+      continue
+    }
+    const msg = r.message as { role?: string; content?: unknown } | undefined
+    if (msg?.role !== 'user') continue
+    const c = msg.content
+    let text: string | undefined
+    if (typeof c === 'string') text = c
+    else if (Array.isArray(c)) {
+      const tb = c.find((b) => b && typeof b === 'object' && (b as { type?: string }).type === 'text')
+      text = tb ? ((tb as { text?: string }).text ?? undefined) : undefined
+    }
+    const result = text
+      ? { desc: text.replace(/\s+/g, ' ').trim().slice(0, 90), startedAt: tsToMs(r.timestamp) }
+      : { startedAt: tsToMs(r.timestamp) }
+    promptCache.set(agentFile, result) // immutable once written — cache forever
+    return result
+  }
+  // Found nothing usable — do NOT cache, the file may still be mid-write.
+  return {}
 }
 
-// A 'running' subtask in a transcript that hasn't advanced for STALLED_MS is
-// re-labelled 'stalled'. Done rows are untouched. Returns a new array only when
-// something changed, so callers can rely on reference stability otherwise.
-function applyStall(subtasks: SubtaskInfo[], mtimeMs: number, now: number): SubtaskInfo[] {
-  if (now - mtimeMs <= STALLED_MS) return subtasks
-  if (!subtasks.some((s) => s.status === 'running')) return subtasks
-  return subtasks.map((s) => (s.status === 'running' ? { ...s, status: 'stalled' } : s))
+function scanWorkflows(transcriptPath: string): { info: SubtaskInfo; mtimeMs: number }[] {
+  const root = path.join(transcriptPath.replace(/\.jsonl$/, ''), 'subagents', 'workflows')
+  let wfDirs: string[]
+  try {
+    wfDirs = fs
+      .readdirSync(root, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => path.join(root, e.name))
+  } catch {
+    wfCache.delete(transcriptPath)
+    return [] // no workflows dir — the common case
+  }
+
+  // Signature: a new agent file (spawn) or a grown journal (completion) changes
+  // it, so the cache invalidates exactly when a status could have changed.
+  const parts: string[] = []
+  const journals: string[] = []
+  const agentFiles: string[] = []
+  for (const dir of wfDirs) {
+    let entries: string[]
+    try {
+      entries = fs.readdirSync(dir)
+    } catch {
+      continue
+    }
+    for (const name of entries) {
+      const full = path.join(dir, name)
+      if (name === 'journal.jsonl') {
+        journals.push(full)
+        try {
+          const s = fs.statSync(full)
+          parts.push(`${full}:${s.mtimeMs}:${s.size}`)
+        } catch {
+          /* gone between readdir and stat */
+        }
+      } else if (name.startsWith('agent-') && name.endsWith('.jsonl')) {
+        agentFiles.push(full)
+        parts.push(full) // presence alone (its prompt line is immutable once written)
+      }
+    }
+  }
+  const sig = parts.sort().join('|')
+  const cached = wfCache.get(transcriptPath)
+  if (cached && cached.sig === sig) return cached.agents
+
+  // Authoritative status from the journals: agentId with a `result` line = done.
+  const doneAgentIds = new Set<string>()
+  for (const j of journals) {
+    let buf: string
+    try {
+      buf = fs.readFileSync(j, 'utf8')
+    } catch {
+      continue
+    }
+    for (const line of buf.split('\n')) {
+      const t = line.trim()
+      if (!t) continue
+      try {
+        const o = JSON.parse(t) as { type?: string; agentId?: string }
+        if (o.type === 'result' && o.agentId) doneAgentIds.add(o.agentId)
+      } catch {
+        /* skip */
+      }
+    }
+  }
+
+  const agents: { info: SubtaskInfo; mtimeMs: number }[] = []
+  for (const af of agentFiles) {
+    const base = path.basename(af)
+    const agentId = base.slice('agent-'.length, base.length - '.jsonl'.length)
+    if (!agentId) continue
+    let mtimeMs = 0
+    try {
+      mtimeMs = fs.statSync(af).mtimeMs
+    } catch {
+      /* keep 0 */
+    }
+    const { desc, startedAt } = agentPrompt(af)
+    agents.push({
+      info: {
+        id: agentId,
+        description: desc || 'workflow agent',
+        background: false,
+        source: 'workflow',
+        status: doneAgentIds.has(agentId) ? 'done' : 'running',
+        startedAt,
+      },
+      mtimeMs,
+    })
+  }
+  wfCache.set(transcriptPath, { sig, agents })
+  return agents
 }
 
-// Forget a session's cached subtasks (on removal, so a scrubbed session leaves
-// nothing behind).
-export function forgetSubtasks(path: string): void {
-  cache.delete(path)
+// ---- public ----------------------------------------------------------------
+
+// A running subtask whose source file hasn't advanced for STALLED_MS reads as
+// stalled — the run was likely interrupted.
+function applyStall(entry: { info: SubtaskInfo; mtimeMs: number }, now: number): SubtaskInfo {
+  if (entry.info.status === 'running' && now - entry.mtimeMs > STALLED_MS) {
+    return { ...entry.info, status: 'stalled' }
+  }
+  return entry.info
+}
+
+export function scanSubtasks(transcriptPath: string, now = Date.now()): SubtaskInfo[] {
+  const merged = [...scanTranscript(transcriptPath), ...scanWorkflows(transcriptPath)]
+  const out = merged
+    .map((e) => applyStall(e, now))
+    .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
+  return out.slice(0, MAX_SUBTASKS)
+}
+
+export function forgetSubtasks(transcriptPath: string): void {
+  txCache.delete(transcriptPath)
+  wfCache.delete(transcriptPath)
 }

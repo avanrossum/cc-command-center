@@ -38,6 +38,7 @@ interface Session {
     description: string
     subagentType?: string
     background: boolean
+    source: 'task' | 'workflow'
     status: 'running' | 'done' | 'stalled'
     startedAt?: number
   }[]
@@ -2082,6 +2083,7 @@ function FleetActivity({
                   <div className={`fleet-sub sub-${t.status}`} key={t.id}>
                     <span className={`fleet-dot fs-${t.status}`} />
                     <span className="fleet-desc">{t.description}</span>
+                    {t.source === 'workflow' && <span className="fleet-bg">wf</span>}
                     {t.background && <span className="fleet-bg">bg</span>}
                   </div>
                 ))}
