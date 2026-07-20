@@ -227,6 +227,14 @@ export function initRegistry(dbPath: string): void {
     `)
     db.pragma('user_version = 11')
   }
+  if (v < 12) {
+    // The session's outbox token, so a RESUMED session gets its ORIGINAL mailbox
+    // path back. That path was taught to the session in its spawn preamble and
+    // now lives in its context; minting a fresh token on resume would leave the
+    // session writing to a file the app no longer watches.
+    db.exec(`ALTER TABLE node ADD COLUMN outbox_token TEXT;`)
+    db.pragma('user_version = 12')
+  }
 }
 
 export function setNodeApiKey(sessionId: string, apiKeyId: number | null): void {
@@ -375,6 +383,17 @@ export function listCategories(): Category[] {
 }
 
 // ---------- Arbiter (optional control agent) ----------
+
+export function setOutboxToken(sessionId: string, token: string): void {
+  must().prepare('UPDATE node SET outbox_token=? WHERE session_id=?').run(token, sessionId)
+}
+
+export function getOutboxToken(sessionId: string): string | null {
+  const r = must()
+    .prepare('SELECT outbox_token AS t FROM node WHERE session_id=?')
+    .get(sessionId) as { t: string | null } | undefined
+  return r?.t ?? null
+}
 
 export function setCategoryArbiterContext(id: number, on: boolean): void {
   must().prepare('UPDATE category SET arbiter_context=? WHERE id=?').run(on ? 1 : 0, id)

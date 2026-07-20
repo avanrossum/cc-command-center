@@ -34,6 +34,8 @@ import {
   renameCategory,
   deleteCategory,
   setCategoryArbiterContext,
+  setOutboxToken,
+  getOutboxToken,
   getArbiterSpend,
   getArbiterLog,
   appendArbiterLog,
@@ -928,6 +930,10 @@ interface OpenOpts {
   resume: boolean
   cols: number
   rows: number
+  // Bring the session up without focusing it or repainting the visible pane.
+  // Used by family resume, where the point is to restore the OTHER members of a
+  // task tree so messaging works again — not to yank the user somewhere else.
+  background?: boolean
 }
 
 function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: string }): Term {
@@ -1033,7 +1039,13 @@ function openTerminal(key: string, opts: OpenOpts): void {
     // silently dropped, because notifyParentOfTrustedChild bails on a missing
     // outbox. After an app restart that made a resumed parent permanently
     // unable to be told it had a new child.
-    const ob = mintOutbox()
+    // Restore the ORIGINAL mailbox. The session was taught this path in its
+    // spawn preamble and still believes it, so a fresh token would leave it
+    // writing to a file the app no longer watches — mute, with no error.
+    const priorToken = opts.sessionId ? getOutboxToken(opts.sessionId) : null
+    const ob = priorToken
+      ? { token: priorToken, path: join(MAIL_DIR, `${priorToken}.msg`) }
+      : mintOutbox()
     const p = pty.spawn(cmd, [...kc.args, ...resumeArgs], {
       name: 'xterm-256color',
       cols: opts.cols || 120,
@@ -1043,9 +1055,19 @@ function openTerminal(key: string, opts: OpenOpts): void {
     })
     registerKeyToken(kc.token, apiKeyId, p)
     registerOutbox(p.pid, ob)
+    // A session adopted before this column existed has no stored token; record
+    // the one it just got so the NEXT resume is stable.
+    if (!priorToken && opts.sessionId) {
+      try {
+        setOutboxToken(opts.sessionId, ob.token)
+      } catch {
+        /* node may not exist yet; the scan will ensure it */
+      }
+    }
     console.log(`[main] terminal ${key}: spawned ${cmd} ${resumeArgs.join(' ')} in ${opts.cwd}`)
     term = wireTerm(key, p, { sessionId: opts.sessionId, cwd: opts.cwd })
   }
+  if (opts.background) return // live PTY + outbox, but the user stays where they are
   attachedKey = key
   // On a fresh spawn (e.g. first open after an app restart), paint the persisted
   // scrollback from the last run before the resumed session repaints. No marker
@@ -1603,7 +1625,21 @@ function tagAdoptedTerminals(sessions: LiveSession[]): void {
     // startedAt-matched, pid-reuse-safe signal the rest of the engine relies on.
     if (!s.sessionId || !s.alive) continue
     const t = terminals.get(`new:${s.pid}`)
-    if (t && !t.exited && !t.sessionId) t.sessionId = s.sessionId
+    if (t && !t.exited && !t.sessionId) {
+      t.sessionId = s.sessionId
+      // Bind this session to the outbox it was TAUGHT at spawn. The path lives
+      // in the session's own context from the preamble, so a later resume has
+      // to hand back the same one — see the resume branch in openTerminal.
+      const ob = outboxByPid.get(s.pid)
+      if (ob) {
+        try {
+          ensureNode(s.sessionId, { cwd: s.cwd, name: s.name })
+          setOutboxToken(s.sessionId, ob.token)
+        } catch (e) {
+          console.error('[main] persist outbox token failed', e)
+        }
+      }
+    }
   }
 }
 
@@ -1672,6 +1708,14 @@ function reconcilePendingNew(sessions: LiveSession[]): void {
 
 ipcMain.handle('term:open', (_e, key: string, opts: OpenOpts) => {
   openTerminal(key, opts)
+  // Bring the rest of the task tree up alongside it. A tree is only useful when
+  // its members are live — a dormant parent can't be messaged and a dormant
+  // child can't answer — and after a restart every member starts dormant.
+  // Deferred so the session the user actually asked for paints first.
+  if (opts.resume && opts.sessionId) {
+    const sid = opts.sessionId
+    setTimeout(() => resumeFamily(sid), 1200)
+  }
   return true
 })
 ipcMain.on('term:attach', (_e, key: string) => {
@@ -2557,6 +2601,71 @@ ipcMain.handle(
 // Remove a terminated session from the list: kill any managed terminal, purge
 // its dead ~/.claude/sessions files, and drop the registry node.
 // All descendants of a session (its whole subtree), via the edge graph.
+// Every session reachable from this one through the edge graph, in EITHER
+// direction — parents, children, siblings-by-parent, the whole tree. A task tree
+// only works when its members are live: a dormant parent cannot be messaged and
+// a dormant child cannot answer, so resuming one member restores the rest.
+function familyOf(sessionId: string): string[] {
+  const edges = getEdges()
+  const adj = new Map<string, string[]>()
+  const link = (a: string, b: string): void => {
+    const cur = adj.get(a)
+    if (cur) cur.push(b)
+    else adj.set(a, [b])
+  }
+  for (const e of edges) {
+    link(e.child_id, e.parent_id)
+    link(e.parent_id, e.child_id)
+  }
+  const seen = new Set<string>([sessionId])
+  const stack = [sessionId]
+  const out: string[] = []
+  while (stack.length) {
+    const cur = stack.pop()!
+    for (const n of adj.get(cur) ?? []) {
+      if (seen.has(n)) continue
+      seen.add(n)
+      out.push(n)
+      stack.push(n)
+    }
+  }
+  return out
+}
+
+// Bounded so opening one session can never spawn an unbounded number of real
+// `claude` processes.
+const FAMILY_RESUME_CAP = 6
+function resumeFamily(sessionId: string): void {
+  try {
+    const nodes = getNodeMap()
+    let started = 0
+    for (const id of familyOf(sessionId)) {
+      if (started >= FAMILY_RESUME_CAP) {
+        logMsg('CC', sessionId, `family resume capped at ${FAMILY_RESUME_CAP}`, 'capped')
+        break
+      }
+      if (findManagedTerm(id)) continue // already live
+      const node = nodes.get(id)
+      if (!node?.cwd) continue
+      // `claude --resume` on a missing transcript just prints "No conversation
+      // found" and exits 1 — never spawn one of those.
+      if (!hasTranscript(id, node.cwd)) continue
+      openTerminal(id, {
+        sessionId: id,
+        cwd: node.cwd,
+        resume: true,
+        cols: 120,
+        rows: 30,
+        background: true,
+      })
+      started++
+    }
+    if (started > 0) logMsg('CC', sessionId, `resumed ${started} family session(s)`, 'ok')
+  } catch (e) {
+    console.error('[main] family resume failed', e)
+  }
+}
+
 function descendantsOf(sessionId: string): string[] {
   const edges = getEdges()
   const out: string[] = []
