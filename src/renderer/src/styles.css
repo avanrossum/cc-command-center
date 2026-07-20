@@ -991,9 +991,15 @@ body {
 .wcard.ns-blocked {
   box-shadow: inset 2.5px 0 0 var(--cc-blocked);
 }
-/* seen (not unhandled) recedes; unhandled reads at full strength */
-.wcard:not(.unhandled) {
-  opacity: 0.6;
+/* unhandled = you haven't looked yet: a bright pip. Seen cards stay fully readable
+   (no dimming) — the pip's absence is the "already saw it" signal. */
+.wc-pip {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--cc-text);
+  box-shadow: 0 0 6px rgba(232, 228, 220, 0.5);
+  flex: none;
 }
 .wc-top {
   display: flex;
@@ -1003,6 +1009,7 @@ body {
 .wc-name {
   font-weight: 600;
   font-size: 13px;
+  color: var(--cc-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -214,7 +214,7 @@ export function App() {
   // Companion pane (right of the terminal): the cross-fleet "needs you" board.
   // Default OPEN; open/hidden state and scope persist across restarts.
   const [companionOpen, setCompanionOpen] = useState(true)
-  const [companionScope, setCompanionScope] = useState<'category' | 'all'>('category')
+  const [companionScope, setCompanionScope] = useState<'category' | 'all'>('all')
   const showCompanion = (open: boolean) => {
     setCompanionOpen(open)
     window.cc.stateSet('companionOpen', String(open))
@@ -277,7 +277,7 @@ export function App() {
     window.cc.getSessions().then((s) => setSnap(s as Snapshot))
     window.cc.stateGet('activeSessionId').then((id) => setPendingRestore(id))
     window.cc.stateGet('companionOpen').then((v) => v === 'false' && setCompanionOpen(false))
-    window.cc.stateGet('companionScope').then((v) => v === 'all' && setCompanionScope('all'))
+    window.cc.stateGet('companionScope').then((v) => v === 'category' && setCompanionScope('category'))
     const offSessions = window.cc.onSessions((s) => setSnap(s as Snapshot))
     const offShow = window.cc.onTermShow((p) => {
       setRecover(null)
@@ -630,7 +630,9 @@ export function App() {
           <TallyItem n={liveCount} label="total" color="var(--cc-dim)" />
         </div>
         <div className="beacon-grow">
-          {needsYou.length === 0 ? (
+          {/* The companion pane owns the needs-you list when open, so the beacon
+              drops it to avoid showing the same thing twice. Tallies stay. */}
+          {companionOpen ? null : needsYou.length === 0 ? (
             <div className="allclear">
               <span className="pulse" /> all clear — nothing needs you
             </div>
@@ -1044,6 +1046,7 @@ export function App() {
                         onClick={() => openSession(s)}
                       >
                         <div className="wc-top">
+                          {s.unhandled && <span className="wc-pip" title="you haven't looked at this yet" />}
                           <span className={`cc-dot cc-dot--${dstate(s)}`} />
                           <span className="wc-name">{nameOf(s)}</span>
                           {cat && (
