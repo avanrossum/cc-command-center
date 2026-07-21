@@ -1,4 +1,14 @@
-import { app, BrowserWindow, ipcMain, dialog, nativeImage, clipboard, shell, safeStorage } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  nativeImage,
+  clipboard,
+  shell,
+  safeStorage,
+  screen,
+} from 'electron'
 import { join, isAbsolute, dirname, extname } from 'node:path'
 import os from 'node:os'
 import net from 'node:net'
