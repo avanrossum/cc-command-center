@@ -17,7 +17,8 @@
     "probe": "tsx scripts/engine-probe.ts",
     "pretypecheck": "node scripts/gen-version.mjs",
     "typecheck": "tsc --noEmit",
-    "bump": "node scripts/bump.mjs"
+    "bump": "node scripts/bump.mjs",
+    "release": "node scripts/publish.mjs"
   },
   "devDependencies": {
     "@electron/rebuild": "4.1.0",
