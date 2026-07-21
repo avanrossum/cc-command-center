@@ -1,6 +1,15 @@
 {
   "versions": [
     {
+      "version": "0.14.2",
+      "date": "2026-07-21",
+      "critical": false,
+      "features": [
+        "Context-usage bar: a slim bar along the bottom of every session item that fills and shifts from green to amber to red as its context window fills — on the sidebar and the needs-you board.",
+        "Configurable terminal font: pick any installed monospace font and size for the terminal in Settings, applied live. Only fonts that will actually render are offered, with a live preview."
+      ]
+    },
+    {
       "version": "0.14.1",
       "date": "2026-07-21",
       "critical": false,
