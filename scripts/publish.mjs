@@ -61,7 +61,10 @@ if (cap('git status --porcelain')) {
 //    crucially, latest-mac.yml under release/.
 console.log(`\n▶ Building v${version}…`)
 sh('npm run build')
-sh('electron-builder')
+// --publish never: electron-builder auto-publishes when GH_TOKEN is present,
+// and its parallel uploaders race into duplicate draft releases. We only want
+// the local build + latest-mac.yml; gh (below) does all the uploading.
+sh('electron-builder --publish never')
 
 // 2. Collect this version's artifacts + latest-mac.yml. Names are deterministic
 //    from artifactName (${name}-${version}-${arch}.${ext}), but we glob so a
