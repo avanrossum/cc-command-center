@@ -1811,7 +1811,13 @@ function SettingsModal({
               type="text"
               placeholder="exact family name, e.g. JetBrains Mono"
               defaultValue={fontInList ? '' : curFont}
-              onBlur={(e) => window.cc.settingsSet('terminalFont', e.target.value.trim())}
+              // Only write when non-empty: clearing back to default is the
+              // dropdown's "System default" job, so an accidental focus→blur on
+              // an empty field can't clobber a dropdown pick.
+              onBlur={(e) => {
+                const v = e.target.value.trim()
+                if (v && v !== curFont) window.cc.settingsSet('terminalFont', v)
+              }}
               onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
             />
           </div>
