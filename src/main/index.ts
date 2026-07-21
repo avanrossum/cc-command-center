@@ -2549,7 +2549,9 @@ function readUsageStates(): UsageReadout {
       }
       const cw = j?.context_window
       perSession.set(f.slice(0, -5), {
-        contextPct: typeof cw?.used_percentage === 'number' ? cw.used_percentage : null,
+        // Round at the source — Claude Code's computed percentages carry float
+        // noise (e.g. 28.000000000000004); a whole number is all the UI wants.
+        contextPct: typeof cw?.used_percentage === 'number' ? Math.round(cw.used_percentage) : null,
         contextSize: typeof cw?.context_window_size === 'number' ? cw.context_window_size : null,
       })
       // Rate limits are account-wide, so any session's payload carries them —
@@ -2561,11 +2563,11 @@ function readUsageStates(): UsageReadout {
         const sd = rl.seven_day
         fiveHour =
           typeof fh?.used_percentage === 'number' && typeof fh?.resets_at === 'number'
-            ? { pct: fh.used_percentage, resetsAt: fh.resets_at }
+            ? { pct: Math.round(fh.used_percentage), resetsAt: fh.resets_at }
             : fiveHour
         sevenDay =
           typeof sd?.used_percentage === 'number' && typeof sd?.resets_at === 'number'
-            ? { pct: sd.used_percentage, resetsAt: sd.resets_at }
+            ? { pct: Math.round(sd.used_percentage), resetsAt: sd.resets_at }
             : sevenDay
       }
     } catch {
