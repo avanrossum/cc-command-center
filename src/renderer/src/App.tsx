@@ -1693,11 +1693,21 @@ function SettingsModal({
   // Installed monospace fonts for the terminal-font picker (discovered async).
   const [fontList, setFontList] = useState<string[]>([])
   useEffect(() => {
-    listMonospaceFonts().then(setFontList)
+    let live = true
+    listMonospaceFonts().then((l) => live && setFontList(l))
+    return () => {
+      live = false
+    }
   }, [])
   const curFont = settings?.terminalFont?.trim() ?? ''
   const curSize = settings?.terminalFontSize || DEFAULT_TERMINAL_FONT_SIZE
-  const fontInList = curFont !== '' && fontList.includes(curFont)
+  // One combobox (input + datalist) is the single source of truth for the font —
+  // no separate dropdown to desync from. Draft seeds from the stored value at open.
+  const [fontDraft, setFontDraft] = useState(curFont)
+  const commitFont = (v: string) => {
+    const next = v.trim()
+    if (next !== curFont) window.cc.settingsSet('terminalFont', next)
+  }
   const [keyName, setKeyName] = useState('')
   const [keyVal, setKeyVal] = useState('')
   const [adding, setAdding] = useState(false)
@@ -1785,41 +1795,26 @@ function SettingsModal({
         <div className="setsection">
           <b>Terminal font</b>
           <span className="setsub">
-            Applies to every terminal, live. Only monospaced fonts installed on this Mac are
-            listed — a proportional font would misalign Claude’s interface. Don’t see one? Type its
-            exact name.
+            Applies to every terminal, live. Pick from the monospaced fonts installed on this Mac,
+            or type any family name (a proportional font would misalign Claude’s interface). Leave
+            blank for the system default.
           </span>
           <div className="setrow">
             <span className="setlabel">Font</span>
-            <select
-              className="cat-in"
-              value={fontInList ? curFont : ''}
-              onChange={(e) => window.cc.settingsSet('terminalFont', e.target.value)}
-            >
-              <option value="">System default (Menlo)</option>
-              {fontList.map((f) => (
-                <option key={f} value={f}>
-                  {f}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="setrow">
-            <span className="setlabel">Or type</span>
             <input
               className="cat-in"
-              type="text"
-              placeholder="exact family name, e.g. JetBrains Mono"
-              defaultValue={fontInList ? '' : curFont}
-              // Only write when non-empty: clearing back to default is the
-              // dropdown's "System default" job, so an accidental focus→blur on
-              // an empty field can't clobber a dropdown pick.
-              onBlur={(e) => {
-                const v = e.target.value.trim()
-                if (v && v !== curFont) window.cc.settingsSet('terminalFont', v)
-              }}
+              list="ccc-fontlist"
+              value={fontDraft}
+              placeholder="System default (Menlo)"
+              onChange={(e) => setFontDraft(e.target.value)}
+              onBlur={() => commitFont(fontDraft)}
               onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
             />
+            <datalist id="ccc-fontlist">
+              {fontList.map((f) => (
+                <option key={f} value={f} />
+              ))}
+            </datalist>
           </div>
           <div className="setrow">
             <span className="setlabel">Size</span>
@@ -1840,7 +1835,7 @@ function SettingsModal({
           </div>
           <div
             className="fontpreview"
-            style={{ fontFamily: fontFamilyCss(curFont), fontSize: `${curSize}px` }}
+            style={{ fontFamily: fontFamilyCss(fontDraft), fontSize: `${curSize}px` }}
           >
             The quick brown fox 0123 () {'{}'} =&gt; != ~/dev &amp;&amp; ll
           </div>

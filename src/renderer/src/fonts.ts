@@ -21,12 +21,17 @@ export const DEFAULT_TERMINAL_FONT = 'Menlo, Monaco, "Courier New", monospace'
 export const DEFAULT_TERMINAL_FONT_SIZE = 12.5
 
 // Turn a stored setting into a CSS font-family value. Empty → the default stack.
-// A single family gets quoted with a monospace fallback (so a typo degrades to
-// monospace, not a proportional default); an already-comma'd stack passes through.
+// The input is treated as ONE family name and always emitted as `"<name>",
+// monospace`, so the worst case for a bad/typo'd name is the monospace fallback
+// — never a proportional default. CSS-breaking punctuation (quotes, backslashes,
+// semicolons, braces, angle brackets) is stripped; a real family name uses none
+// of them, and spaces/hyphens ("Fira Code", "PT Mono") are kept.
 export function fontFamilyCss(raw: string | null | undefined): string {
   const v = (raw || '').trim()
   if (!v) return DEFAULT_TERMINAL_FONT
-  return v.includes(',') ? v : `"${v.replace(/"/g, '')}", monospace`
+  const safe = v.replace(/["'\\;{}<>]/g, '').trim()
+  if (!safe) return DEFAULT_TERMINAL_FONT
+  return `"${safe}", monospace`
 }
 
 const CURATED = [
@@ -78,6 +83,8 @@ function makeTester(ctx: CanvasRenderingContext2D): (fam: string) => boolean {
   }
   // Installed = CSS-addressable: rendering with the family overrides at least one
   // generic baseline (a name the OS can't resolve just yields the baseline width).
+  // Two baselines (monospace + serif) so a real monospace font — which matches the
+  // monospace generic — is still caught by differing from serif.
   const installed = (fam: string): boolean => {
     const monoBase = widthWith('__ccc_no_such_font__', 'monospace')
     const serifBase = widthWith('__ccc_no_such_font__', 'serif')
