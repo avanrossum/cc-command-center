@@ -2646,3 +2646,46 @@ select.cat-in {
 .postupdate {
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
 }
+
+/* ---------- context-usage bar ---------- */
+/* Spans the full width of a session item, flush along its bottom edge like the
+   item's own bottom border. Parent (.row / .wcard) is position:relative. A faint
+   full-width track shows the 0→100 scale; the colored fill shows current usage. */
+.ctxbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  pointer-events: none;
+  overflow: hidden;
+}
+.ctxbar-fill {
+  height: 100%;
+  min-width: 2px; /* a sliver stays visible at very low % */
+  transition:
+    width 0.3s ease,
+    background 0.3s ease;
+}
+/* Round the fill to the card's bottom corners so it doesn't poke past them. */
+.wcard .ctxbar {
+  border-radius: 0 0 7px 7px;
+}
+/* The rail row already draws a 1px bottom hairline; let the bar own the edge. */
+.row .ctxbar {
+  bottom: 0;
+}
+
+/* ---------- terminal-font preview ---------- */
+.fontpreview {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--cc-border);
+  border-radius: 6px;
+  background: var(--cc-bg);
+  color: var(--cc-text);
+  white-space: nowrap;
+  overflow-x: auto;
+  font-variant-ligatures: contextual;
+}

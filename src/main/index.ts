@@ -166,6 +166,8 @@ interface AppSettings {
   lastContext: string // remembered context window ('' = default, '1m' = [1m] suffix)
   statusHooksInstalled: boolean // hook-driven status wired into ~/.claude/settings.json
   spawnAutoMode: boolean // last "start child in auto mode" choice (default ON)
+  terminalFont: string // xterm fontFamily override ('' = built-in default stack)
+  terminalFontSize: number // xterm font size in px
   // The Arbiter. Off unless BOTH enabled and pointed at a stored key, so the
   // feature can never start spending by default.
   arbiterEnabled: boolean
@@ -188,6 +190,11 @@ function getSettings(): AppSettings {
     lastContext: getAppState('lastContext') || '',
     statusHooksInstalled: getAppState('statusHooksInstalled') === 'true',
     spawnAutoMode: getAppState('spawnAutoMode') !== 'false', // default ON
+    terminalFont: getAppState('terminalFont') || '',
+    terminalFontSize: (() => {
+      const n = Number(getAppState('terminalFontSize'))
+      return Number.isFinite(n) && n >= 6 && n <= 40 ? n : 12.5
+    })(),
     arbiterEnabled: getAppState('arbiterEnabled') === 'true', // default OFF
     arbiterPaused: getAppState('arbiterPaused') === 'true',
     arbiterKeyId: getAppState('arbiterKeyId') ? Number(getAppState('arbiterKeyId')) : null,

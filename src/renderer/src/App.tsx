@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { insertablePath } from './util'
 import { TerminalView } from './Terminal'
 import { THEMES, themeByName, DEFAULT_THEME_NAME } from './themes'
+import { listMonospaceFonts, fontFamilyCss, DEFAULT_TERMINAL_FONT_SIZE } from './fonts'
 
 type CoarseState = 'working' | 'waiting' | 'idle' | 'unknown'
 // 'blocked' and 'permission' are DERIVED display states, not coarse engine states.
@@ -106,6 +107,8 @@ interface AppSettings {
   arbiterPaused: boolean
   statusHooksInstalled: boolean
   spawnAutoMode: boolean
+  terminalFont: string
+  terminalFontSize: number
 }
 interface Snapshot {
   home: string
@@ -188,6 +191,27 @@ function fmtResetIn(resetsAtSec: number, nowMs: number): string {
 // >=85% is the auto-compact / near-limit danger zone the user flagged; 65% warns.
 const ctxTone = (pct: number | null | undefined): '' | 'warm' | 'hot' =>
   pct == null ? '' : pct >= 85 ? 'hot' : pct >= 65 ? 'warm' : ''
+
+// Continuous fill color for the context bar: green (empty) → amber (~65) → red
+// (full), so context load reads at a glance without checking the number. Passes
+// through the 65/85 warn/danger zones the chip uses.
+const ctxBarColor = (pct: number): string => {
+  const p = Math.max(0, Math.min(100, pct))
+  const hue = 130 - 1.25 * p // 130°(green) at 0% → ~5°(red) at 100%
+  return `hsl(${Math.round(hue)}, 72%, 46%)`
+}
+
+// A thin context-usage bar that spans the full width of the item it sits in, as
+// if it were the item's bottom border. The parent must be position:relative.
+function CtxBar({ pct }: { pct: number | null | undefined }) {
+  if (typeof pct !== 'number') return null
+  const p = Math.max(0, Math.min(100, pct))
+  return (
+    <div className="ctxbar" aria-hidden="true">
+      <div className="ctxbar-fill" style={{ width: `${p}%`, background: ctxBarColor(p) }} />
+    </div>
+  )
+}
 
 // Account-wide 5h / 7d usage: a small bar + % + reset countdown, in the beacon.
 function UsageMeter({
@@ -1174,6 +1198,7 @@ export function App() {
                     {fmtAge(s.transcriptMtimeMs, snap.scannedAt)}
                   </span>
                 )}
+                <CtxBar pct={s.contextPct} />
               </li>
               )
             })}
@@ -1220,6 +1245,8 @@ export function App() {
                 cwd={selected.cwd}
                 resume={selected.resume}
                 themeName={selThemeName}
+                fontFamily={fontFamilyCss(snap.settings?.terminalFont)}
+                fontSize={snap.settings?.terminalFontSize || DEFAULT_TERMINAL_FONT_SIZE}
                 onSpawnFromSelection={(text, instant, type) => {
                   if (!selected.sessionId) {
                     showFlash('session not ready to spawn from')
@@ -1448,6 +1475,7 @@ export function App() {
                             )}
                           </div>
                         )}
+                        <CtxBar pct={s.contextPct} />
                       </button>
                     )
                   })
@@ -1662,6 +1690,14 @@ function SettingsModal({
   const trust = settings?.trustChildrenByDefault ?? true
   const mailGranted = settings?.mailAllowGranted ?? false
   const hooksInstalled = settings?.statusHooksInstalled ?? false
+  // Installed monospace fonts for the terminal-font picker (discovered async).
+  const [fontList, setFontList] = useState<string[]>([])
+  useEffect(() => {
+    listMonospaceFonts().then(setFontList)
+  }, [])
+  const curFont = settings?.terminalFont?.trim() ?? ''
+  const curSize = settings?.terminalFontSize || DEFAULT_TERMINAL_FONT_SIZE
+  const fontInList = curFont !== '' && fontList.includes(curFont)
   const [keyName, setKeyName] = useState('')
   const [keyVal, setKeyVal] = useState('')
   const [adding, setAdding] = useState(false)
@@ -1744,6 +1780,64 @@ function SettingsModal({
           >
             {hooksInstalled ? 'Remove' : 'Install…'}
           </button>
+        </div>
+
+        <div className="setsection">
+          <b>Terminal font</b>
+          <span className="setsub">
+            Applies to every terminal, live. Only monospaced fonts installed on this Mac are
+            listed — a proportional font would misalign Claude’s interface. Don’t see one? Type its
+            exact name.
+          </span>
+          <div className="setrow">
+            <span className="setlabel">Font</span>
+            <select
+              className="cat-in"
+              value={fontInList ? curFont : ''}
+              onChange={(e) => window.cc.settingsSet('terminalFont', e.target.value)}
+            >
+              <option value="">System default (Menlo)</option>
+              {fontList.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="setrow">
+            <span className="setlabel">Or type</span>
+            <input
+              className="cat-in"
+              type="text"
+              placeholder="exact family name, e.g. JetBrains Mono"
+              defaultValue={fontInList ? '' : curFont}
+              onBlur={(e) => window.cc.settingsSet('terminalFont', e.target.value.trim())}
+              onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+            />
+          </div>
+          <div className="setrow">
+            <span className="setlabel">Size</span>
+            <input
+              className="cat-in"
+              type="number"
+              min="6"
+              max="40"
+              step="0.5"
+              defaultValue={curSize}
+              onBlur={(e) => {
+                const n = Number(e.target.value)
+                if (Number.isFinite(n) && n >= 6 && n <= 40)
+                  window.cc.settingsSet('terminalFontSize', String(n))
+              }}
+            />
+            <span className="setsub">px</span>
+          </div>
+          <div
+            className="fontpreview"
+            style={{ fontFamily: fontFamilyCss(curFont), fontSize: `${curSize}px` }}
+          >
+            The quick brown fox 0123 () {'{}'} =&gt; != ~/dev &amp;&amp; ll
+          </div>
         </div>
 
         <div className="setsection">

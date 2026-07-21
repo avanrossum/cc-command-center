@@ -20,6 +20,15 @@
 export const DEFAULT_TERMINAL_FONT = 'Menlo, Monaco, "Courier New", monospace'
 export const DEFAULT_TERMINAL_FONT_SIZE = 12.5
 
+// Turn a stored setting into a CSS font-family value. Empty → the default stack.
+// A single family gets quoted with a monospace fallback (so a typo degrades to
+// monospace, not a proportional default); an already-comma'd stack passes through.
+export function fontFamilyCss(raw: string | null | undefined): string {
+  const v = (raw || '').trim()
+  if (!v) return DEFAULT_TERMINAL_FONT
+  return v.includes(',') ? v : `"${v.replace(/"/g, '')}", monospace`
+}
+
 const CURATED = [
   'SF Mono',
   'JetBrains Mono',

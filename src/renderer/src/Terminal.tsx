@@ -3,6 +3,7 @@ import { Terminal as XTerm, type ILink } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { themeByName } from './themes'
+import { DEFAULT_TERMINAL_FONT, DEFAULT_TERMINAL_FONT_SIZE } from './fonts'
 import { insertablePath } from './util'
 import '@xterm/xterm/css/xterm.css'
 
@@ -13,6 +14,9 @@ interface Props {
   cwd: string
   resume: boolean
   themeName?: string | null
+  // Terminal font (a global user setting). CSS font-family string + px size.
+  fontFamily?: string | null
+  fontSize?: number | null
   // Spawn a child seeded with the current terminal selection. instant=true →
   // spawn immediately (Cmd+K tangent / Cmd+Shift+K blocking); instant=false → open
   // the composer pre-filled with the given type as default (right-click).
@@ -29,10 +33,15 @@ export function TerminalView({
   cwd,
   resume,
   themeName,
+  fontFamily,
+  fontSize,
   onSpawnFromSelection,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<XTerm | null>(null)
+  // The FitAddon, held in a ref so the font-change effect can re-fit (a font
+  // change alters cell metrics, unlike a theme/color change).
+  const fitRef = useRef<FitAddon | null>(null)
   // Held in a ref so the terminal setup effect (which captures it) doesn't need to
   // re-run — and always calls the latest callback.
   const spawnCbRef = useRef(onSpawnFromSelection)
@@ -45,8 +54,8 @@ export function TerminalView({
     const term = new XTerm({
       allowProposedApi: true,
       cursorBlink: true,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-      fontSize: 12.5,
+      fontFamily: fontFamily || DEFAULT_TERMINAL_FONT,
+      fontSize: fontSize || DEFAULT_TERMINAL_FONT_SIZE,
       // Initial theme; live changes are applied via the effect below without
       // remounting. themeName is intentionally NOT a dep of this setup effect.
       theme: themeByName(themeName).theme,
@@ -63,6 +72,7 @@ export function TerminalView({
     })
     termRef.current = term
     const fit = new FitAddon()
+    fitRef.current = fit
     term.loadAddon(fit)
     const serialize = new SerializeAddon()
     term.loadAddon(serialize)
@@ -268,6 +278,7 @@ export function TerminalView({
       onData.dispose()
       term.dispose()
       termRef.current = null
+      fitRef.current = null
       // Intentionally NOT closing the PTY: it keeps running in the background.
     }
   }, [termKey, sessionId, cwd, resume])
@@ -276,6 +287,22 @@ export function TerminalView({
   useEffect(() => {
     if (termRef.current) termRef.current.options.theme = themeByName(themeName).theme
   }, [themeName])
+
+  // Apply font changes live. Unlike a theme change, font family/size alter the
+  // cell metrics, so re-fit and tell the PTY the new grid size.
+  useEffect(() => {
+    const term = termRef.current
+    const fit = fitRef.current
+    if (!term || !fit) return
+    term.options.fontFamily = fontFamily || DEFAULT_TERMINAL_FONT
+    term.options.fontSize = fontSize || DEFAULT_TERMINAL_FONT_SIZE
+    const before = `${term.cols}x${term.rows}`
+    fit.fit()
+    if (`${term.cols}x${term.rows}` !== before) {
+      window.cc.termResize(termKey, term.cols, term.rows)
+    }
+    term.refresh(0, term.rows - 1)
+  }, [fontFamily, fontSize, termKey])
 
   return <div className="termhost" ref={hostRef} />
 }
