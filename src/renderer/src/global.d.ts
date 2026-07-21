@@ -16,10 +16,36 @@ interface ApiKey {
   created_at: number
 }
 
+interface ChangelogEntry {
+  version: string
+  date?: string
+  critical?: boolean
+  features: string[]
+}
+interface UpdatePayload {
+  version: string
+  currentVersion: string
+  critical: boolean
+  features: string[]
+  changelog: ChangelogEntry[]
+}
+
 declare global {
   interface Window {
     cc: {
       appVersion: () => Promise<{ full: string; version: string; hash: string; time: string }>
+      updateCheck: () => Promise<void>
+      updateInstall: () => Promise<void>
+      updateInstallOnQuit: () => Promise<void>
+      updateSkip: (version: string) => Promise<boolean>
+      updateJustUpdated: () => Promise<UpdatePayload | null>
+      onUpdateAvailable: (cb: (p: UpdatePayload) => void) => () => void
+      onUpdateNone: (cb: () => void) => () => void
+      onUpdateDownloading: (cb: () => void) => () => void
+      onUpdateProgress: (cb: (p: { percent: number }) => void) => () => void
+      onUpdateStaged: (cb: () => void) => () => void
+      onUpdateError: (cb: (p: { message: string }) => void) => () => void
+      onMenuSettings: (cb: () => void) => () => void
       getSessions: () => Promise<unknown>
       onSessions: (cb: (snapshot: unknown) => void) => () => void
       catCreate: (name: string) => Promise<{ id: number; name: string; color: string }>

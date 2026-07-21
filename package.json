@@ -40,6 +40,7 @@
     "@xterm/addon-webgl": "^0.20.0-beta.287",
     "@xterm/xterm": "^6.1.0-beta.288",
     "better-sqlite3": "^12.0.0",
+    "electron-updater": "^6.8.9",
     "node-pty": "1.1.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"

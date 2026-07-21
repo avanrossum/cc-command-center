@@ -4,12 +4,13 @@ import { APP_VERSION, BUILD_HASH, BUILD_BRANCH, BUILD_TIME, FULL_VERSION } from 
 const APP_TITLE = 'CC Command Center'
 const COMPANY = 'MipYip, LLC'
 const COMPANY_URL = 'https://mipyip.com'
-// Private repository. Update this if the repo moves or is renamed. The link
-// opens in the user's default browser (GitHub handles auth); it 404s for
-// anyone without access, which is expected while the repo is private.
+// Source repository. Update this if the repo moves or is renamed. The link
+// opens in the user's default browser.
 const REPO_URL = 'https://github.com/avanrossum/claude-command-center'
 
 let aboutWin: BrowserWindow | null = null
+// Set by installAppMenu; the About window's "Check for updates" link calls it.
+let checkUpdatesHook: (() => void) | null = null
 
 function buildLabel(): string {
   const when = BUILD_TIME.replace('T', ' ').slice(0, 16) + ' UTC'
@@ -68,8 +69,8 @@ function aboutHtml(): string {
   <div class="meta">${meta}</div>
   <div class="rule"></div>
   <div class="by">by <a href="${COMPANY_URL}" target="_blank" rel="noreferrer">${COMPANY}</a></div>
-  <div class="links"><a href="${REPO_URL}" target="_blank" rel="noreferrer">Source repository ↗</a></div>
-  <div class="note">One window for every Claude Code session. Automatic updates are coming in a future release.</div>
+  <div class="links"><a href="${REPO_URL}" target="_blank" rel="noreferrer">Source repository ↗</a> · <a href="cc://check-updates">Check for updates</a></div>
+  <div class="note">One window for every Claude Code session.</div>
   <div class="copy">© 2026 ${COMPANY}. All rights reserved.</div>
 </body></html>`
 }
@@ -101,6 +102,12 @@ export function openAbout(parent?: BrowserWindow | null): void {
   })
   aboutWin.webContents.on('will-navigate', (e, url) => {
     e.preventDefault()
+    // Our own in-app affordances use a cc:// scheme so they never hit the
+    // browser; everything else opens in the user's default browser.
+    if (url === 'cc://check-updates') {
+      checkUpdatesHook?.()
+      return
+    }
     shell.openExternal(url)
   })
   aboutWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(aboutHtml()))
@@ -124,7 +131,11 @@ export function setAboutPanel(): void {
 // Application menu. The macOS app menu's "About" item opens our custom window
 // instead of the default Electron panel. Standard Edit/View/Window roles are
 // kept so copy/paste/select-all work inside the terminal panes.
-export function installAppMenu(getMain: () => BrowserWindow | null): void {
+export function installAppMenu(
+  getMain: () => BrowserWindow | null,
+  hooks: { onCheckUpdates: () => void; onSettings: () => void },
+): void {
+  checkUpdatesHook = hooks.onCheckUpdates
   const isMac = process.platform === 'darwin'
   const aboutItem: MenuItemConstructorOptions = {
     label: `About ${APP_TITLE}`,
@@ -138,7 +149,9 @@ export function installAppMenu(getMain: () => BrowserWindow | null): void {
             submenu: [
               aboutItem,
               { type: 'separator' },
-              { label: 'Check for Updates…', enabled: false },
+              { label: 'Check for Updates…', click: () => hooks.onCheckUpdates() },
+              { type: 'separator' },
+              { label: 'Settings…', accelerator: 'Cmd+,', click: () => hooks.onSettings() },
               { type: 'separator' },
               { role: 'services' },
               { type: 'separator' },

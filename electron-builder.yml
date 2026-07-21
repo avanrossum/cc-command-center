@@ -6,6 +6,15 @@ directories:
   output: release
   buildResources: build
 
+# Auto-update feed. Releases (the DMG/ZIP + latest-mac.yml the updater reads)
+# are published to a SEPARATE PUBLIC repo, so the app needs no embedded token
+# and the source repo's Releases tab stays free of 126MB binaries. electron-
+# builder embeds this as app-update.yml, which electron-updater reads at runtime.
+publish:
+  provider: github
+  owner: avanrossum
+  repo: claude-command-center-releases
+
 # electron-vite emits the bundled app to out/; native deps (better-sqlite3,
 # node-pty) stay external and are pulled from node_modules by electron-builder.
 files:

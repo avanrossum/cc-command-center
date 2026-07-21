@@ -19,6 +19,20 @@ contextBridge.exposeInMainWorld('cc', {
   // app
   appVersion: () => ipcRenderer.invoke('app:version'),
 
+  // auto-update
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateInstall: () => ipcRenderer.invoke('update:install'),
+  updateInstallOnQuit: () => ipcRenderer.invoke('update:installOnQuit'),
+  updateSkip: (version: string) => ipcRenderer.invoke('update:skip', version),
+  updateJustUpdated: () => ipcRenderer.invoke('update:justUpdated'),
+  onUpdateAvailable: (cb: (p: unknown) => void) => sub('update:available', cb),
+  onUpdateNone: (cb: () => void) => sub('update:none', cb),
+  onUpdateDownloading: (cb: () => void) => sub('update:downloading', cb),
+  onUpdateProgress: (cb: (p: { percent: number }) => void) => sub('update:progress', cb),
+  onUpdateStaged: (cb: () => void) => sub('update:staged', cb),
+  onUpdateError: (cb: (p: { message: string }) => void) => sub('update:error', cb),
+  onMenuSettings: (cb: () => void) => sub('menu:settings', cb),
+
   // status board
   getSessions: () => ipcRenderer.invoke('cc:getSessions'),
   onSessions: (cb: (snapshot: unknown) => void) => sub('cc:sessions', cb),

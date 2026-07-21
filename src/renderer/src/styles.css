@@ -2496,3 +2496,153 @@ select.cat-in {
   border-color: var(--cc-blocked);
   font-weight: 700;
 }
+
+/* ---------- auto-update modals ---------- */
+.upmodal {
+  width: 540px;
+}
+.upsub {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+.uptabs {
+  margin-top: 16px;
+}
+.uptabbar {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.uptab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--dim);
+  padding: 7px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+.uptab:hover {
+  color: var(--text);
+}
+.uptab.on {
+  color: #7ee7b8;
+  border-bottom-color: rgba(52, 211, 153, 0.6);
+}
+.upbody {
+  margin-top: 12px;
+  max-height: 46vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.upfeatures {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.upfeatures li {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.upempty {
+  font-size: 12px;
+  color: var(--dim);
+  padding: 8px 2px;
+}
+.uplog {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.uplog-entry {
+  border-left: 2px solid var(--border);
+  padding-left: 12px;
+}
+.uplog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.uplog-ver {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+  font-weight: 650;
+  color: #7ee7b8;
+}
+.uplog-date {
+  font-size: 11px;
+  color: var(--dim2);
+}
+.uplog-crit {
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--cc-blocked);
+  border: 1px solid var(--cc-blocked);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.upprogress {
+  margin-top: 16px;
+}
+.upbar {
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.upbar-fill {
+  height: 100%;
+  background: rgba(52, 211, 153, 0.7);
+  transition: width 0.2s ease;
+}
+.upprogress-l {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--dim);
+}
+.upstaged {
+  margin-top: 14px;
+  font-size: 12px;
+  color: #7ee7b8;
+}
+.uperror {
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--cc-blocked);
+}
+.upactions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+}
+.upactions .grow {
+  flex: 1;
+}
+.rbtn.ghost {
+  color: var(--dim2);
+}
+/* Post-update overlay: full-window, blurs and darkens the whole app. */
+.updatescrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 9, 12, 0.62);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.postupdate {
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+}

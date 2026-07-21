@@ -65,6 +65,19 @@ interface ApiKey {
   hint: string
   created_at: number
 }
+interface ChangelogEntry {
+  version: string
+  date?: string
+  critical?: boolean
+  features: string[]
+}
+interface UpdatePayload {
+  version: string
+  currentVersion: string
+  critical: boolean
+  features: string[]
+  changelog: ChangelogEntry[]
+}
 interface Edge {
   child_id: string
   parent_id: string
@@ -353,6 +366,16 @@ export function App() {
   // The cross-session message log (awareness bus transparency).
   const [logOpen, setLogOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Auto-update UI. `updateAvail` drives the "an update is available" modal;
+  // `postUpdate` drives the one-time "you've been updated" modal on first launch
+  // after an install. Download progress and terminal states feed the former.
+  const [updateAvail, setUpdateAvail] = useState<UpdatePayload | null>(null)
+  const [postUpdate, setPostUpdate] = useState<UpdatePayload | null>(null)
+  const [updateDl, setUpdateDl] = useState<{
+    state: 'downloading' | 'staged' | 'error'
+    percent?: number
+    message?: string
+  } | null>(null)
   // Optional prompt composer under the terminal (Enter = newline, ⌘↩ = send).
   const [composerOpen, setComposerOpen] = useState(false)
   const [composerText, setComposerText] = useState('')
@@ -401,6 +424,40 @@ export function App() {
       offShow()
       offRecover()
       offRemoved()
+    }
+  }, [])
+
+  // Auto-update wiring: subscribe to the main-process update events, open the
+  // Settings pane when the menu asks, and ask once on mount whether this launch
+  // was the first after an install (→ the post-update modal).
+  useEffect(() => {
+    window.cc.updateJustUpdated().then((p) => {
+      if (p) setPostUpdate(p)
+    })
+    const offAvail = window.cc.onUpdateAvailable((p) => {
+      setUpdateDl(null)
+      setUpdateAvail(p as UpdatePayload)
+    })
+    const offNone = window.cc.onUpdateNone(() => showFlash('You are at the latest release.'))
+    const offDownloading = window.cc.onUpdateDownloading(() =>
+      setUpdateDl({ state: 'downloading', percent: 0 }),
+    )
+    const offProgress = window.cc.onUpdateProgress((p) =>
+      setUpdateDl({ state: 'downloading', percent: p.percent }),
+    )
+    const offStaged = window.cc.onUpdateStaged(() => setUpdateDl({ state: 'staged' }))
+    const offError = window.cc.onUpdateError((p) =>
+      setUpdateDl({ state: 'error', message: p.message }),
+    )
+    const offSettings = window.cc.onMenuSettings(() => setSettingsOpen(true))
+    return () => {
+      offAvail()
+      offNone()
+      offDownloading()
+      offProgress()
+      offStaged()
+      offError()
+      offSettings()
     }
   }, [])
 
@@ -1561,6 +1618,28 @@ export function App() {
       )}
       {snap.settings && !snap.settings.firstRunSeen && (
         <FirstRunMail settings={snap.settings} showFlash={showFlash} />
+      )}
+      {updateAvail && (
+        <UpdateAvailableModal
+          payload={updateAvail}
+          dl={updateDl}
+          onInstall={() => window.cc.updateInstall()}
+          onInstallOnQuit={() => {
+            window.cc.updateInstallOnQuit()
+          }}
+          onSkip={() => {
+            window.cc.updateSkip(updateAvail.version)
+            setUpdateAvail(null)
+            setUpdateDl(null)
+          }}
+          onRemindLater={() => {
+            setUpdateAvail(null)
+            setUpdateDl(null)
+          }}
+        />
+      )}
+      {postUpdate && (
+        <PostUpdateModal payload={postUpdate} close={() => setPostUpdate(null)} />
       )}
       {flash && <div className="flash">{flash}</div>}
     </div>
@@ -3071,6 +3150,154 @@ function SessionNameEditor({
         </button>
       </div>
     </>
+  )
+}
+
+// Shared body for both update modals: a two-tab view — "What's new" (this
+// release's features) and "Changelog" (every version). Kept dumb; the parent
+// owns the surrounding chrome and buttons.
+function UpdateTabs({ payload }: { payload: UpdatePayload }) {
+  const [tab, setTab] = useState<'new' | 'log'>('new')
+  const features = payload.features ?? []
+  const changelog = payload.changelog ?? []
+  return (
+    <div className="uptabs">
+      <div className="uptabbar">
+        <button
+          className={`uptab${tab === 'new' ? ' on' : ''}`}
+          onClick={() => setTab('new')}
+        >
+          What’s new
+        </button>
+        <button
+          className={`uptab${tab === 'log' ? ' on' : ''}`}
+          onClick={() => setTab('log')}
+        >
+          Full changelog
+        </button>
+      </div>
+      <div className="upbody">
+        {tab === 'new' ? (
+          features.length ? (
+            <ul className="upfeatures">
+              {features.map((f, i) => (
+                <li key={i}>{f}</li>
+              ))}
+            </ul>
+          ) : (
+            <div className="upempty">Release notes weren’t published for this version.</div>
+          )
+        ) : changelog.length ? (
+          <div className="uplog">
+            {changelog.map((e) => (
+              <div className="uplog-entry" key={e.version}>
+                <div className="uplog-head">
+                  <span className="uplog-ver">v{e.version}</span>
+                  {e.date && <span className="uplog-date">{e.date}</span>}
+                  {e.critical && <span className="uplog-crit">critical</span>}
+                </div>
+                <ul className="upfeatures">
+                  {(e.features ?? []).map((f, i) => (
+                    <li key={i}>{f}</li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="upempty">No changelog available.</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// "An update is available." Offers install-now, install-on-quit, remind-later,
+// and (unless the release is critical) skip-this-version. Once a download is in
+// flight the buttons give way to progress / staged / error state.
+function UpdateAvailableModal({
+  payload,
+  dl,
+  onInstall,
+  onInstallOnQuit,
+  onSkip,
+  onRemindLater,
+}: {
+  payload: UpdatePayload
+  dl: { state: 'downloading' | 'staged' | 'error'; percent?: number; message?: string } | null
+  onInstall: () => void
+  onInstallOnQuit: () => void
+  onSkip: () => void
+  onRemindLater: () => void
+}) {
+  return (
+    <div className="spawnscrim" onClick={onRemindLater}>
+      <div className="spawnmodal upmodal" onClick={(e) => e.stopPropagation()}>
+        <div className="spawntitle">
+          Update available — v{payload.version}
+          {payload.critical && <span className="uplog-crit" style={{ marginLeft: 8 }}>critical</span>}
+        </div>
+        <div className="upsub">
+          You’re on v{payload.currentVersion}. A newer release is ready to install.
+        </div>
+        <UpdateTabs payload={payload} />
+        {dl?.state === 'downloading' && (
+          <div className="upprogress">
+            <div className="upbar">
+              <div className="upbar-fill" style={{ width: `${dl.percent ?? 0}%` }} />
+            </div>
+            <div className="upprogress-l">Downloading… {dl.percent ?? 0}%</div>
+          </div>
+        )}
+        {dl?.state === 'staged' && (
+          <div className="upstaged">Update downloaded — it will install when you quit the app.</div>
+        )}
+        {dl?.state === 'error' && (
+          <div className="uperror">Update failed: {dl.message}</div>
+        )}
+        <div className="upactions">
+          {!payload.critical && (
+            <button className="rbtn ghost" onClick={onSkip} disabled={!!dl && dl.state !== 'error'}>
+              Skip this version
+            </button>
+          )}
+          <div className="grow" />
+          <button className="rbtn ghost" onClick={onRemindLater}>
+            Remind me later
+          </button>
+          <button className="rbtn" onClick={onInstallOnQuit} disabled={!!dl && dl.state !== 'error'}>
+            Install on quit
+          </button>
+          <button
+            className="rbtn primary"
+            onClick={onInstall}
+            disabled={!!dl && dl.state !== 'error'}
+          >
+            Install now
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// First launch after an update. A full-window blurred overlay (not an OS
+// window) centered over the app, confirming the new version, with the same
+// two-tab notes and a single dismiss button.
+function PostUpdateModal({ payload, close }: { payload: UpdatePayload; close: () => void }) {
+  return (
+    <div className="updatescrim">
+      <div className="spawnmodal upmodal postupdate" onClick={(e) => e.stopPropagation()}>
+        <div className="spawntitle">CC Command Center has been updated to version {payload.version}</div>
+        <UpdateTabs payload={payload} />
+        <div className="upactions">
+          <div className="grow" />
+          <button className="rbtn primary" onClick={close}>
+            Awesome, let’s go
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 

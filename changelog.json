@@ -1,0 +1,56 @@
+{
+  "versions": [
+    {
+      "version": "0.14.0",
+      "date": "2026-07-21",
+      "critical": false,
+      "features": [
+        "Automatic updates: the app checks on launch and once a day, shows an update window with per-release notes and the full changelog, and can install now or on quit.",
+        "The window now remembers its position and size across restarts.",
+        "Added Settings and Check for Updates to the app menu, plus a Check for updates link in the About window.",
+        "After an update installs, a one-time summary shows what changed in the new version."
+      ]
+    },
+    {
+      "version": "0.13.7",
+      "date": "2026-07-21",
+      "critical": false,
+      "features": [
+        "Usage readouts now show rounded percentages instead of long floating-point values."
+      ]
+    },
+    {
+      "version": "0.13.5",
+      "date": "2026-07-21",
+      "critical": false,
+      "features": [
+        "Fixed a spawned child inheriting a category from its folder instead of from its edge to the parent."
+      ]
+    },
+    {
+      "version": "0.13.4",
+      "date": "2026-07-20",
+      "critical": false,
+      "features": [
+        "Fixed the subagent fleet panel clipping its contents in a docked layout.",
+        "Keep the Uncategorized rail entry always visible so it stops flickering."
+      ]
+    },
+    {
+      "version": "0.13.2",
+      "date": "2026-07-20",
+      "critical": false,
+      "features": [
+        "Modals now scroll internally instead of overflowing a small or non-fullscreen window."
+      ]
+    },
+    {
+      "version": "0.13.0",
+      "date": "2026-07-20",
+      "critical": false,
+      "features": [
+        "Usage readouts: live context-window percentage plus 5-hour and 7-day rate-limit meters."
+      ]
+    }
+  ]
+}

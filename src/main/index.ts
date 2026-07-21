@@ -36,6 +36,13 @@ import { readLastAssistantText } from './engine/transcript'
 import { parseDialogCommand, questionFromText } from './engine/dialog'
 import type { LiveSession } from './engine/types'
 import { installAppMenu, setAboutPanel } from './about'
+import {
+  initUpdater,
+  checkForUpdates,
+  downloadAndInstall,
+  skipVersion,
+  justUpdatedPayload,
+} from './updater'
 import { APP_VERSION, BUILD_HASH, BUILD_TIME, FULL_VERSION } from '../shared/version'
 import {
   initRegistry,
@@ -2056,6 +2063,18 @@ ipcMain.handle('app:version', () => ({
   hash: BUILD_HASH,
   time: BUILD_TIME,
 }))
+// ---------- auto-update ----------
+ipcMain.handle('update:check', () => void checkForUpdates(true))
+ipcMain.handle('update:install', () => downloadAndInstall('now'))
+ipcMain.handle('update:installOnQuit', () => downloadAndInstall('quit'))
+ipcMain.handle('update:skip', (_e, version: string) => {
+  if (typeof version === 'string' && version) skipVersion(version)
+  return true
+})
+// Renderer asks on mount whether this launch was a fresh update (returns the
+// payload for the "you've been updated" modal, or null). Side-effect: records
+// the current version, so it fires exactly once per update.
+ipcMain.handle('update:justUpdated', () => justUpdatedPayload())
 ipcMain.handle('cc:getSessions', () => snapshot())
 ipcMain.handle('cat:list', () => listCategories())
 ipcMain.handle('cat:create', (_e, name: string) => createCategory(name))
@@ -3057,12 +3076,16 @@ app.whenReady().then(() => {
   startKeyDaemon() // owner-only socket that serves decrypted keys to sessions
   setDockIcon()
   setAboutPanel()
-  installAppMenu(() => win)
+  installAppMenu(() => win, {
+    onCheckUpdates: () => void checkForUpdates(true),
+    onSettings: () => win?.webContents.send('menu:settings'),
+  })
   initRegistry(join(app.getPath('userData'), 'registry.db'))
   syncStatusHooksFlag() // flag mirrors what's ACTUALLY in ~/.claude/settings.json
   migrateMailRuleAtStartup() // one-time Write()→mail-scoped-Edit() rewrite for old grants
   maybeSeed()
   createWindow()
+  initUpdater(() => win) // auto-update: first check ~8s after launch, then daily
   pollTimer = setInterval(pushSessions, 1500)
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
