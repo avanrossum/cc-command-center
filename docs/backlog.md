@@ -1,5 +1,60 @@
 # Backlog — next features (specs)
 
+## ⏭ NEXT UP (queued 2026-07-21)
+
+### A. Context-usage progress bar under each item — do this first, after auto-update is confirmed working
+
+Represent context-window usage as a thin **progress bar** under each session item, in
+addition to the existing `%` chip. ~10px tall (like a fat bottom border), fills left→right
+to `contextPct`, and changes color as usage climbs.
+
+**Data is already present** on the `Session` object: `s.contextPct` (context window used %,
+from the statusLine — see `App.tsx:46`). Color logic already exists: `ctxTone(pct)` at
+`App.tsx:189` → `''` (<65), `warm` (65–84), `hot` (≥85).
+
+**Two render sites, both already have `s.contextPct`:**
+1. **Left rail rows** — the `<li>` ending at `App.tsx:1177`; the `%` chip is `.ctxchip` at
+   `App.tsx:1163`. Add the bar as a child of the `<li>`.
+2. **"Needs you" board cards** — the `.wcard` `<button>` at `App.tsx:1401–1451`
+   (`boardItems`, full `Session` objects). Same `s.contextPct`. User said "if it's not too
+   much" — it is cheap here because the data's already on the card.
+
+**Implementation:** a `<div className="ctxbar ...">` with `style={{ width: `${pct}%` }}`,
+positioned `absolute; bottom:0; left:0` inside a `position: relative` parent (`.item`/`.wcard`
+in `styles.css`). Height ~2px docked feel or up to ~10px per the request — try ~4–6px first,
+it reads as a border without stealing row height. Guard on `typeof s.contextPct === 'number'`.
+
+**Color:** simplest is reuse the 3-tone (`ctxTone`) so the bar matches the chip. Richer, and
+closer to "changes color as it increases", is a **continuous hue**: interpolate green→amber→red
+by pct (e.g. HSL hue `120 - 120*min(pct,100)/100`), keeping the 65/85 thresholds as the
+semantic story. Recommend the continuous hue for the bar, chip stays 3-tone. Not too thick —
+target the visual weight of a 4–10px bottom border; keep it subtle when cool.
+
+### B. Configurable terminal font — feasible; awaiting greenlight
+
+Let the user change the console/terminal font for legibility, **without bundling fonts**. xterm's
+font is just a CSS `fontFamily` string (`Terminal.tsx:48`, currently
+`'Menlo, Monaco, "Courier New", monospace'`, size `12.5`), so **any monospace font installed on
+the machine works by name** — no distribution needed. Mirror the existing per-terminal theme
+machinery exactly (`themes.ts`, `node.theme` migration, `theme:set` IPC, term-bar picker, live
+apply at `Terminal.tsx:275–278`).
+
+**Recommended shape:** a **global** setting (font family + size) in the Settings pane, applied
+live to all terminals. Wiring:
+- Store `terminalFont` / `terminalFontSize` in `app_state` (`settingsSet`), like other settings.
+- `Terminal.tsx`: pass to `new XTerm({ fontFamily, fontSize })`; add a live-apply effect that
+  sets `term.options.fontFamily` / `term.options.fontSize`, then **re-fits** (font changes cell
+  metrics — hoist the `FitAddon` into a ref so the effect can call `fit.fit()`; the theme effect
+  doesn't re-fit because colors don't change metrics). DOM renderer, so no texture-atlas reset
+  needed.
+- Picker: a free-text family field works with zero deps and is fully flexible. Upgrade to a real
+  installed-font dropdown via the **Local Font Access API** (`window.queryLocalFonts()` — Chromium
+  ≥103, so Electron 43 has it; auto-grant the permission in main via
+  `session.setPermissionRequestHandler`), filtered to monospace-ish families. Note in the UI that
+  a **monospace** font is required or Claude's TUI misaligns.
+- Optional later: load a custom font **file** the user points at (`@font-face` from a `file://`
+  data URL) for fonts not installed system-wide; and `@xterm/addon-ligatures` for Fira Code etc.
+
 ## ✅ Pre-release cleanup — DONE (2026-07-20, before The Arbiter)
 
 Sequence the user set and we followed: (1) `feat/bigger-control-space` merged → (2) this cleanup
