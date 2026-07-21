@@ -667,7 +667,15 @@ export function App() {
       arbiter_context: 0, // Uncategorized is never cleared to send substance
       rows: buildTree(byCat.get(null) ?? []),
     }
-    return [...cats, uncat].filter((g) => g.id !== null || g.rows.length > 0)
+    // Uncat is ALWAYS shown, even when empty. It used to be hidden on zero rows,
+    // which made it flicker in and out as uncategorized sessions went live/idle
+    // (dormant edge-less uncategorized sessions aren't in the snapshot, so the
+    // row count bounced between 0 and some). A rail cell that appears and
+    // vanishes is disorienting, and a tangential child — which is decoupled and
+    // lands in Uncat rather than its parent's category — was unfindable whenever
+    // Uncat happened to be empty at that moment. It's also the drop target for
+    // un-categorizing a session, so it needs to always be there.
+    return [...cats, uncat]
   }, [live, snap.categories, edgeByChild, blockedSet]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedGroup =
