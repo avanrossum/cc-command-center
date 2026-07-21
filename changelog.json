@@ -1,6 +1,14 @@
 {
   "versions": [
     {
+      "version": "0.14.1",
+      "date": "2026-07-21",
+      "critical": false,
+      "features": [
+        "The post-update summary now only appears in installed builds, not when running from source."
+      ]
+    },
+    {
       "version": "0.14.0",
       "date": "2026-07-21",
       "critical": false,

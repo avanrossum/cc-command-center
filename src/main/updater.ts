@@ -165,6 +165,9 @@ export function skipVersion(version: string): void {
 // we last recorded, we just updated — hand the renderer the payload so it can
 // show the "you've been updated" modal, then record the current version.
 export async function justUpdatedPayload(): Promise<UpdatePayload | null> {
+  // Only meaningful for installed builds. In dev, bumping the version and
+  // running would otherwise pop a spurious "you've been updated" modal.
+  if (!app.isPackaged) return null
   const last = getAppState('lastRunVersion')
   setAppState('lastRunVersion', APP_VERSION)
   if (!last || cmpVersion(APP_VERSION, last) <= 0) return null

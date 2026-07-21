@@ -7,17 +7,15 @@ directories:
   buildResources: build
 
 # Auto-update feed. Releases (the DMG/ZIP + latest-mac.yml the updater reads)
-# are published to a SEPARATE PUBLIC repo, so the app needs no embedded token
-# and the source repo's Releases tab stays free of 126MB binaries. electron-
-# builder embeds this as app-update.yml, which electron-updater reads at runtime.
+# live in a SEPARATE PUBLIC repo, so the app needs no embedded token and the
+# source repo's Releases tab stays free of 130MB binaries. This block's only
+# job here is to be embedded as app-update.yml, which electron-updater reads at
+# runtime to find the feed — the actual upload is done by scripts/publish.mjs
+# via gh, not electron-builder's own publisher (which raced on parallel uploads).
 publish:
   provider: github
   owner: avanrossum
   repo: claude-command-center-releases
-  # electron-builder uploads to a DRAFT (GitHub allows a draft with no
-  # pre-existing tag). publish.mjs flips it to published afterward, which
-  # creates the tag — electron-updater can't read a draft without a token.
-  releaseType: draft
 
 # Space-free artifact names. The default uses productName ("CC Command Center"),
 # whose spaces GitHub rewrites to dots on upload — which then don't match the
