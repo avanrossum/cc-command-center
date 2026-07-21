@@ -18,7 +18,8 @@
 //     APPLE_TEAM_ID). The updater refuses unsigned builds, so this is required.
 //   - A clean tree on a release tag (run npm run bump first).
 import { execSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -66,13 +67,17 @@ try {
 } catch {
   // File doesn't exist yet — first publish. No sha needed.
 }
-const fields = [
-  `-f message=changelog: v${version}`,
-  `-f content=${b64}`,
-  ...(sha ? [`-f sha=${sha}`] : []),
-]
-sh(`gh api --method PUT repos/${RELEASES_REPO}/contents/changelog.json ${fields.join(' ')}`, {
-  stdio: ['ignore', 'ignore', 'inherit'],
-})
+// Send the request body as a JSON file on stdin, not as -f flags: the commit
+// message contains a space, and -f field=value in a shell string splits on it.
+const body = { message: `changelog: v${version}`, content: b64, ...(sha ? { sha } : {}) }
+const bodyPath = join(tmpdir(), `ccc-changelog-${version}.json`)
+writeFileSync(bodyPath, JSON.stringify(body))
+try {
+  sh(`gh api --method PUT repos/${RELEASES_REPO}/contents/changelog.json --input "${bodyPath}"`, {
+    stdio: ['ignore', 'ignore', 'inherit'],
+  })
+} finally {
+  rmSync(bodyPath, { force: true })
+}
 
 console.log(`\n✓ Published v${version}. The app will offer it on the next check.`)
