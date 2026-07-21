@@ -518,7 +518,7 @@ export function deleteCategory(id: number): void {
 
 export function ensureNode(
   sessionId: string,
-  info: { cwd?: string; name?: string; origin?: string },
+  info: { cwd?: string; name?: string; origin?: string; skipAutoCategory?: boolean },
 ): void {
   const d = must()
   const now = Date.now()
@@ -531,8 +531,14 @@ export function ensureNode(
     // Auto-categorize a brand-new session by folder: if another session in the
     // same cwd is already categorized, inherit that category. Only at creation,
     // so a later manual move to Uncategorized (or elsewhere) is never overridden.
+    //
+    // skipAutoCategory is for a spawned CHILD, whose category is decided by its
+    // edge — a blocking child inherits its parent via categoryOf, a tangential
+    // child stays uncategorized. A child runs in its parent's folder, so without
+    // this it would wrongly pick up a category from a sibling that merely shares
+    // that folder (the "tangential child landed in some other category" bug).
     let categoryId: number | null = null
-    if (info.cwd) {
+    if (info.cwd && !info.skipAutoCategory) {
       const sib = d
         .prepare('SELECT category_id FROM node WHERE cwd=? AND category_id IS NOT NULL LIMIT 1')
         .get(info.cwd) as { category_id: number } | undefined

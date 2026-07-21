@@ -461,7 +461,15 @@ function snapshot(): Snapshot {
   for (const s of sessions) {
     // Skip --bg-spare processes: they're not real interactive sessions, and a
     // node for one would resurface as a bogus dormant "resume" row once it dies.
-    if (s.sessionId && !s.isSpare) ensureNode(s.sessionId, { cwd: s.cwd, name: s.name, origin: 'adopted' })
+    if (s.sessionId && !s.isSpare)
+      // A pending child must NOT inherit a category from a sibling in its
+      // (parent's) folder — its category comes from its edge. See ensureNode.
+      ensureNode(s.sessionId, {
+        cwd: s.cwd,
+        name: s.name,
+        origin: 'adopted',
+        skipAutoCategory: pendingChildren.has(s.pid),
+      })
   }
   tagAdoptedTerminals(sessions)
   reconcilePendingChildren(sessions)
@@ -1717,9 +1725,14 @@ function reconcilePendingChildren(sessions: LiveSession[]): void {
     if (!pend) continue
     pendingChildren.delete(s.pid)
     try {
-      ensureNode(s.sessionId, { cwd: s.cwd, name: s.name })
+      ensureNode(s.sessionId, { cwd: s.cwd, name: s.name, skipAutoCategory: true })
       if (pend.apiKeyId != null) setNodeApiKey(s.sessionId, pend.apiKeyId) // resume re-applies it
       setParent(s.sessionId, pend.parentSessionId, pend.type)
+      // Guarantee the child's category is edge-determined: null here means a
+      // tangential child shows in Uncategorized and a blocking child inherits
+      // its parent via categoryOf. Belt-and-suspenders in case another path
+      // created the node and auto-categorized it before this ran.
+      assignCategory(s.sessionId, null)
       // A user-set name is the child's stable, @-addressable handle (the bus
       // resolves @name on the user name before Claude's drifting auto-title).
       if (pend.name) setSessionName(s.sessionId, pend.name)
