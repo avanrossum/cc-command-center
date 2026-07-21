@@ -19,10 +19,20 @@ from the statusLine — see `App.tsx:46`). Color logic already exists: `ctxTone(
    (`boardItems`, full `Session` objects). Same `s.contextPct`. User said "if it's not too
    much" — it is cheap here because the data's already on the card.
 
-**Implementation:** a `<div className="ctxbar ...">` with `style={{ width: `${pct}%` }}`,
-positioned `absolute; bottom:0; left:0` inside a `position: relative` parent (`.item`/`.wcard`
-in `styles.css`). Height ~2px docked feel or up to ~10px per the request — try ~4–6px first,
-it reads as a border without stealing row height. Guard on `typeof s.contextPct === 'number'`.
+**Placement (clarified by user):** the bar spans the **full width of the whole brick** — the
+entire rail row / entire board card — sitting flush at its bottom edge **as if it were the
+item's own bottom border**. NOT confined under the `.ctxchip`. So the `position: relative`
+parent is the whole `<li>` / whole `.wcard`, and the bar is `left:0; right:0; bottom:0`; its
+*fill* width is `pct%` of that full span (a track from 0→100% across the whole item, filled to
+`pct`). Consider a faint full-width track behind the fill so an item at 6% still reads as "6%
+of the way", not just a stub.
+
+**Implementation:** a `<div className="ctxbar">` (the track) containing a
+`<div className="ctxbar-fill" style={{ width: `${pct}%` }}>`, the track pinned
+`absolute; left:0; right:0; bottom:0` inside the `position: relative` item. Height ~4–6px first
+(reads as a border without stealing row height); the request allows up to ~10px. Guard on
+`typeof s.contextPct === 'number'`. Mind the row's existing bottom border/rounding so the bar
+sits on the edge cleanly.
 
 **Color:** simplest is reuse the 3-tone (`ctxTone`) so the bar matches the chip. Richer, and
 closer to "changes color as it increases", is a **continuous hue**: interpolate green→amber→red
@@ -47,13 +57,19 @@ live to all terminals. Wiring:
   metrics — hoist the `FitAddon` into a ref so the effect can call `fit.fit()`; the theme effect
   doesn't re-fit because colors don't change metrics). DOM renderer, so no texture-atlas reset
   needed.
-- Picker: a free-text family field works with zero deps and is fully flexible. Upgrade to a real
-  installed-font dropdown via the **Local Font Access API** (`window.queryLocalFonts()` — Chromium
-  ≥103, so Electron 43 has it; auto-grant the permission in main via
-  `session.setPermissionRequestHandler`), filtered to monospace-ish families. Note in the UI that
-  a **monospace** font is required or Claude's TUI misaligns.
+- Picker (user wants the full thing in ONE pass — do NOT ship a free-text-only interim and redo
+  it): build the **installed-font dropdown** directly via the **Local Font Access API**
+  (`window.queryLocalFonts()` — Chromium ≥103, so Electron 43 has it; auto-grant the permission in
+  main via `session.setPermissionRequestHandler`). Enumerate the machine's fonts, filter to
+  **monospace** (queryLocalFonts doesn't flag monospace directly — measure glyph advance of `i`
+  vs `W` in an offscreen canvas per family and keep equal-width ones, and/or match a known
+  monospace-name list), and present them in a dropdown. Keep a free-text field too, but only as a
+  fallback for a family the enumeration missed — not as the primary path. Note in the UI that a
+  monospace font is required or Claude's TUI misaligns. A live **preview** line ("The quick brown
+  fox 0123 () {}") at the chosen family+size makes legibility obvious before applying.
 - Optional later: load a custom font **file** the user points at (`@font-face` from a `file://`
   data URL) for fonts not installed system-wide; and `@xterm/addon-ligatures` for Fira Code etc.
+  These stay as follow-ups; the installed-font picker is the "all at once" deliverable.
 
 ## ✅ Pre-release cleanup — DONE (2026-07-20, before The Arbiter)
 
