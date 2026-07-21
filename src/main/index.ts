@@ -1917,11 +1917,56 @@ ipcMain.handle('shell:openExternal', (_e, url: string) => {
   return { ok: true }
 })
 
+// Remembered window bounds. Restored only if they still land on a connected
+// display's work area — a saved position from an unplugged external monitor
+// would otherwise open the window off-screen where it can't be reached.
+const MIN_W = 820
+const MIN_H = 480
+function savedBounds(): { x?: number; y?: number; width: number; height: number } {
+  const def = { width: 1180, height: 800 }
+  try {
+    const raw = getAppState('windowBounds')
+    if (!raw) return def
+    const b = JSON.parse(raw) as { x?: number; y?: number; width?: number; height?: number }
+    const width = Math.max(MIN_W, Math.min(Number(b.width) || def.width, 6000))
+    const height = Math.max(MIN_H, Math.min(Number(b.height) || def.height, 4000))
+    if (typeof b.x !== 'number' || typeof b.y !== 'number') return { width, height }
+    // Require the saved rect to overlap some display's work area by a visible
+    // margin, so the title bar is always grabbable.
+    const onScreen = screen.getAllDisplays().some((d) => {
+      const w = d.workArea
+      return (
+        b.x! + width > w.x + 40 &&
+        b.x! < w.x + w.width - 40 &&
+        b.y! + 20 >= w.y && // title bar not above the display top
+        b.y! < w.y + w.height - 40
+      )
+    })
+    return onScreen ? { x: b.x, y: b.y, width, height } : { width, height }
+  } catch {
+    return def
+  }
+}
+let saveBoundsTimer: NodeJS.Timeout | null = null
+function persistBounds(): void {
+  if (!win || win.isDestroyed() || win.isMinimized()) return
+  // getBounds while maximized/fullscreen reports the fill size — skip so the
+  // restored size is the user's real windowed size, not the screen.
+  if (win.isMaximized() || win.isFullScreen()) return
+  try {
+    const b = win.getBounds()
+    setAppState('windowBounds', JSON.stringify({ x: b.x, y: b.y, width: b.width, height: b.height }))
+  } catch {
+    /* ignore */
+  }
+}
+
 function createWindow(): void {
+  const b = savedBounds()
   win = new BrowserWindow({
-    width: 1180,
-    height: 800,
-    minWidth: 820,
+    ...b,
+    minWidth: MIN_W,
+    minHeight: MIN_H,
     backgroundColor: '#0e0d0b',
     title: 'CC Command Center',
     icon: join(app.getAppPath(), 'resources/icon.png'),
@@ -1932,6 +1977,13 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   })
+  const scheduleSave = (): void => {
+    if (saveBoundsTimer) clearTimeout(saveBoundsTimer)
+    saveBoundsTimer = setTimeout(persistBounds, 500)
+  }
+  win.on('resized', scheduleSave)
+  win.on('moved', scheduleSave)
+  win.on('close', persistBounds)
 
   if (process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(process.env.ELECTRON_RENDERER_URL)
