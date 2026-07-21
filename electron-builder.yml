@@ -14,9 +14,10 @@ publish:
   provider: github
   owner: avanrossum
   repo: claude-command-center-releases
-  # Publish a real (non-draft) release: electron-updater can't read a draft
-  # without a token, and the app ships with none.
-  releaseType: release
+  # electron-builder uploads to a DRAFT (GitHub allows a draft with no
+  # pre-existing tag). publish.mjs flips it to published afterward, which
+  # creates the tag — electron-updater can't read a draft without a token.
+  releaseType: draft
 
 # Space-free artifact names. The default uses productName ("CC Command Center"),
 # whose spaces GitHub rewrites to dots on upload — which then don't match the

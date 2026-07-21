@@ -80,4 +80,10 @@ try {
   rmSync(bodyPath, { force: true })
 }
 
+// Flip the draft electron-builder created to a real published release. This
+// creates the v<version> tag (at the repo default branch) and makes the assets
+// + latest-mac.yml reachable without a token, which the app's updater needs.
+console.log(`\n▶ Publishing the v${version} release…`)
+sh(`gh release edit v${version} --repo ${RELEASES_REPO} --draft=false --latest`)
+
 console.log(`\n✓ Published v${version}. The app will offer it on the next check.`)
