@@ -98,6 +98,16 @@ import {
 import { scanSubtasks, type SubtaskInfo } from './engine/subtasks'
 
 let win: BrowserWindow | null = null
+// Send to the renderer, guarding the window's whole lifecycle. `win?.` only
+// covers null; during quit / quitAndInstall the window is a live reference that
+// has been DESTROYED, and a still-running node-pty can fire one last `data`
+// event whose handler would then touch `win.webContents` and throw
+// "Object has been destroyed". Check isDestroyed() on both.
+function sendToWin(channel: string, payload?: unknown): void {
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+    win.webContents.send(channel, payload)
+  }
+}
 let pollTimer: NodeJS.Timeout | null = null
 let winFocused = true // OS window focus — a gate is auto-"seen" only while you're actually looking
 let lastUnhandled = new Set<string>() // last good unhandled set, retained if a scan's ledger sync throws
@@ -840,7 +850,7 @@ function pushSessions(): void {
   // before its try block, leaving arbiterRunning stuck true so the agent never
   // ran again for the rest of the process.
   if (!win || win.isDestroyed()) return
-  win.webContents.send('cc:sessions', snapshot())
+  sendToWin('cc:sessions', snapshot())
 }
 
 // ---------- Arbiter scheduling ----------
@@ -1033,7 +1043,7 @@ function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: str
   terminals.set(key, term)
   p.onData((data) => {
     term.buffer = (term.buffer + data).slice(-BUFFER_CAP)
-    if (attachedKey === term.key) win?.webContents.send('term:data', { key: term.key, data })
+    if (attachedKey === term.key) sendToWin('term:data', { key: term.key, data })
   })
   p.onExit(({ exitCode }) => {
     term.exited = true
@@ -1051,7 +1061,7 @@ function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: str
         /* already gone */
       }
     }
-    win?.webContents.send('term:exit', { key: term.key, code: exitCode })
+    sendToWin('term:exit', { key: term.key, code: exitCode })
 
     // A managed session whose process ended on its own (user typed `exit`, the
     // agent self-terminated, or it crashed) is auto-removed from the list. Skip
@@ -1081,7 +1091,7 @@ function autoRemoveExitedSession(sessionId: string, key: string): void {
   }
   terminals.delete(key)
   if (attachedKey === key) attachedKey = null
-  win?.webContents.send('session:removed', { ids: [sessionId] })
+  sendToWin('session:removed', { ids: [sessionId] })
   pushSessions()
 }
 
@@ -1112,8 +1122,8 @@ function openTerminal(key: string, opts: OpenOpts): void {
   if (fresh && opts.resume && opts.sessionId && !hasTranscript(opts.sessionId, opts.cwd)) {
     attachedKey = key
     const sb = getScrollback(opts.sessionId)
-    if (sb) win?.webContents.send('term:data', { key, data: sb })
-    win?.webContents.send('term:recover', { key, sessionId: opts.sessionId, cwd: opts.cwd })
+    if (sb) sendToWin('term:data', { key, data: sb })
+    sendToWin('term:recover', { key, sessionId: opts.sessionId, cwd: opts.cwd })
     return
   }
   if (!term) {
@@ -1166,9 +1176,9 @@ function openTerminal(key: string, opts: OpenOpts): void {
   // staleness is bounded by the 1000-line cap and is a known cosmetic limit.)
   if (fresh && opts.sessionId) {
     const sb = getScrollback(opts.sessionId)
-    if (sb) win?.webContents.send('term:data', { key, data: sb })
+    if (sb) sendToWin('term:data', { key, data: sb })
   }
-  if (term.buffer) win?.webContents.send('term:data', { key, data: term.buffer }) // replay live buffer
+  if (term.buffer) sendToWin('term:data', { key, data: term.buffer }) // replay live buffer
 }
 
 // Launch a brand-new managed Claude session in a folder. Keyed by `new:<pid>`
@@ -1222,7 +1232,7 @@ function launchSession(
   console.log(`[main] new session: spawned ${cmd} ${args.join(' ')} in ${cwd} pid=${p.pid}`)
   wireTerm(key, p, { cwd })
   attachedKey = key
-  win?.webContents.send('term:show', { key, pid: p.pid, name: 'new session', cwd })
+  sendToWin('term:show', { key, pid: p.pid, name: 'new session', cwd })
   return p.pid
 }
 
@@ -1816,7 +1826,7 @@ ipcMain.handle('term:open', (_e, key: string, opts: OpenOpts) => {
 ipcMain.on('term:attach', (_e, key: string) => {
   attachedKey = key
   const t = terminals.get(key)
-  if (t?.buffer) win?.webContents.send('term:data', { key, data: t.buffer })
+  if (t?.buffer) sendToWin('term:data', { key, data: t.buffer })
 })
 ipcMain.on('term:input', (_e, key: string, data: string) => {
   terminals.get(key)?.pty.write(data)
@@ -2044,7 +2054,7 @@ function createWindow(): void {
     if (demoCwd) {
       const key = 'new:demo'
       openTerminal(key, { cwd: demoCwd, resume: false, cols: 120, rows: 30 })
-      win?.webContents.send('term:show', { key, name: 'demo (scratchpad)', cwd: demoCwd })
+      sendToWin('term:show', { key, name: 'demo (scratchpad)', cwd: demoCwd })
     }
 
     // Dev affordance: capture just this window (not the whole screen) when asked.
@@ -3085,7 +3095,7 @@ app.whenReady().then(() => {
   setAboutPanel()
   installAppMenu(() => win, {
     onCheckUpdates: () => void checkForUpdates(true),
-    onSettings: () => win?.webContents.send('menu:settings'),
+    onSettings: () => sendToWin('menu:settings'),
   })
   initRegistry(join(app.getPath('userData'), 'registry.db'))
   syncStatusHooksFlag() // flag mirrors what's ACTUALLY in ~/.claude/settings.json
