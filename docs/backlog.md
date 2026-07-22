@@ -130,6 +130,55 @@ format. Quick check, not a build.
 **Effort:** medium. Extends the subagent transcript scanner with a shell-task pass + a workflow
 reader; the completion-status map is one scan of `task-notification` entries.
 
+### D. Artifact preview — surface the visuals a session produces (spec; build AFTER C)
+
+CC's equivalent of Desktop's inline rendering. Desktop renders what Claude emits in its response
+stream; CC wraps a CLI that emits text, so there's no rich-content channel. But a session's work
+product lands as **files on disk** (charts, screenshots, HTML mocks, PDFs, SVGs, docs) and as
+**paths/links in the terminal**. CC is Electron, so Chromium renders png/jpg/gif/webp/svg/pdf/html
+natively — we surface the artifacts a session makes, no terminal injection needed.
+
+**Surface = a fold-out drawer above the terminal (user design, 2026-07-22).** NOT a floating window.
+When an artifact is shown, the terminal area splits horizontally: a **drawer folds out on top**
+(reusing the exact fold-out mechanic the "needs you" companion pane already uses), terminal stays
+below. Drawer layout:
+- **Left:** the rendered artifact (Electron webview/`<img>`/PDF viewer).
+- **Right:** a list of this session's captured artifacts; click one → it opens in the left preview.
+  Per-artifact **"Reveal in Finder"** (`shell.showItemInFolder`).
+- **Closed state:** the drawer handle shows a count — "N artifacts" — like the needs-you pane's
+  closed state.
+
+**Detection (two triggers, same as the earlier note):**
+- **Link/path interception** in the terminal — the precise trigger. OSC 8 links are already caught
+  at [Terminal.tsx:62](src/renderer/src/Terminal.tsx:62) (→ `openExternal`); reroute previewable
+  targets to the drawer instead of the OS. Plus ⌘-click / right-click a path → Preview.
+- **cwd file-watch** — a chokidar watcher (also the backlogged poll→event upgrade) notices newly
+  written previewable files. Scope hard: ignore `node_modules`/`.git`/dotdirs, debounce, size cap.
+
+**Durable capture, attached to the session (user, 2026-07-22).** Store detected artifacts in the
+registry keyed by session (path + type + created_at + optional label) — a new `artifact` table /
+migration. On restart, re-verify the file still exists; if present, the artifact is still listed
+(so the drawer survives restart); if gone, hide/mark stale. This is why watching (not just
+live-intercepting) matters — it lets artifacts persist.
+
+**Non-active-session handling (user, 2026-07-22) — no context-jarring.** The drawer belongs to the
+ACTIVE session and only ever shows ITS artifacts. If a NON-active session produces an artifact, do
+NOT pop the drawer or swap in an unrelated visual — it just accrues to that session's count. When
+you switch to that session, its drawer handle reads "N artifacts," open it if you want.
+
+**Security caveat.** An HTML file the AGENT wrote is untrusted. Render HTML in a locked-down webview
+(`sandbox: true`, `nodeIntegration: false`, `contextIsolation: true`, JavaScript disabled for a
+static render or network blocked via CSP). Images / PDF / SVG are safe. Decide the HTML posture up
+front.
+
+**Reuses:** the needs-you fold-out mechanic, the pop-out infra, the OSC-8 link handler, and the
+(backlogged) chokidar watcher. Aside: `@xterm/addon-image` renders sixel/iTerm2 images *in* the
+terminal, but only if the CLI emits those sequences — Claude Code emits text, so that path is
+mostly N/A.
+
+**Sequencing:** link/path interception → drawer preview first (precise, cheap), then cwd-watch
+auto-capture + durable storage. Build AFTER C (the Activity ledger) per user direction.
+
 ## ✅ Pre-release cleanup — DONE (2026-07-20, before The Arbiter)
 
 Sequence the user set and we followed: (1) `feat/bigger-control-space` merged → (2) this cleanup
