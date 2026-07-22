@@ -1,6 +1,22 @@
 # Backlog — next features (specs)
 
-## ⏭ NEXT UP (queued 2026-07-21)
+## ✅ SHIPPED 2026-07-22 (versions 0.14.2 → 0.16.0)
+
+Everything in the NEXT UP block below is now built and released — kept here as the
+spec of record.
+- **A. Context-usage bar** + **B. configurable terminal font** → v0.14.2.
+- **C. Activity ledger** → v0.14.4 (shell tasks + failed awareness + rail "⚙ N" + the
+  "done — your move" needs-you), then v0.15.0 (open-session priority + rollup chips +
+  rich workflow summaries). Spec C is complete EXCEPT per-phase workflow progress + token/
+  duration totals, which are NOT reconstructable from disk (the journal/agent files carry
+  no phase field or usage — that data lives only in the running app's memory).
+- **D. Artifact preview → v0.16.0 is v1 ONLY**: passive detection (Write/Edit paths + a
+  shallow cwd scan) + a companion "artifacts" list with Open / Reveal-in-Finder, guarded by
+  isSafeArtifact. **Still to build (deferred — needs the user's eyes + a security call):**
+  the fold-out drawer above the terminal, in-app rendering of images/PDF/**sandboxed HTML**,
+  a cwd file-watch for live detection, and durable per-session capture. See section D below.
+
+## ⏭ NEXT UP (queued 2026-07-21) — spec of record for the shipped work above
 
 ### A. Context-usage progress bar under each item — do this first, after auto-update is confirmed working
 
