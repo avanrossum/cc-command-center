@@ -945,6 +945,7 @@ export function App() {
       sessions={live.filter((s) => companionScope === 'all' || s.categoryId === selectedCat)}
       now={snap.scannedAt || Date.now()}
       onOpen={openSession}
+      activeSessionId={selected?.sessionId ?? null}
     />
   )
 
@@ -2512,10 +2513,12 @@ function FleetActivity({
   sessions,
   now,
   onOpen,
+  activeSessionId,
 }: {
   sessions: Session[]
   now: number
   onOpen: (s: Session) => void
+  activeSessionId: string | null
 }): React.ReactElement {
   const [open, setOpen] = useState(false)
   useEffect(() => {
@@ -2553,6 +2556,48 @@ function FleetActivity({
       : [running > 0 ? `${running} running` : '', failedN > 0 ? `${failedN} failed` : '']
           .filter(Boolean)
           .join(' · ') || 'idle'
+  // Open-session priority: the session you're viewing gets the FULL ledger at the
+  // top; every other session collapses to a compact rollup chip (⚙ running / ⚠
+  // failed), clicking which switches to it. So detail follows your attention.
+  type Group = (typeof groups)[number]
+  const activeGroup = groups.find((g) => g.session.sessionId === activeSessionId) ?? null
+  const others = groups.filter((g) => g.session.sessionId !== activeSessionId)
+
+  const renderGroup = (g: Group): React.ReactElement => (
+    <div className="fleet-group" key={g.session.sessionId}>
+      <button className="fleet-owner" onClick={() => onOpen(g.session)}>
+        {g.session.name ?? `pid ${g.session.pid}`}
+        {g.active.length > 0 && <span className="fleet-owner-n">{g.active.length}</span>}
+      </button>
+      {[...g.active, ...g.failed].map((t) => (
+        <div className={`fleet-sub sub-${t.status}`} key={t.id}>
+          <span className={`fleet-dot fs-${t.status}`} />
+          <span className="fleet-desc">{t.description}</span>
+          {t.source === 'workflow' && <span className="fleet-bg">wf</span>}
+          {t.source === 'shell' && <span className="fleet-bg">sh</span>}
+          {t.source === 'task' && t.background && <span className="fleet-bg">bg</span>}
+        </div>
+      ))}
+      {g.doneCount > 0 && (
+        <div className="fleet-donerow">
+          {g.doneCount} done{g.active.length === 0 && g.failed.length === 0 ? ' · idle' : ''}
+        </div>
+      )}
+    </div>
+  )
+
+  const renderRollup = (g: Group): React.ReactElement => (
+    <button className="fleet-rollup" key={g.session.sessionId} onClick={() => onOpen(g.session)}>
+      <span className="fleet-rollup-name">{g.session.name ?? `pid ${g.session.pid}`}</span>
+      <span className="grow" />
+      {g.active.length > 0 && <span className="fleet-rollup-run">⚙ {g.active.length}</span>}
+      {g.failed.length > 0 && <span className="fleet-rollup-fail">⚠ {g.failed.length}</span>}
+      {g.active.length === 0 && g.failed.length === 0 && (
+        <span className="fleet-rollup-idle">{g.doneCount} done</span>
+      )}
+    </button>
+  )
+
   return (
     <div className={`fleet${open ? ' open' : ''}`}>
       <button className="fleet-head" onClick={toggle} title="Background activity across the fleet — agents, shell tasks, and workflows">
@@ -2565,28 +2610,15 @@ function FleetActivity({
           {groups.length === 0 ? (
             <div className="fleet-empty">No session has background activity.</div>
           ) : (
-            groups.map((g) => (
-              <div className="fleet-group" key={g.session.sessionId}>
-                <button className="fleet-owner" onClick={() => onOpen(g.session)}>
-                  {g.session.name ?? `pid ${g.session.pid}`}
-                  {g.active.length > 0 && <span className="fleet-owner-n">{g.active.length}</span>}
-                </button>
-                {[...g.active, ...g.failed].map((t) => (
-                  <div className={`fleet-sub sub-${t.status}`} key={t.id}>
-                    <span className={`fleet-dot fs-${t.status}`} />
-                    <span className="fleet-desc">{t.description}</span>
-                    {t.source === 'workflow' && <span className="fleet-bg">wf</span>}
-                    {t.source === 'shell' && <span className="fleet-bg">sh</span>}
-                    {t.source === 'task' && t.background && <span className="fleet-bg">bg</span>}
-                  </div>
-                ))}
-                {g.doneCount > 0 && (
-                  <div className="fleet-donerow">
-                    {g.doneCount} done{g.active.length === 0 && g.failed.length === 0 ? ' · idle' : ''}
-                  </div>
-                )}
-              </div>
-            ))
+            <>
+              {activeGroup && renderGroup(activeGroup)}
+              {others.length > 0 && (
+                <div className="fleet-rollups">
+                  {activeGroup && <div className="fleet-rollups-label">other sessions</div>}
+                  {others.map(renderRollup)}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

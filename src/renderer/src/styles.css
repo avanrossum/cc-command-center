@@ -2250,6 +2250,62 @@ select.cat-in {
   border-radius: 20px;
   padding: 0 5px;
 }
+/* Rollup chips: every session that ISN'T the one you're viewing, collapsed to a
+   one-line summary. Click switches to it (then it gets the full ledger). */
+.fleet-rollups {
+  margin-top: 8px;
+  border-top: 1px solid var(--cc-border);
+  padding-top: 6px;
+}
+.fleet-rollups-label {
+  font: 600 8.5px var(--cc-font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cc-meta);
+  margin-bottom: 3px;
+}
+.fleet-rollup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 4px 0;
+  cursor: pointer;
+  font: 500 11px var(--cc-font-ui);
+  color: var(--cc-dim);
+  text-align: left;
+}
+.fleet-rollup:hover {
+  color: var(--cc-text);
+}
+.fleet-rollup-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fleet-rollup .grow {
+  flex: 1;
+}
+.fleet-rollup-run {
+  flex: none;
+  font-family: var(--cc-font-mono);
+  font-size: 10px;
+  color: var(--cc-working);
+}
+.fleet-rollup-fail {
+  flex: none;
+  font-family: var(--cc-font-mono);
+  font-size: 10px;
+  color: var(--cc-blocked);
+}
+.fleet-rollup-idle {
+  flex: none;
+  font-family: var(--cc-font-mono);
+  font-size: 9.5px;
+  color: var(--cc-meta);
+}
 .fleet-sub {
   display: flex;
   align-items: center;
