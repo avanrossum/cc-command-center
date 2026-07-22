@@ -3399,6 +3399,7 @@ function CategoryEditor({
           value={name}
           placeholder="Name"
           onChange={(e) => setName(e.target.value)}
+          onBlur={commitName}
           onKeyDown={(e) => {
             if (e.key === 'Enter') save()
             if (e.key === 'Escape') close()
@@ -3414,6 +3415,7 @@ function CategoryEditor({
             maxLength={8}
             placeholder={`Short word (default ${autoTag(name || edit.name || '?')})`}
             onChange={(e) => setTag(e.target.value)}
+            onBlur={commitLabel}
             onKeyDown={(e) => {
               if (e.key === 'Enter') save()
               if (e.key === 'Escape') close()
@@ -3425,7 +3427,7 @@ function CategoryEditor({
             type="button"
             className={`cat-emoji-opt none${!emoji.trim() ? ' on' : ''}`}
             title="No emoji"
-            onClick={() => setEmoji('')}
+            onClick={() => pickEmoji('')}
           >
             ⊘
           </button>
@@ -3434,7 +3436,7 @@ function CategoryEditor({
               type="button"
               key={e}
               className={`cat-emoji-opt${emoji.trim() === e ? ' on' : ''}`}
-              onClick={() => setEmoji(e)}
+              onClick={() => pickEmoji(e)}
             >
               {e}
             </button>
@@ -3447,13 +3449,13 @@ function CategoryEditor({
               className={`cat-sw${col === color ? ' on' : ''}`}
               style={{ background: col }}
               title={col}
-              onClick={() => setColor(col)}
+              onClick={() => pickColor(col)}
             />
           ))}
         </div>
         <div className="menusep" />
         <button className="menuitem" onClick={save}>
-          {isCreate ? 'Create' : 'Save'}
+          {isCreate ? 'Create' : 'Done'}
         </button>
         {/* The privacy gate. Off by default and per-category, so client work
             never reaches the API unless it is switched on deliberately. */}
