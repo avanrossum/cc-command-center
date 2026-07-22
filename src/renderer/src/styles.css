@@ -2531,6 +2531,17 @@ select.cat-in {
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* highlight.js's theme paints its own background/padding on .hljs — strip those
+   so highlighted code sits in the drawer like the plain-text preview does, just
+   with token colors. */
+.artdrawer-text.hljs {
+  background: transparent;
+  padding: 0;
+}
+.artdrawer-audio {
+  width: 100%;
+  margin-top: 6px;
+}
 .artdrawer-msg {
   color: var(--cc-dim);
   font-size: 12px;

@@ -3,6 +3,7 @@ import { insertablePath } from './util'
 import { TerminalView } from './Terminal'
 import { THEMES, themeByName, DEFAULT_THEME_NAME } from './themes'
 import { listMonospaceFonts, fontFamilyCss, DEFAULT_TERMINAL_FONT_SIZE } from './fonts'
+import { highlightCode } from './highlight'
 
 type CoarseState = 'working' | 'waiting' | 'idle' | 'unknown'
 // 'blocked' and 'permission' are DERIVED display states, not coarse engine states.
@@ -55,7 +56,7 @@ interface Session {
   artifacts?: {
     path: string
     name: string
-    kind: 'image' | 'svg' | 'pdf' | 'html' | 'markdown' | 'text'
+    kind: 'image' | 'svg' | 'pdf' | 'html' | 'markdown' | 'text' | 'audio' | 'code' | 'office'
     mtimeMs: number
   }[]
   unhandled?: boolean // open gate you haven't looked at yet — shows a pip until seen
@@ -2800,18 +2801,35 @@ function ArtifactPreview({
   }, [art.path])
 
   if (state.loading) return <div className="artdrawer-msg">loading…</div>
-  if (state.dataUrl) return <img className="artdrawer-img" src={state.dataUrl} alt={art.name} />
-  if (state.text != null)
+  if (state.dataUrl)
+    return art.kind === 'audio' ? (
+      <audio className="artdrawer-audio" controls src={state.dataUrl} />
+    ) : (
+      <img className="artdrawer-img" src={state.dataUrl} alt={art.name} />
+    )
+  if (state.text != null) {
+    if (art.kind === 'code' && state.text) {
+      const html = highlightCode(state.text, art.name)
+      if (html != null)
+        return (
+          <pre className="artdrawer-text hljs">
+            <code dangerouslySetInnerHTML={{ __html: html }} />
+          </pre>
+        )
+    }
     return <pre className="artdrawer-text">{state.text || '(empty file)'}</pre>
+  }
   const why = state.tooBig
     ? 'Too large to preview inline.'
     : art.kind === 'html'
       ? 'Opens in your browser.'
       : art.kind === 'pdf'
         ? 'PDF — open to view it.'
-        : state.failed
-          ? 'Could not read this file.'
-          : 'No inline preview for this type.'
+        : art.kind === 'office'
+          ? 'Opens in your default app.'
+          : state.failed
+            ? 'Could not read this file.'
+            : 'No inline preview for this type.'
   return (
     <div className="artdrawer-msg">
       {why}{' '}

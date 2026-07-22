@@ -102,7 +102,7 @@ import {
   type SubtaskInfo,
   type WorkflowInfo,
 } from './engine/subtasks'
-import { scanArtifacts, type ArtifactInfo } from './engine/artifacts'
+import { scanArtifacts, artifactKindOf, type ArtifactInfo } from './engine/artifacts'
 
 let win: BrowserWindow | null = null
 // Send to the renderer, guarding the window's whole lifecycle. `win?.` only
@@ -1988,13 +1988,9 @@ ipcMain.handle('shell:openExternal', (_e, url: string) => {
 // app, or reveal it in Finder. Defense-in-depth: the path must be an existing
 // file with a previewable extension, so even though these paths come from our own
 // scan, a bad one can't be turned into "open an arbitrary path".
-const ARTIFACT_EXTS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.pdf', '.html', '.htm', '.md',
-  '.markdown', '.txt', '.csv', '.tsv', '.log',
-])
 function isSafeArtifact(p: unknown): p is string {
   if (typeof p !== 'string' || !p) return false
-  if (!ARTIFACT_EXTS.has(extname(p).toLowerCase())) return false
+  if (artifactKindOf(p) === null) return false // recognized artifact extension only
   try {
     return statSync(p).isFile()
   } catch {
@@ -2016,7 +2012,7 @@ ipcMain.handle('artifact:reveal', (_e, filePath: string) => {
 // run); text/markdown come back as a (size-capped) string. HTML and PDF return
 // nothing to inline — the renderer opens those externally (HTML in the real
 // browser). Guarded + size-capped so this can't slurp a huge or arbitrary file.
-const IMG_MIME: Record<string, string> = {
+const MEDIA_MIME: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -2024,25 +2020,34 @@ const IMG_MIME: Record<string, string> = {
   '.webp': 'image/webp',
   '.bmp': 'image/bmp',
   '.svg': 'image/svg+xml',
+  '.wav': 'audio/wav',
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac',
+  '.aac': 'audio/aac',
 }
-const TEXT_EXTS = new Set(['.txt', '.csv', '.tsv', '.log', '.md', '.markdown'])
-const MAX_IMG_BYTES = 12 * 1024 * 1024
+const MAX_MEDIA_BYTES = 20 * 1024 * 1024
 const MAX_TEXT_BYTES = 512 * 1024
 ipcMain.handle('artifact:read', (_e, filePath: string) => {
   if (!isSafeArtifact(filePath)) return { ok: false as const }
   const ext = extname(filePath).toLowerCase()
+  const kind = artifactKindOf(filePath)
   try {
     const size = statSync(filePath).size
-    const mime = IMG_MIME[ext]
-    if (mime) {
-      if (size > MAX_IMG_BYTES) return { ok: true as const, tooBig: true }
+    const mime = MEDIA_MIME[ext]
+    // Images/SVG (<img>) and audio (<audio>) both ride a data URL — script-inert.
+    if (mime && (kind === 'image' || kind === 'svg' || kind === 'audio')) {
+      if (size > MAX_MEDIA_BYTES) return { ok: true as const, tooBig: true }
       return { ok: true as const, dataUrl: `data:${mime};base64,${readFileSync(filePath).toString('base64')}` }
     }
-    if (TEXT_EXTS.has(ext)) {
+    // Text, markdown, and code all come back as a (capped) string; the renderer
+    // syntax-highlights the code ones.
+    if (kind === 'text' || kind === 'markdown' || kind === 'code') {
       if (size > MAX_TEXT_BYTES) return { ok: true as const, tooBig: true }
       return { ok: true as const, text: readFileSync(filePath, 'utf8') }
     }
-    return { ok: true as const } // pdf/html — inline nothing; open externally
+    return { ok: true as const } // pdf/html/office — inline nothing; open externally
   } catch {
     return { ok: false as const }
   }
