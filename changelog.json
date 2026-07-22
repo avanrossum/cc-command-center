@@ -1,6 +1,18 @@
 {
   "versions": [
     {
+      "version": "0.17.0",
+      "date": "2026-07-22",
+      "critical": false,
+      "features": [
+        "Artifact preview drawer: a session's files now open in a fold-down drawer over the terminal — images and SVG render inline, text/CSV/Markdown show as text, and HTML/PDF open in your browser. A clear \"close drawer\" bar sits at the bottom.",
+        "Artifacts are now scoped to what the session itself produced (from its own writes), so sessions sharing a folder no longer show each other's files.",
+        "Artifacts now include plain-text and data files (.txt, .csv, .tsv, .log), not just images and docs.",
+        "Fixed the 5-hour and 7-day usage readouts bouncing between values — they now reconcile every session's snapshot into one stable current number.",
+        "The collapsible section headers (activity, artifacts, timeline, Arbiter) now have a raised background so they're easy to spot."
+      ]
+    },
+    {
       "version": "0.16.0",
       "date": "2026-07-22",
       "critical": false,
