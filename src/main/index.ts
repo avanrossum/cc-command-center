@@ -1986,7 +1986,8 @@ ipcMain.handle('shell:openExternal', (_e, url: string) => {
 // file with a previewable extension, so even though these paths come from our own
 // scan, a bad one can't be turned into "open an arbitrary path".
 const ARTIFACT_EXTS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.pdf', '.html', '.htm', '.md', '.markdown',
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.pdf', '.html', '.htm', '.md',
+  '.markdown', '.txt', '.csv', '.tsv', '.log',
 ])
 function isSafeArtifact(p: unknown): p is string {
   if (typeof p !== 'string' || !p) return false

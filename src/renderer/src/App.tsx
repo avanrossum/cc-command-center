@@ -55,7 +55,7 @@ interface Session {
   artifacts?: {
     path: string
     name: string
-    kind: 'image' | 'svg' | 'pdf' | 'html' | 'markdown'
+    kind: 'image' | 'svg' | 'pdf' | 'html' | 'markdown' | 'text'
     mtimeMs: number
   }[]
   unhandled?: boolean // open gate you haven't looked at yet — shows a pip until seen
@@ -2706,7 +2706,9 @@ function ArtifactsPanel({ session }: { session: Session | null }): React.ReactEl
         <div className="fleet-body">
           {arts.map((a) => (
             <div className="artifact-row" key={a.path}>
-              <span className={`artifact-kind ak-${a.kind}`}>{a.kind}</span>
+              <span className={`artifact-kind ak-${a.kind}`}>
+                {a.name.includes('.') ? (a.name.split('.').pop() ?? a.kind) : a.kind}
+              </span>
               <span className="artifact-name" title={a.path}>
                 {a.name}
               </span>
