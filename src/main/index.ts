@@ -2685,16 +2685,28 @@ interface UsageReadout {
   sevenDay: RateLimit | null
 }
 
+// Pick the current-window value for an account-wide rate limit from every
+// session's snapshot. Different sessions snapshot the % at different times, so
+// picking the freshest FILE bounces between stale values. Within one window usage
+// only rises until it resets, so: keep only the latest window (max resets_at) and
+// take the MAX % in it — the most-progressed snapshot is the true current value,
+// and sessions still reporting a previous window are dropped.
+function pickCurrentWindow(cands: { pct: number; resetsAt: number }[]): RateLimit | null {
+  if (cands.length === 0) return null
+  const latest = Math.max(...cands.map((c) => c.resetsAt))
+  const pct = Math.max(...cands.filter((c) => c.resetsAt === latest).map((c) => c.pct))
+  return { pct, resetsAt: latest }
+}
+
 function readUsageStates(): UsageReadout {
   const perSession = new Map<string, UsageState>()
-  let fiveHour: RateLimit | null = null
-  let sevenDay: RateLimit | null = null
-  let freshest = 0
+  const fhCandidates: { pct: number; resetsAt: number }[] = []
+  const sdCandidates: { pct: number; resetsAt: number }[] = []
   let files: string[] = []
   try {
     files = readdirSync(USAGE_DIR).filter((f) => f.endsWith('.json'))
   } catch {
-    return { perSession, fiveHour, sevenDay }
+    return { perSession, fiveHour: null, sevenDay: null }
   }
   const now = Date.now()
   for (const f of files) {
@@ -2720,26 +2732,24 @@ function readUsageStates(): UsageReadout {
         contextSize: typeof cw?.context_window_size === 'number' ? cw.context_window_size : null,
       })
       // Rate limits are account-wide, so any session's payload carries them —
-      // take the freshest file's, so the readout reflects the latest known state.
+      // collect every session's snapshot; pickCurrentWindow (below) reconciles
+      // them into one stable value instead of letting the freshest file win.
       const rl = j?.rate_limits
-      if (rl && st.mtimeMs > freshest) {
-        freshest = st.mtimeMs
-        const fh = rl.five_hour
-        const sd = rl.seven_day
-        fiveHour =
-          typeof fh?.used_percentage === 'number' && typeof fh?.resets_at === 'number'
-            ? { pct: Math.round(fh.used_percentage), resetsAt: fh.resets_at }
-            : fiveHour
-        sevenDay =
-          typeof sd?.used_percentage === 'number' && typeof sd?.resets_at === 'number'
-            ? { pct: Math.round(sd.used_percentage), resetsAt: sd.resets_at }
-            : sevenDay
-      }
+      const fh = rl?.five_hour
+      if (typeof fh?.used_percentage === 'number' && typeof fh?.resets_at === 'number')
+        fhCandidates.push({ pct: Math.round(fh.used_percentage), resetsAt: fh.resets_at })
+      const sd = rl?.seven_day
+      if (typeof sd?.used_percentage === 'number' && typeof sd?.resets_at === 'number')
+        sdCandidates.push({ pct: Math.round(sd.used_percentage), resetsAt: sd.resets_at })
     } catch {
       /* mid-write or malformed — skip this scan */
     }
   }
-  return { perSession, fiveHour, sevenDay }
+  return {
+    perSession,
+    fiveHour: pickCurrentWindow(fhCandidates),
+    sevenDay: pickCurrentWindow(sdCandidates),
+  }
 }
 
 // When a link is blessed, tell the (app-managed) parent it can now message this
