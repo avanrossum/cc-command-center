@@ -2357,6 +2357,13 @@ select.cat-in {
   border-radius: 3px;
   padding: 0 3px;
 }
+/* Workflow agent progress (done/total) on a running-workflow row. */
+.fleet-wf-prog {
+  flex: none;
+  font-family: var(--cc-font-mono);
+  font-size: 9px;
+  color: var(--cc-working);
+}
 
 /* Collapsed "N done" line per fleet group — done subagents don't get a row each. */
 .fleet-donerow {

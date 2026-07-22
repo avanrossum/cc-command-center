@@ -95,7 +95,12 @@ import {
   DEFAULT_ARBITER_MODEL,
   type ArbiterSessionInput,
 } from './arbiter'
-import { scanSubtasks, type SubtaskInfo } from './engine/subtasks'
+import {
+  scanSubtasks,
+  scanWorkflowSummaries,
+  type SubtaskInfo,
+  type WorkflowInfo,
+} from './engine/subtasks'
 
 let win: BrowserWindow | null = null
 // Send to the renderer, guarding the window's whole lifecycle. `win?.` only
@@ -148,6 +153,7 @@ type EnrichedSession = LiveSession & {
   whyGloss?: string // reserved for the Arbiter; never populated by this path
   unhandled?: boolean // has an open gate you haven't looked at yet (drives the pip)
   subtasks?: SubtaskInfo[] // subagents this session has spawned (fleet activity view)
+  workflows?: WorkflowInfo[] // Workflow-tool runs this session started, one entry each
   contextPct?: number | null // context window used %, from the session's statusLine payload
 }
 interface Snapshot {
@@ -691,6 +697,7 @@ function snapshot(): Snapshot {
       // Subagents this session spawned, from its transcript. mtime-cached in the
       // scanner, so this is cheap on the scans where nothing changed.
       subtasks: s.transcriptPath ? scanSubtasks(s.transcriptPath, now) : undefined,
+      workflows: s.transcriptPath ? scanWorkflowSummaries(s.transcriptPath, now) : undefined,
       contextPct: usage.perSession.get(s.sessionId)?.contextPct,
     }
   })

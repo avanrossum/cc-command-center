@@ -43,6 +43,15 @@ interface Session {
     status: 'running' | 'done' | 'stalled' | 'failed'
     startedAt?: number
   }[]
+  workflows?: {
+    runId: string
+    name: string
+    description?: string
+    agentTotal: number
+    agentDone: number
+    status: 'running' | 'done'
+    startedAt?: number
+  }[]
   unhandled?: boolean // open gate you haven't looked at yet — shows a pip until seen
   contextPct?: number | null // context window used %, from the session's statusLine
 }
@@ -1139,9 +1148,11 @@ export function App() {
             {selectedGroup.rows.map(({ s, depth, edgeType }) => {
               const why = whyOf(s)
               // Background work running right now — so a session churning on a dev
-              // server / build / agent doesn't read as idle. Only 'running' counts
-              // (a stalled/failed task isn't actively working).
-              const bgRunning = s.subtasks?.filter((t) => t.status === 'running').length ?? 0
+              // server / build / agent / workflow doesn't read as idle. Only
+              // 'running' counts (a stalled/failed task isn't actively working).
+              const bgRunning =
+                (s.subtasks?.filter((t) => t.status === 'running').length ?? 0) +
+                (s.workflows?.filter((w) => w.status === 'running').length ?? 0)
               return (
               <li
                 key={s.sessionId}
@@ -2534,21 +2545,36 @@ function FleetActivity({
   // flood the panel). A group with nothing active and only stale done work is
   // dropped entirely.
   const groups = sessions
-    .filter((s) => (s.subtasks?.length ?? 0) > 0)
+    .filter((s) => (s.subtasks?.length ?? 0) > 0 || (s.workflows?.length ?? 0) > 0)
     .map((s) => {
-      const subs = s.subtasks!
+      const subs = s.subtasks ?? []
       const active = subs.filter((t) => t.status === 'running' || t.status === 'stalled')
       // Failed = awareness, not action: shown as its own soft row, never a gate.
       const failed = subs.filter((t) => t.status === 'failed')
       const done = subs.filter((t) => t.status === 'done')
-      const newest = subs.reduce((m, t) => Math.max(m, t.startedAt ?? 0), 0)
-      return { session: s, active, failed, doneCount: done.length, newest }
+      // Workflows: one rich entry each. Running ones show as rows; done ones fold
+      // into the done count (like finished subtasks).
+      const wfs = s.workflows ?? []
+      const wfRunning = wfs.filter((w) => w.status === 'running')
+      const wfDone = wfs.length - wfRunning.length
+      const newest = Math.max(
+        subs.reduce((m, t) => Math.max(m, t.startedAt ?? 0), 0),
+        wfs.reduce((m, w) => Math.max(m, w.startedAt ?? 0), 0),
+      )
+      return {
+        session: s,
+        active,
+        failed,
+        wfRunning,
+        doneCount: done.length + wfDone,
+        newest,
+      }
     })
     // A group shows while it has live work, OR recently (TTL) if it only has
     // finished/failed work — so a just-failed task lingers long enough to notice.
-    .filter((g) => g.active.length > 0 || now - g.newest <= FLEET_DONE_TTL_MS)
+    .filter((g) => g.active.length > 0 || g.wfRunning.length > 0 || now - g.newest <= FLEET_DONE_TTL_MS)
 
-  const running = groups.reduce((n, g) => n + g.active.length, 0)
+  const running = groups.reduce((n, g) => n + g.active.length + g.wfRunning.length, 0)
   const failedN = groups.reduce((n, g) => n + g.failed.length, 0)
   const label =
     groups.length === 0
@@ -2567,8 +2593,20 @@ function FleetActivity({
     <div className="fleet-group" key={g.session.sessionId}>
       <button className="fleet-owner" onClick={() => onOpen(g.session)}>
         {g.session.name ?? `pid ${g.session.pid}`}
-        {g.active.length > 0 && <span className="fleet-owner-n">{g.active.length}</span>}
+        {g.active.length + g.wfRunning.length > 0 && (
+          <span className="fleet-owner-n">{g.active.length + g.wfRunning.length}</span>
+        )}
       </button>
+      {g.wfRunning.map((w) => (
+        <div className="fleet-sub sub-running" key={w.runId}>
+          <span className="fleet-dot fs-running" />
+          <span className="fleet-desc">{w.description || w.name}</span>
+          <span className="fleet-wf-prog">
+            {w.agentDone}/{w.agentTotal}
+          </span>
+          <span className="fleet-bg">wf</span>
+        </div>
+      ))}
       {[...g.active, ...g.failed].map((t) => (
         <div className={`fleet-sub sub-${t.status}`} key={t.id}>
           <span className={`fleet-dot fs-${t.status}`} />
@@ -2580,7 +2618,8 @@ function FleetActivity({
       ))}
       {g.doneCount > 0 && (
         <div className="fleet-donerow">
-          {g.doneCount} done{g.active.length === 0 && g.failed.length === 0 ? ' · idle' : ''}
+          {g.doneCount} done
+          {g.active.length === 0 && g.failed.length === 0 && g.wfRunning.length === 0 ? ' · idle' : ''}
         </div>
       )}
     </div>
@@ -2590,9 +2629,11 @@ function FleetActivity({
     <button className="fleet-rollup" key={g.session.sessionId} onClick={() => onOpen(g.session)}>
       <span className="fleet-rollup-name">{g.session.name ?? `pid ${g.session.pid}`}</span>
       <span className="grow" />
-      {g.active.length > 0 && <span className="fleet-rollup-run">⚙ {g.active.length}</span>}
+      {g.active.length + g.wfRunning.length > 0 && (
+        <span className="fleet-rollup-run">⚙ {g.active.length + g.wfRunning.length}</span>
+      )}
       {g.failed.length > 0 && <span className="fleet-rollup-fail">⚠ {g.failed.length}</span>}
-      {g.active.length === 0 && g.failed.length === 0 && (
+      {g.active.length + g.wfRunning.length === 0 && g.failed.length === 0 && (
         <span className="fleet-rollup-idle">{g.doneCount} done</span>
       )}
     </button>

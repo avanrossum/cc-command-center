@@ -42,6 +42,21 @@ export interface SubtaskInfo {
   startedAt?: number
 }
 
+// One workflow RUN, summarized as a single rich entry (not per-agent rows). Name
+// + description come from the run's persisted script; agent progress from its
+// journal. Per-phase progress and token/duration totals are NOT here: they live
+// only in the running app's memory (the journal/agent files carry no phase field
+// and no usage), so they can't be reconstructed from disk.
+export interface WorkflowInfo {
+  runId: string
+  name: string
+  description?: string
+  agentTotal: number
+  agentDone: number
+  status: 'running' | 'done'
+  startedAt?: number
+}
+
 const AGENT_TOOL_NAMES = new Set(['Agent', 'Task'])
 const STALLED_MS = 5 * 60 * 1000
 // Bound the transcript scan. Covers the 99th-percentile transcript (~4.4MB
@@ -51,9 +66,6 @@ const STALLED_MS = 5 * 60 * 1000
 const MAX_SCAN_BYTES = 8 * 1024 * 1024
 // Per session, across both sources, so a 100-agent workflow can't flood the panel.
 const MAX_SUBTASKS = 40
-// Head read of an agent transcript — must hold the whole first line (the prompt),
-// which can be large for a real workflow agent, not just a toy "reply PING".
-const AGENT_HEAD_BYTES = 64 * 1024
 
 // ---- transcript (Agent/Task tool) -----------------------------------------
 
@@ -229,31 +241,22 @@ function scanTranscript(transcriptPath: string): { info: SubtaskInfo; mtimeMs: n
   return tasks
 }
 
-// ---- workflow journals -----------------------------------------------------
+// ---- workflow summaries ----------------------------------------------------
 
-interface WfCache {
+interface WfSummaryCache {
   sig: string
-  agents: { info: SubtaskInfo; mtimeMs: number }[]
+  summaries: WorkflowInfo[]
 }
-const wfCache = new Map<string, WfCache>()
+const wfSummaryCache = new Map<string, WfSummaryCache>()
 
-// An agent's prompt is line 1, written once and never changed — so cache it by
-// path forever. Without this, an active workflow (whose signature changes every
-// time any sibling agent finishes) would re-read every agent's head each tick.
-const promptCache = new Map<string, { desc?: string; startedAt?: number }>()
-
-// Read the agent's first user message — its prompt — as the description. The
-// prompt is at the HEAD of the file (line 1), so this reads from offset 0, not
-// the tail like the transcript scan.
-function agentPrompt(agentFile: string): { desc?: string; startedAt?: number } {
-  const hit = promptCache.get(agentFile)
-  if (hit) return hit
+// name / description from a workflow script's meta block (near the top of the file).
+function readScriptMeta(scriptPath: string): { name?: string; description?: string } {
   let head: string
   try {
-    const fd = fs.openSync(agentFile, 'r')
+    const fd = fs.openSync(scriptPath, 'r')
     try {
-      const b = Buffer.alloc(AGENT_HEAD_BYTES)
-      const n = fs.readSync(fd, b, 0, AGENT_HEAD_BYTES, 0)
+      const b = Buffer.alloc(4096)
+      const n = fs.readSync(fd, b, 0, 4096, 0)
       head = b.toString('utf8', 0, n)
     } finally {
       fs.closeSync(fd)
@@ -261,126 +264,140 @@ function agentPrompt(agentFile: string): { desc?: string; startedAt?: number } {
   } catch {
     return {}
   }
-  for (const line of head.split('\n')) {
-    const t = line.trim()
-    if (!t) continue
-    let r: Record<string, unknown>
-    try {
-      r = JSON.parse(t)
-    } catch {
-      continue
-    }
-    const msg = r.message as { role?: string; content?: unknown } | undefined
-    if (msg?.role !== 'user') continue
-    const c = msg.content
-    let text: string | undefined
-    if (typeof c === 'string') text = c
-    else if (Array.isArray(c)) {
-      const tb = c.find((b) => b && typeof b === 'object' && (b as { type?: string }).type === 'text')
-      text = tb ? ((tb as { text?: string }).text ?? undefined) : undefined
-    }
-    const result = text
-      ? { desc: text.replace(/\s+/g, ' ').trim().slice(0, 90), startedAt: tsToMs(r.timestamp) }
-      : { startedAt: tsToMs(r.timestamp) }
-    promptCache.set(agentFile, result) // immutable once written — cache forever
-    return result
-  }
-  // Found nothing usable — do NOT cache, the file may still be mid-write.
-  return {}
+  const name = head.match(/name:\s*'([^']*)'/)?.[1] || head.match(/name:\s*"([^"]*)"/)?.[1]
+  const description =
+    head.match(/description:\s*'([^']*)'/)?.[1] || head.match(/description:\s*"([^"]*)"/)?.[1]
+  return { name, description }
 }
 
-function scanWorkflows(transcriptPath: string): { info: SubtaskInfo; mtimeMs: number }[] {
-  const root = path.join(transcriptPath.replace(/\.jsonl$/, ''), 'subagents', 'workflows')
-  let wfDirs: string[]
+// runId -> script path from <session>/workflows/scripts. A script filename ends
+// with its runId (...-<runId>.js), which is the run dir's basename.
+function scriptsByRunId(sessionDir: string): Map<string, string> {
+  const dir = path.join(sessionDir, 'workflows', 'scripts')
+  const m = new Map<string, string>()
   try {
-    wfDirs = fs
+    for (const f of fs.readdirSync(dir)) {
+      const runId = f.endsWith('.js') ? f.match(/(wf_[A-Za-z0-9-]+)\.js$/)?.[1] : undefined
+      if (runId) m.set(runId, path.join(dir, f))
+    }
+  } catch {
+    /* no scripts dir */
+  }
+  return m
+}
+
+// One WorkflowInfo per workflow RUN: agent progress from the journal, name +
+// description from the run's script. mtime-cached by run-dir signature.
+export function scanWorkflowSummaries(transcriptPath: string, now = Date.now()): WorkflowInfo[] {
+  const sessionDir = transcriptPath.replace(/\.jsonl$/, '')
+  const root = path.join(sessionDir, 'subagents', 'workflows')
+  let runDirs: { runId: string; dir: string }[]
+  try {
+    runDirs = fs
       .readdirSync(root, { withFileTypes: true })
       .filter((e) => e.isDirectory())
-      .map((e) => path.join(root, e.name))
+      .map((e) => ({ runId: e.name, dir: path.join(root, e.name) }))
   } catch {
-    wfCache.delete(transcriptPath)
+    wfSummaryCache.delete(transcriptPath)
     return [] // no workflows dir — the common case
   }
 
-  // Signature: a new agent file (spawn) or a grown journal (completion) changes
-  // it, so the cache invalidates exactly when a status could have changed.
+  // Signature: journal growth (completion) or a new agent file (spawn) changes it,
+  // so the cache invalidates exactly when progress could have changed.
   const parts: string[] = []
-  const journals: string[] = []
-  const agentFiles: string[] = []
-  for (const dir of wfDirs) {
+  const runData: {
+    runId: string
+    journals: string[]
+    agentTotal: number
+    startedAt: number
+    lastActivity: number
+  }[] = []
+  for (const { runId, dir } of runDirs) {
     let entries: string[]
     try {
       entries = fs.readdirSync(dir)
     } catch {
       continue
     }
+    const journals: string[] = []
+    let agentTotal = 0
+    let startedAt = 0
+    let lastActivity = 0 // newest mtime in the run — for staleness (ended vs running)
     for (const name of entries) {
       const full = path.join(dir, name)
+      const bump = (mt: number): void => {
+        if (mt > lastActivity) lastActivity = mt
+      }
       if (name === 'journal.jsonl') {
         journals.push(full)
         try {
-          const s = fs.statSync(full)
-          parts.push(`${full}:${s.mtimeMs}:${s.size}`)
+          const st = fs.statSync(full)
+          parts.push(`${full}:${st.mtimeMs}:${st.size}`)
+          bump(st.mtimeMs)
         } catch {
-          /* gone between readdir and stat */
+          /* gone */
         }
       } else if (name.startsWith('agent-') && name.endsWith('.jsonl')) {
-        agentFiles.push(full)
-        parts.push(full) // presence alone (its prompt line is immutable once written)
+        agentTotal++
+        parts.push(full)
+        try {
+          const mt = fs.statSync(full).mtimeMs
+          if (!startedAt || mt < startedAt) startedAt = mt
+          bump(mt)
+        } catch {
+          /* gone */
+        }
       }
     }
+    runData.push({ runId, journals, agentTotal, startedAt, lastActivity })
   }
   const sig = parts.sort().join('|')
-  const cached = wfCache.get(transcriptPath)
-  if (cached && cached.sig === sig) return cached.agents
+  const cached = wfSummaryCache.get(transcriptPath)
+  if (cached && cached.sig === sig) return cached.summaries
 
-  // Authoritative status from the journals: agentId with a `result` line = done.
-  const doneAgentIds = new Set<string>()
-  for (const j of journals) {
-    let buf: string
-    try {
-      buf = fs.readFileSync(j, 'utf8')
-    } catch {
-      continue
-    }
-    for (const line of buf.split('\n')) {
-      const t = line.trim()
-      if (!t) continue
+  const scripts = scriptsByRunId(sessionDir)
+  const summaries: WorkflowInfo[] = []
+  for (const { runId, journals, agentTotal, startedAt, lastActivity } of runData) {
+    const doneAgentIds = new Set<string>()
+    for (const j of journals) {
+      let buf: string
       try {
-        const o = JSON.parse(t) as { type?: string; agentId?: string }
-        if (o.type === 'result' && o.agentId) doneAgentIds.add(o.agentId)
+        buf = fs.readFileSync(j, 'utf8')
       } catch {
-        /* skip */
+        continue
+      }
+      for (const line of buf.split('\n')) {
+        const t = line.trim()
+        if (!t) continue
+        try {
+          const o = JSON.parse(t) as { type?: string; agentId?: string }
+          if (o.type === 'result' && o.agentId) doneAgentIds.add(o.agentId)
+        } catch {
+          /* skip */
+        }
       }
     }
-  }
-
-  const agents: { info: SubtaskInfo; mtimeMs: number }[] = []
-  for (const af of agentFiles) {
-    const base = path.basename(af)
-    const agentId = base.slice('agent-'.length, base.length - '.jsonl'.length)
-    if (!agentId) continue
-    let mtimeMs = 0
-    try {
-      mtimeMs = fs.statSync(af).mtimeMs
-    } catch {
-      /* keep 0 */
-    }
-    const { desc, startedAt } = agentPrompt(af)
-    agents.push({
-      info: {
-        id: agentId,
-        description: desc || 'workflow agent',
-        background: false,
-        source: 'workflow',
-        status: doneAgentIds.has(agentId) ? 'done' : 'running',
-        startedAt,
-      },
-      mtimeMs,
+    // Cap done at total so progress never reads > 100%.
+    const agentDone = Math.min(doneAgentIds.size, agentTotal)
+    const meta = scripts.has(runId) ? readScriptMeta(scripts.get(runId)!) : {}
+    // Done when every agent resolved, OR when the run has been idle past the stall
+    // window — a workflow whose retried/killed agents never got a result line would
+    // otherwise read 'running' forever. Only a genuinely active run keeps churning.
+    const allResolved = agentTotal > 0 && agentDone >= agentTotal
+    const stale = lastActivity > 0 && now - lastActivity > STALLED_MS
+    summaries.push({
+      runId,
+      name: meta.name || 'workflow',
+      description: meta.description,
+      agentTotal,
+      agentDone,
+      status: allResolved || stale ? 'done' : 'running',
+      startedAt: startedAt || undefined,
     })
   }
-  wfCache.set(transcriptPath, { sig, agents })
-  return agents
+  summaries.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
+  wfSummaryCache.set(transcriptPath, { sig, summaries })
+  return summaries
 }
 
 // ---- public ----------------------------------------------------------------
@@ -402,7 +419,7 @@ function applyStall(entry: { info: SubtaskInfo; mtimeMs: number }, now: number):
 }
 
 export function scanSubtasks(transcriptPath: string, now = Date.now()): SubtaskInfo[] {
-  const merged = [...scanTranscript(transcriptPath), ...scanWorkflows(transcriptPath)]
+  const merged = scanTranscript(transcriptPath)
   const out = merged
     .map((e) => applyStall(e, now))
     .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
@@ -411,5 +428,5 @@ export function scanSubtasks(transcriptPath: string, now = Date.now()): SubtaskI
 
 export function forgetSubtasks(transcriptPath: string): void {
   txCache.delete(transcriptPath)
-  wfCache.delete(transcriptPath)
+  wfSummaryCache.delete(transcriptPath)
 }
