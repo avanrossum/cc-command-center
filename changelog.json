@@ -1,6 +1,16 @@
 {
   "versions": [
     {
+      "version": "0.15.0",
+      "date": "2026-07-22",
+      "critical": false,
+      "features": [
+        "Activity view now leads with the session you're looking at — its full ledger sits at the top, while every other session collapses to a one-line rollup chip (running / failed / done counts) you can click to switch to it.",
+        "Workflow runs show as a single rich entry (name, description, and agent progress like 8/19) instead of a long list of individual agent rows.",
+        "Renamed the pop-out panel from Subagents to Activity, since it now covers shell tasks and workflows too."
+      ]
+    },
+    {
       "version": "0.14.4",
       "date": "2026-07-22",
       "critical": false,
