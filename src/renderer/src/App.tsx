@@ -963,7 +963,9 @@ export function App() {
       activeSessionId={selected?.sessionId ?? null}
     />
   )
-  const artifactsPanel = <ArtifactsPanel session={selected ? live.find((s) => s.sessionId === selected.sessionId) ?? null : null} />
+  // The artifact drawer belongs to the OPEN session; it lives in the terminal
+  // area (folds down over the terminal), not the companion.
+  const activeArtSession = selected ? live.find((s) => s.sessionId === selected.sessionId) ?? null : null
 
   return (
     <div className="app">
@@ -1288,6 +1290,7 @@ export function App() {
                   ✕
                 </button>
               </div>
+              <ArtifactDrawer session={activeArtSession} />
               <TerminalView
                 key={selected.key}
                 termKey={selected.key}
@@ -1552,7 +1555,6 @@ export function App() {
                   {fleetPanel}
                 </div>
               )}
-              {artifactsPanel}
               <ArbiterConsole
                 panel={snap.arbiter}
                 enabled={snap.settings?.arbiterEnabled ?? false}
@@ -2675,60 +2677,109 @@ function FleetActivity({
   )
 }
 
-// Artifact preview (spec D, v1): the previewable files the OPEN session produced.
-// A safe list — Open (OS default app) / Reveal (Finder) — with no in-app rendering
-// yet (the fold-out drawer + sandboxed HTML/image preview are the next step).
-// Hidden entirely when the open session made nothing previewable.
-function ArtifactsPanel({ session }: { session: Session | null }): React.ReactElement | null {
-  const [open, setOpen] = useState(true)
+// Artifact preview drawer (spec D): folds DOWN over the terminal for the OPEN
+// session. Left = the selected artifact rendered inline (images/SVG via a
+// script-inert <img>, text/markdown as text); right = the session's artifact
+// list. HTML/PDF are never rendered in-app — they open in the real browser /
+// default app. Hidden entirely when the session produced nothing previewable.
+const artExt = (name: string): string => (name.includes('.') ? name.split('.').pop() ?? '' : '')
+
+function ArtifactPreview({
+  art,
+}: {
+  art: { path: string; name: string; kind: string }
+}): React.ReactElement {
+  const [state, setState] = useState<{
+    loading: boolean
+    dataUrl?: string
+    text?: string
+    tooBig?: boolean
+    failed?: boolean
+  }>({ loading: true })
   useEffect(() => {
-    window.cc.stateGet('artifactsOpen').then((v) => v === 'false' && setOpen(false))
+    let cancelled = false
+    setState({ loading: true })
+    window.cc.artifactRead(art.path).then((r) => {
+      if (cancelled) return
+      setState(
+        r.ok
+          ? { loading: false, dataUrl: r.dataUrl, text: r.text, tooBig: r.tooBig }
+          : { loading: false, failed: true },
+      )
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [art.path])
+
+  if (state.loading) return <div className="artdrawer-msg">loading…</div>
+  if (state.dataUrl) return <img className="artdrawer-img" src={state.dataUrl} alt={art.name} />
+  if (state.text != null)
+    return <pre className="artdrawer-text">{state.text || '(empty file)'}</pre>
+  const why = state.tooBig
+    ? 'Too large to preview inline.'
+    : art.kind === 'html'
+      ? 'Opens in your browser.'
+      : art.kind === 'pdf'
+        ? 'PDF — open to view it.'
+        : state.failed
+          ? 'Could not read this file.'
+          : 'No inline preview for this type.'
+  return (
+    <div className="artdrawer-msg">
+      {why}{' '}
+      <button className="artifact-btn" onClick={() => window.cc.artifactOpen(art.path)}>
+        open
+      </button>
+    </div>
+  )
+}
+
+function ArtifactDrawer({ session }: { session: Session | null }): React.ReactElement | null {
+  const [open, setOpen] = useState(false)
+  useEffect(() => {
+    window.cc.stateGet('artifactsOpen').then((v) => v === 'true' && setOpen(true))
   }, [])
+  const [selPath, setSelPath] = useState<string | null>(null)
   const arts = session?.artifacts ?? []
   if (arts.length === 0) return null
+  const sel = arts.find((a) => a.path === selPath) ?? arts[0]
   const toggle = (): void => {
     const n = !open
     setOpen(n)
     window.cc.stateSet('artifactsOpen', String(n))
   }
   return (
-    <div className={`fleet${open ? ' open' : ''}`}>
-      <button
-        className="fleet-head"
-        onClick={toggle}
-        title="Previewable files this session produced — open or reveal in Finder"
-      >
+    <div className={`artdrawer${open ? ' open' : ''}`}>
+      <button className="artdrawer-handle" onClick={toggle} title="Artifacts this session produced">
         <span className="chev">{open ? '▾' : '▸'}</span>
-        <span className="fleet-name">artifacts</span>
-        <span className="fleet-count">{arts.length}</span>
+        <span className="artdrawer-htitle">artifacts</span>
+        <span className="artdrawer-count">{arts.length}</span>
       </button>
       {open && (
-        <div className="fleet-body">
-          {arts.map((a) => (
-            <div className="artifact-row" key={a.path}>
-              <span className={`artifact-kind ak-${a.kind}`}>
-                {a.name.includes('.') ? (a.name.split('.').pop() ?? a.kind) : a.kind}
-              </span>
-              <span className="artifact-name" title={a.path}>
-                {a.name}
-              </span>
-              <span className="grow" />
-              <button
-                className="artifact-btn"
-                title="Open in the default app"
-                onClick={() => window.cc.artifactOpen(a.path)}
-              >
-                open
-              </button>
-              <button
-                className="artifact-btn"
-                title="Reveal in Finder"
-                onClick={() => window.cc.artifactReveal(a.path)}
-              >
-                reveal
-              </button>
-            </div>
-          ))}
+        <div className="artdrawer-body">
+          <div className="artdrawer-preview">
+            <ArtifactPreview key={sel.path} art={sel} />
+          </div>
+          <div className="artdrawer-list">
+            {arts.map((a) => (
+              <div className={`artdrawer-item${a.path === sel.path ? ' sel' : ''}`} key={a.path}>
+                <button className="artdrawer-item-main" onClick={() => setSelPath(a.path)}>
+                  <span className="artifact-kind">{artExt(a.name) || a.kind}</span>
+                  <span className="artdrawer-item-name" title={a.path}>
+                    {a.name}
+                  </span>
+                </button>
+                <button
+                  className="artifact-btn"
+                  title="Reveal in Finder"
+                  onClick={() => window.cc.artifactReveal(a.path)}
+                >
+                  ⤴
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

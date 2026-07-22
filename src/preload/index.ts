@@ -138,6 +138,13 @@ contextBridge.exposeInMainWorld('cc', {
     ipcRenderer.invoke('artifact:open', path) as Promise<{ ok: boolean }>,
   artifactReveal: (path: string) =>
     ipcRenderer.invoke('artifact:reveal', path) as Promise<{ ok: boolean }>,
+  artifactRead: (path: string) =>
+    ipcRenderer.invoke('artifact:read', path) as Promise<{
+      ok: boolean
+      dataUrl?: string
+      text?: string
+      tooBig?: boolean
+    }>,
   termResize: (key: string, cols: number, rows: number) =>
     ipcRenderer.send('term:resize', key, cols, rows),
   termRedraw: (key: string) => ipcRenderer.send('term:redraw', key),
