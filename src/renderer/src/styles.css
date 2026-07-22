@@ -514,6 +514,11 @@ body {
   cursor: pointer;
   overflow: hidden;
 }
+/* A category being dragged over as a reorder target. */
+.rail-cell.droptarget {
+  box-shadow: inset 0 2px 0 var(--cc-working);
+  background: var(--cc-fill-hover);
+}
 .rail-emoji {
   font-size: 17px;
   line-height: 1;

@@ -296,6 +296,14 @@ export function setCategoryColor(id: number, color: string): void {
   must().prepare('UPDATE category SET color=? WHERE id=?').run(color, id)
 }
 
+// Persist a new category order: each id's `sort` becomes its index in the list.
+// listCategories() then orders by sort, so the rail reflects the drag.
+export function reorderCategories(ids: number[]): void {
+  const db = must()
+  const stmt = db.prepare('UPDATE category SET sort=? WHERE id=?')
+  db.transaction((list: number[]) => list.forEach((id, i) => stmt.run(i, id)))(ids)
+}
+
 // Set (or clear, with null) a session's terminal theme by name.
 export function setTheme(sessionId: string, theme: string | null): void {
   must().prepare('UPDATE node SET theme=? WHERE session_id=?').run(theme, sessionId)

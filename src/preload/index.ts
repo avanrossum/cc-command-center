@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld('cc', {
   arbiterSetPaused: (paused: boolean) => ipcRenderer.invoke('arbiter:setPaused', paused),
   arbiterPoke: () => ipcRenderer.invoke('arbiter:poke'),
   catSetColor: (id: number, color: string) => ipcRenderer.invoke('cat:setColor', id, color),
+  catReorder: (ids: number[]) => ipcRenderer.invoke('cat:reorder', ids),
   catSetEmoji: (id: number, emoji: string | null) => ipcRenderer.invoke('cat:setEmoji', id, emoji),
   catAssign: (sessionId: string, categoryId: number | null) =>
     ipcRenderer.invoke('cat:assign', sessionId, categoryId),

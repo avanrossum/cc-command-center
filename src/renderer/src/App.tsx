@@ -344,6 +344,19 @@ export function App() {
   // or 'null' for Uncategorized). Loaded async; the init-select effect waits for it.
   const restoredCatRef = useRef<string | null>(null)
   const [catRestoreLoaded, setCatRestoreLoaded] = useState(false)
+  // Drag-to-reorder categories in the rail (Uncategorized isn't draggable).
+  const [dragCat, setDragCat] = useState<number | null>(null)
+  const dropCat = (targetId: number | null): void => {
+    const from = dragCat
+    setDragCat(null)
+    if (from === null || targetId === null || from === targetId) return
+    const ids = groups.map((g) => g.id).filter((id): id is number => id !== null)
+    const fi = ids.indexOf(from)
+    const ti = ids.indexOf(targetId)
+    if (fi < 0 || ti < 0) return
+    ids.splice(ti, 0, ids.splice(fi, 1)[0]) // move the dragged category to the target slot
+    window.cc.catReorder(ids)
+  }
   // Companion pane (right of the terminal): the cross-fleet "needs you" board.
   // Default OPEN; open/hidden state and scope persist across restarts.
   const [companionOpen, setCompanionOpen] = useState(true)
@@ -1109,8 +1122,15 @@ export function App() {
             return (
               <button
                 key={g.id ?? 'uncat'}
-                className={`rail-cell${selectedCat === g.id ? ' active' : ''}${railNeed ? ` needs need-${railNeed}` : ''}`}
+                className={`rail-cell${selectedCat === g.id ? ' active' : ''}${railNeed ? ` needs need-${railNeed}` : ''}${dragCat !== null && dragCat !== g.id && g.id !== null ? ' droptarget' : ''}`}
                 style={{ '--cat-color': g.color } as CSSProperties}
+                draggable={g.id !== null}
+                onDragStart={() => g.id !== null && setDragCat(g.id)}
+                onDragOver={(e) => {
+                  if (dragCat !== null && g.id !== null) e.preventDefault()
+                }}
+                onDrop={() => dropCat(g.id)}
+                onDragEnd={() => setDragCat(null)}
                 onClick={() => {
                   setSelectedCat(g.id)
                   // Jump back to the last session opened in this category. Only if

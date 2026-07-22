@@ -61,6 +61,7 @@ declare global {
       arbiterSetPaused: (paused: boolean) => Promise<boolean>
       arbiterPoke: () => Promise<boolean>
       catSetColor: (id: number, color: string) => Promise<boolean>
+      catReorder: (ids: number[]) => Promise<boolean>
       catSetEmoji: (id: number, emoji: string | null) => Promise<boolean>
       catAssign: (sessionId: string, categoryId: number | null) => Promise<boolean>
       edgeSet: (

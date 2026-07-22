@@ -61,6 +61,7 @@ import {
   setCategoryLabel,
   setCategoryEmoji,
   setCategoryColor,
+  reorderCategories,
   ensureNode,
   assignCategory,
   getNodeMap,
@@ -2350,6 +2351,10 @@ ipcMain.handle('cat:setArbiterContext', (_e, id: number, on: boolean) => {
 ipcMain.handle('cat:setLabel', (_e, id: number, label: string | null) => {
   setCategoryLabel(id, label)
   pushSessions()
+  return true
+})
+ipcMain.handle('cat:reorder', (_e, ids: number[]) => {
+  if (Array.isArray(ids)) reorderCategories(ids.filter((n) => typeof n === 'number'))
   return true
 })
 ipcMain.handle('cat:setColor', (_e, id: number, color: string) => {
