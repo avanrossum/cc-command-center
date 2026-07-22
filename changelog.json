@@ -1,6 +1,19 @@
 {
   "versions": [
     {
+      "version": "0.19.0",
+      "date": "2026-07-22",
+      "critical": false,
+      "features": [
+        "Artifact preview now covers much more: audio files play in an in-app player, code renders with syntax highlighting, Markdown renders with a rendered/raw toggle, and RTF renders right in the pane. Word/Excel/PowerPoint and PDF open in your default app.",
+        "The artifact list is now sortable — most-recent or by name — and shows each file's last-modified time, which helps on long-running sessions.",
+        "Settings moved to a tabbed layout (General, Terminal, Arbiter, API keys) at a fixed size, so switching tabs no longer resizes the window.",
+        "New option to hide live Claude Code sessions that aren't managed here, so their activity stops adding noise to the needs-you bar.",
+        "Category edits — color, emoji, and name — now apply immediately, with no Save click.",
+        "Reordering categories by drag now takes effect the instant you drop, instead of after a short delay."
+      ]
+    },
+    {
       "version": "0.18.0",
       "date": "2026-07-22",
       "critical": false,
