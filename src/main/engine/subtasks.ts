@@ -181,13 +181,31 @@ function scanTranscript(transcriptPath: string): { info: SubtaskInfo; mtimeMs: n
       } else if (b.type === 'tool_result') {
         const tid = b.tool_use_id as string | undefined
         if (tid) doneIds.add(tid)
-        const m = resultText(b.content).match(/Command running in background with ID:\s*([A-Za-z0-9]+)/)
+        // Link a background launch ack to its durable id, so completion comes from
+        // the task-notification — NOT this immediate ack. Two launch shapes: Bash
+        // ("Command running in background with ID: X") and a backgrounded Agent
+        // ("Async agent launched successfully … agentId: X"). The agentId is used
+        // only as an internal status key here, never surfaced to the user.
+        const rc = resultText(b.content)
+        const m =
+          rc.match(/running in background with ID:\s*([A-Za-z0-9]+)/) ||
+          rc.match(/Async agent launched successfully[\s\S]*?agentId:\s*([A-Za-z0-9]+)/)
         if (m && tid) toolToTaskId.set(tid, m[1])
       }
     }
   }
+  // A background subtask's terminal status is its task-notification, never the
+  // immediate launch ack — otherwise every backgrounded agent/task reads 'done'
+  // the instant it starts. A foreground agent still completes on tool_result.
+  const statusOf = (info: SubtaskInfo): SubtaskStatus => {
+    if (info.background) {
+      const linked = toolToTaskId.get(info.id)
+      return (linked && taskStatus.get(linked)) || 'running'
+    }
+    return doneIds.has(info.id) ? 'done' : 'running'
+  }
   const tasks: { info: SubtaskInfo; mtimeMs: number }[] = [...uses.values()].map((info) => ({
-    info: { ...info, status: doneIds.has(info.id) ? ('done' as const) : ('running' as const) },
+    info: { ...info, status: statusOf(info) },
     mtimeMs: stat.mtimeMs,
   }))
   // Fold in background shell tasks. Identity is the durable task id (matches the
