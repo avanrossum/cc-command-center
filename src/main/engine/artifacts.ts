@@ -12,7 +12,7 @@ import path from 'node:path'
 // drops off on its own. This mirrors the subtask scanner: derive from what's on
 // disk, cache by mtime, surface nothing that isn't really there.
 
-export type ArtifactKind = 'image' | 'svg' | 'pdf' | 'html' | 'markdown'
+export type ArtifactKind = 'image' | 'svg' | 'pdf' | 'html' | 'markdown' | 'text'
 
 export interface ArtifactInfo {
   path: string
@@ -34,6 +34,13 @@ const EXT_KIND: Record<string, ArtifactKind> = {
   '.htm': 'html',
   '.md': 'markdown',
   '.markdown': 'markdown',
+  // Plain text / data files an agent commonly produces. JSON/YAML/XML are left
+  // out on purpose — at a project's top level they're usually config, not output,
+  // and the cwd scan would surface package.json / tsconfig.json as noise.
+  '.txt': 'text',
+  '.csv': 'text',
+  '.tsv': 'text',
+  '.log': 'text',
 }
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit'])
 const MAX_ARTIFACTS = 40
