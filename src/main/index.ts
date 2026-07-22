@@ -196,6 +196,7 @@ interface AppSettings {
   spawnAutoMode: boolean // last "start child in auto mode" choice (default ON)
   terminalFont: string // xterm fontFamily override ('' = built-in default stack)
   terminalFontSize: number // xterm font size in px
+  hideUnmanaged: boolean // hide live Claude sessions this app doesn't own (default OFF)
   // The Arbiter. Off unless BOTH enabled and pointed at a stored key, so the
   // feature can never start spending by default.
   arbiterEnabled: boolean
@@ -223,6 +224,7 @@ function getSettings(): AppSettings {
       const n = Number(getAppState('terminalFontSize'))
       return Number.isFinite(n) && n >= 6 && n <= 40 ? n : 12.5
     })(),
+    hideUnmanaged: getAppState('hideUnmanaged') === 'true', // default OFF
     arbiterEnabled: getAppState('arbiterEnabled') === 'true', // default OFF
     arbiterPaused: getAppState('arbiterPaused') === 'true',
     arbiterKeyId: getAppState('arbiterKeyId') ? Number(getAppState('arbiterKeyId')) : null,

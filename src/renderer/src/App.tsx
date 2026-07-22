@@ -124,6 +124,7 @@ interface AppSettings {
   spawnAutoMode: boolean
   terminalFont: string
   terminalFontSize: number
+  hideUnmanaged: boolean
 }
 interface Snapshot {
   home: string
@@ -535,9 +536,15 @@ export function App() {
   // own ~/.claude/sessions/<pid>.json under the SAME session id, which would
   // otherwise show the one conversation twice. Prefer an alive row.
   const live = useMemo(() => {
+    // Optionally hide live Claude sessions this app doesn't own — external
+    // sessions running in other terminals add noise to the needs-you bar as they
+    // work, even though you're not managing them here. Only alive-unmanaged rows
+    // are dropped; the app's own sessions (managed) and dormant/resumable ones stay.
+    const hide = snap.settings?.hideUnmanaged ?? false
     const bySession = new Map<string, Session>()
     for (const s of snap.sessions) {
       if (s.isSpare) continue
+      if (hide && s.alive && !s.managed) continue
       const existing = bySession.get(s.sessionId)
       if (!existing || (!existing.alive && s.alive)) bySession.set(s.sessionId, s)
     }
@@ -1841,6 +1848,22 @@ function SettingsModal({
               {trust
                 ? 'A child you spawn can message its parent (and be messaged) automatically.'
                 : 'You’ll manually trust each child: right-click it → Trust link.'}
+            </span>
+          </span>
+        </label>
+
+        <label className="setrow">
+          <input
+            type="checkbox"
+            checked={settings?.hideUnmanaged ?? false}
+            onChange={(e) => window.cc.settingsSet('hideUnmanaged', String(e.target.checked))}
+          />
+          <span>
+            <b>Only show sessions managed here</b>
+            <span className="setsub">
+              Hide live Claude Code sessions running in other terminals that this app doesn’t
+              manage — they add noise to the needs-you bar as they work. Your own sessions
+              (and resumable ones) always stay.
             </span>
           </span>
         </label>
