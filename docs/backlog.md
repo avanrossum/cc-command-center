@@ -1,27 +1,27 @@
 # Backlog — next features (specs)
 
-## ⏭ NEXT — observations & fixes (queued 2026-07-22, after v0.17.0)
+## ⏭ NEXT — observations & fixes (queued 2026-07-22)
 
-1. **Category color doesn't update (BUG).** Open the category-edit modal for a
-   category that already has a color, pick a new color → it doesn't take; the
-   category keeps its old color. Investigate the color-change path in the category
-   editor (renderer) → `cat:setColor` IPC → registry; likely the modal isn't
-   sending the new color, or the update isn't applied/re-rendered.
+1. **Category color doesn't update (BUG — STILL OPEN).** Pick a new color in the
+   category-edit modal → it doesn't take. **Traced the ENTIRE path and it's correct
+   by inspection + empirically:** the modal's color state (setColor on swatch
+   click) → save's `catSetColor(id, color)` when changed → `cat:setColor` IPC →
+   `setCategoryColor` (verified persists, even alongside label/emoji writes) →
+   snapshot re-reads categories fresh each scan (index.ts:819) → groups memo uses
+   `snap.categories[].color` with correct deps → rail cell renders it. Palettes
+   (renderer CAT_PALETTE / registry PALETTE) match exactly. No re-mount, no form
+   submit. **Can't reproduce headlessly.** Next step: one live datum — when you
+   click a new color swatch in the modal, does the selected-ring HIGHLIGHT move to
+   it? If YES → state updates, bug is downstream (very strange given the above); if
+   NO → setColor isn't updating state in the running build. Or pair: add a temp
+   log in `save()`/`catSetColor` and reproduce.
 
-2. **Reorder categories via drag-and-drop.** The category rail is fixed order;
-   add drag-to-reorder. Needs a persisted `order`/`position` on the category
-   (registry migration) + drag handling in the rail.
-
-3. **Reopen-after-quit:**
-   - **Window size/position NOT remembered (BUG/regression).** Built in v0.14.0
-     (savedBounds/persistBounds in `src/main/index.ts`), but the user reports it
-     doesn't restore. Popped-window state IS remembered (good). Investigate: is
-     persistBounds firing on close, is savedBounds restoring, or is the on-screen
-     validation rejecting? Verify `windowBounds` app_state is written + read.
-   - **Open last-used category instead of the largest.** On launch it currently
-     opens the fullest category (`initCatRef` picks max rows). Change to the
-     last-selected category — persist the selected category id to app_state on
-     change, restore it on launch (fall back to largest if none/invalid).
+2. ✅ **Reorder categories — DONE v0.18.0** (drag-and-drop in the rail;
+   reorderCategories + cat:reorder).
+3. ✅ **Open last-used category — DONE v0.18.0.**
+   ✅ **Window size/position — improved v0.18.0** (more save events + maximized
+   state persisted/restored). The saved value had been stuck at default-centered,
+   so resizes/moves weren't captured; verify on dogfood that it now sticks.
 
 ## ✅ SHIPPED 2026-07-22 (versions 0.14.2 → 0.16.0)
 
