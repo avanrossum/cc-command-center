@@ -3357,6 +3357,30 @@ function CategoryEditor({
     }
     close()
   }
+  // Existing categories save every field the instant you change it (like the
+  // Arbiter opt-in below) — a color/emoji pick takes effect immediately, no Save
+  // click. A brand-new category still commits via Create (nothing to write until
+  // it exists). save() stays as a harmless final commit + close.
+  const existing = edit.id !== null
+  const pickColor = (col: string): void => {
+    setColor(col)
+    if (existing) window.cc.catSetColor(edit.id as number, col)
+  }
+  const pickEmoji = (raw: string): void => {
+    setEmoji(raw)
+    if (existing) {
+      const g = raw.trim()
+      const first = g ? [...new Intl.Segmenter().segment(g)][0]?.segment ?? null : null
+      window.cc.catSetEmoji(edit.id as number, first)
+    }
+  }
+  const commitName = (): void => {
+    const nm = name.trim()
+    if (existing && nm && nm !== edit.name) window.cc.catRename(edit.id as number, nm)
+  }
+  const commitLabel = (): void => {
+    if (existing) window.cc.catSetLabel(edit.id as number, tag.trim().slice(0, 8) || null)
+  }
   return (
     <>
       <div
