@@ -2477,6 +2477,14 @@ select.cat-in {
   border-radius: 10px;
   background: var(--cc-surface-2);
 }
+/* "⚙ N" — background tasks running for this session, so it doesn't read as idle. */
+.rowtasks {
+  font: 600 10.5px var(--cc-font-mono);
+  color: var(--cc-working);
+  font-variant-numeric: tabular-nums;
+  margin-right: 6px;
+  white-space: nowrap;
+}
 .ctxchip.warm {
   color: var(--cc-permission);
   background: rgba(245, 158, 11, 0.12);

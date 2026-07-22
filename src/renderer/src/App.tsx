@@ -1118,6 +1118,10 @@ export function App() {
             )}
             {selectedGroup.rows.map(({ s, depth, edgeType }) => {
               const why = whyOf(s)
+              // Background work running right now — so a session churning on a dev
+              // server / build / agent doesn't read as idle. Only 'running' counts
+              // (a stalled/failed task isn't actively working).
+              const bgRunning = s.subtasks?.filter((t) => t.status === 'running').length ?? 0
               return (
               <li
                 key={s.sessionId}
@@ -1184,6 +1188,14 @@ export function App() {
                   <span className="meta resume">resume</span>
                 ) : (
                   <span className="meta">
+                    {bgRunning > 0 && (
+                      <span
+                        className="rowtasks"
+                        title={`${bgRunning} background task${bgRunning > 1 ? 's' : ''} running — see the activity panel`}
+                      >
+                        ⚙ {bgRunning}
+                      </span>
+                    )}
                     {typeof s.contextPct === 'number' && (
                       <span
                         className={`ctxchip ${ctxTone(s.contextPct)}`}
