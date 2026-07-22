@@ -2008,6 +2008,42 @@ ipcMain.handle('artifact:reveal', (_e, filePath: string) => {
   shell.showItemInFolder(filePath)
   return { ok: true }
 })
+// Read an artifact's content for the in-app preview. Images/SVG come back as a
+// data URL (rendered via <img>, which is script-inert — an SVG's scripts never
+// run); text/markdown come back as a (size-capped) string. HTML and PDF return
+// nothing to inline — the renderer opens those externally (HTML in the real
+// browser). Guarded + size-capped so this can't slurp a huge or arbitrary file.
+const IMG_MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml',
+}
+const TEXT_EXTS = new Set(['.txt', '.csv', '.tsv', '.log', '.md', '.markdown'])
+const MAX_IMG_BYTES = 12 * 1024 * 1024
+const MAX_TEXT_BYTES = 512 * 1024
+ipcMain.handle('artifact:read', (_e, filePath: string) => {
+  if (!isSafeArtifact(filePath)) return { ok: false as const }
+  const ext = extname(filePath).toLowerCase()
+  try {
+    const size = statSync(filePath).size
+    const mime = IMG_MIME[ext]
+    if (mime) {
+      if (size > MAX_IMG_BYTES) return { ok: true as const, tooBig: true }
+      return { ok: true as const, dataUrl: `data:${mime};base64,${readFileSync(filePath).toString('base64')}` }
+    }
+    if (TEXT_EXTS.has(ext)) {
+      if (size > MAX_TEXT_BYTES) return { ok: true as const, tooBig: true }
+      return { ok: true as const, text: readFileSync(filePath, 'utf8') }
+    }
+    return { ok: true as const } // pdf/html — inline nothing; open externally
+  } catch {
+    return { ok: false as const }
+  }
+})
 
 // Remembered window bounds. Restored only if they still land on a connected
 // display's work area — a saved position from an unplugged external monitor
