@@ -134,6 +134,10 @@ contextBridge.exposeInMainWorld('cc', {
   termInput: (key: string, data: string) => ipcRenderer.send('term:input', key, data),
   termOpenPath: (key: string, path: string) => ipcRenderer.invoke('term:openPath', key, path),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+  artifactOpen: (path: string) =>
+    ipcRenderer.invoke('artifact:open', path) as Promise<{ ok: boolean }>,
+  artifactReveal: (path: string) =>
+    ipcRenderer.invoke('artifact:reveal', path) as Promise<{ ok: boolean }>,
   termResize: (key: string, cols: number, rows: number) =>
     ipcRenderer.send('term:resize', key, cols, rows),
   termRedraw: (key: string) => ipcRenderer.send('term:redraw', key),

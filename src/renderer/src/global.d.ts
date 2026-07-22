@@ -115,6 +115,8 @@ declare global {
       termInput: (key: string, data: string) => void
       termOpenPath: (key: string, path: string) => Promise<{ ok: boolean }>
       openExternal: (url: string) => Promise<{ ok: boolean }>
+      artifactOpen: (path: string) => Promise<{ ok: boolean }>
+      artifactReveal: (path: string) => Promise<{ ok: boolean }>
       termResize: (key: string, cols: number, rows: number) => void
       termRedraw: (key: string) => void
       termClose: (key: string) => void

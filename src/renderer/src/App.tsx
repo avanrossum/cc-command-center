@@ -52,6 +52,12 @@ interface Session {
     status: 'running' | 'done'
     startedAt?: number
   }[]
+  artifacts?: {
+    path: string
+    name: string
+    kind: 'image' | 'svg' | 'pdf' | 'html' | 'markdown'
+    mtimeMs: number
+  }[]
   unhandled?: boolean // open gate you haven't looked at yet — shows a pip until seen
   contextPct?: number | null // context window used %, from the session's statusLine
 }
@@ -897,7 +903,7 @@ export function App() {
     <div className="comp-strip-wrap">
       <div className="comp-section-head strip-head">
         <button className="sh-toggle" onClick={() => showStrip(!stripOpen)}>
-          <span className="chev">{stripOpen ? '▾' : '▸'}</span> activity
+          <span className="chev">{stripOpen ? '▾' : '▸'}</span> timeline
         </button>
         {stripOpen && (
           <span className="strip-gran">
@@ -957,13 +963,14 @@ export function App() {
       activeSessionId={selected?.sessionId ?? null}
     />
   )
+  const artifactsPanel = <ArtifactsPanel session={selected ? live.find((s) => s.sessionId === selected.sessionId) ?? null : null} />
 
   return (
     <div className="app">
       {/* Popped panels float at the app ROOT so they persist when the companion
           (their normal home) is hidden. */}
       {popped.has('strip') && (
-        <FloatCard id="strip" title="Activity" onReturn={() => setPop('strip', false)}>
+        <FloatCard id="strip" title="Timeline" onReturn={() => setPop('strip', false)}>
           {stripPanel}
         </FloatCard>
       )}
@@ -1449,7 +1456,7 @@ export function App() {
                 </button>
               </div>
               {popped.has('strip') ? (
-                <PopStub title="Activity" onReturn={() => setPop('strip', false)} />
+                <PopStub title="Timeline" onReturn={() => setPop('strip', false)} />
               ) : (
                 <div className="poppable">
                   <button
@@ -1545,6 +1552,7 @@ export function App() {
                   {fleetPanel}
                 </div>
               )}
+              {artifactsPanel}
               <ArbiterConsole
                 panel={snap.arbiter}
                 enabled={snap.settings?.arbiterEnabled ?? false}
@@ -2661,6 +2669,64 @@ function FleetActivity({
               )}
             </>
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Artifact preview (spec D, v1): the previewable files the OPEN session produced.
+// A safe list — Open (OS default app) / Reveal (Finder) — with no in-app rendering
+// yet (the fold-out drawer + sandboxed HTML/image preview are the next step).
+// Hidden entirely when the open session made nothing previewable.
+function ArtifactsPanel({ session }: { session: Session | null }): React.ReactElement | null {
+  const [open, setOpen] = useState(true)
+  useEffect(() => {
+    window.cc.stateGet('artifactsOpen').then((v) => v === 'false' && setOpen(false))
+  }, [])
+  const arts = session?.artifacts ?? []
+  if (arts.length === 0) return null
+  const toggle = (): void => {
+    const n = !open
+    setOpen(n)
+    window.cc.stateSet('artifactsOpen', String(n))
+  }
+  return (
+    <div className={`fleet${open ? ' open' : ''}`}>
+      <button
+        className="fleet-head"
+        onClick={toggle}
+        title="Previewable files this session produced — open or reveal in Finder"
+      >
+        <span className="chev">{open ? '▾' : '▸'}</span>
+        <span className="fleet-name">artifacts</span>
+        <span className="fleet-count">{arts.length}</span>
+      </button>
+      {open && (
+        <div className="fleet-body">
+          {arts.map((a) => (
+            <div className="artifact-row" key={a.path}>
+              <span className={`artifact-kind ak-${a.kind}`}>{a.kind}</span>
+              <span className="artifact-name" title={a.path}>
+                {a.name}
+              </span>
+              <span className="grow" />
+              <button
+                className="artifact-btn"
+                title="Open in the default app"
+                onClick={() => window.cc.artifactOpen(a.path)}
+              >
+                open
+              </button>
+              <button
+                className="artifact-btn"
+                title="Reveal in Finder"
+                onClick={() => window.cc.artifactReveal(a.path)}
+              >
+                reveal
+              </button>
+            </div>
+          ))}
         </div>
       )}
     </div>

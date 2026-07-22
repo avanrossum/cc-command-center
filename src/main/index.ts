@@ -101,6 +101,7 @@ import {
   type SubtaskInfo,
   type WorkflowInfo,
 } from './engine/subtasks'
+import { scanArtifacts, type ArtifactInfo } from './engine/artifacts'
 
 let win: BrowserWindow | null = null
 // Send to the renderer, guarding the window's whole lifecycle. `win?.` only
@@ -154,6 +155,7 @@ type EnrichedSession = LiveSession & {
   unhandled?: boolean // has an open gate you haven't looked at yet (drives the pip)
   subtasks?: SubtaskInfo[] // subagents this session has spawned (fleet activity view)
   workflows?: WorkflowInfo[] // Workflow-tool runs this session started, one entry each
+  artifacts?: ArtifactInfo[] // previewable files this session produced (Write + cwd)
   contextPct?: number | null // context window used %, from the session's statusLine payload
 }
 interface Snapshot {
@@ -698,6 +700,7 @@ function snapshot(): Snapshot {
       // scanner, so this is cheap on the scans where nothing changed.
       subtasks: s.transcriptPath ? scanSubtasks(s.transcriptPath, now) : undefined,
       workflows: s.transcriptPath ? scanWorkflowSummaries(s.transcriptPath, now) : undefined,
+      artifacts: scanArtifacts(s.transcriptPath, s.cwd, now),
       contextPct: usage.perSession.get(s.sessionId)?.contextPct,
     }
   })
@@ -1975,6 +1978,33 @@ function openExternalUrl(url: string): void {
 // we bypass it entirely and open in the system browser ourselves.
 ipcMain.handle('shell:openExternal', (_e, url: string) => {
   openExternalUrl(url)
+  return { ok: true }
+})
+
+// Artifact preview (spec D, v1): open a session-produced file in the OS default
+// app, or reveal it in Finder. Defense-in-depth: the path must be an existing
+// file with a previewable extension, so even though these paths come from our own
+// scan, a bad one can't be turned into "open an arbitrary path".
+const ARTIFACT_EXTS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.pdf', '.html', '.htm', '.md', '.markdown',
+])
+function isSafeArtifact(p: unknown): p is string {
+  if (typeof p !== 'string' || !p) return false
+  if (!ARTIFACT_EXTS.has(extname(p).toLowerCase())) return false
+  try {
+    return statSync(p).isFile()
+  } catch {
+    return false
+  }
+}
+ipcMain.handle('artifact:open', async (_e, filePath: string) => {
+  if (!isSafeArtifact(filePath)) return { ok: false }
+  const err = await shell.openPath(filePath) // '' on success
+  return { ok: !err }
+})
+ipcMain.handle('artifact:reveal', (_e, filePath: string) => {
+  if (!isSafeArtifact(filePath)) return { ok: false }
+  shell.showItemInFolder(filePath)
   return { ok: true }
 })
 

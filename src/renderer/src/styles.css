@@ -2364,6 +2364,48 @@ select.cat-in {
   font-size: 9px;
   color: var(--cc-working);
 }
+/* Artifact rows: a file this session produced, with open / reveal actions. */
+.artifact-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 11px;
+}
+.artifact-kind {
+  flex: none;
+  font: 8px var(--cc-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--cc-meta);
+  border: 1px solid var(--cc-border);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+.artifact-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--cc-dim);
+}
+.artifact-row .grow {
+  flex: 1;
+}
+.artifact-btn {
+  flex: none;
+  background: transparent;
+  border: 1px solid var(--cc-border);
+  color: var(--cc-meta);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.artifact-btn:hover {
+  color: var(--cc-text);
+  border-color: var(--cc-dim2);
+}
 
 /* Collapsed "N done" line per fleet group — done subagents don't get a row each. */
 .fleet-donerow {
