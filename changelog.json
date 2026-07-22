@@ -1,6 +1,16 @@
 {
   "versions": [
     {
+      "version": "0.16.0",
+      "date": "2026-07-22",
+      "critical": false,
+      "features": [
+        "Artifacts: the companion now surfaces the previewable files the open session produced — images, SVG, PDF, HTML, and Markdown — each with Open (in the default app) and Reveal in Finder. Detected passively from what the session wrote, and only listed while the file still exists.",
+        "Renamed the session-timeline pop-out to Timeline (it was Activity, which now belongs to the activity panel).",
+        "Note: in-app preview (rendering images/PDF/HTML inside a drawer) is coming in a follow-up — this release surfaces and opens the files."
+      ]
+    },
+    {
       "version": "0.15.0",
       "date": "2026-07-22",
       "critical": false,
