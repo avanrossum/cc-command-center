@@ -1531,6 +1531,30 @@ body {
   font-size: 15px;
   font-weight: 650;
 }
+/* Settings tab bar. */
+.settabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  margin: 12px 0 16px;
+}
+.settab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--cc-dim);
+  padding: 7px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+.settab:hover {
+  color: var(--cc-text);
+}
+.settab.on {
+  color: var(--cc-text);
+  border-bottom-color: var(--cc-working);
+}
 .spawnsub {
   margin-top: 5px;
   font-size: 12px;

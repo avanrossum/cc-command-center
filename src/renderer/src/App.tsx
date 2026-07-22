@@ -1796,6 +1796,7 @@ function SettingsModal({
   showFlash: (m: string) => void
   close: () => void
 }) {
+  const [tab, setTab] = useState<'general' | 'terminal' | 'arbiter' | 'keys'>('general')
   const trust = settings?.trustChildrenByDefault ?? true
   const mailGranted = settings?.mailAllowGranted ?? false
   const hooksInstalled = settings?.statusHooksInstalled ?? false
@@ -1835,7 +1836,20 @@ function SettingsModal({
     <div className="spawnscrim" onClick={close}>
       <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
         <div className="spawntitle">Settings</div>
+        <div className="settabs">
+          {(['general', 'terminal', 'arbiter', 'keys'] as const).map((t) => (
+            <button
+              key={t}
+              className={`settab${tab === t ? ' on' : ''}`}
+              onClick={() => setTab(t)}
+            >
+              {t === 'general' ? 'General' : t === 'terminal' ? 'Terminal' : t === 'arbiter' ? 'Arbiter' : 'API keys'}
+            </button>
+          ))}
+        </div>
 
+        {tab === 'general' && (
+        <>
         <label className="setrow">
           <input
             type="checkbox"
@@ -1916,7 +1930,10 @@ function SettingsModal({
             {hooksInstalled ? 'Remove' : 'Install…'}
           </button>
         </div>
+        </>
+        )}
 
+        {tab === 'terminal' && (
         <div className="setsection">
           <b>Terminal font</b>
           <span className="setsub">
@@ -1965,7 +1982,9 @@ function SettingsModal({
             The quick brown fox 0123 () {'{}'} =&gt; != ~/dev &amp;&amp; ll
           </div>
         </div>
+        )}
 
+        {tab === 'arbiter' && (
         <div className="setsection">
           <b>The Arbiter</b>
           <span className="setsub">
@@ -2031,7 +2050,9 @@ function SettingsModal({
             <span className="setsub">USD — it stops at this, it does not just warn. 0 = no cap.</span>
           </div>
         </div>
+        )}
 
+        {tab === 'keys' && (
         <div className="setsection">
           <b>API keys</b>
           <span className="setsub">
@@ -2082,6 +2103,7 @@ function SettingsModal({
             </button>
           </div>
         </div>
+        )}
 
         <div className="spawnactions">
           <button className="rbtn" onClick={close}>
