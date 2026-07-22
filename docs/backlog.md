@@ -71,6 +71,56 @@ live to all terminals. Wiring:
   data URL) for fonts not installed system-wide; and `@xterm/addon-ligatures` for Fira Code etc.
   These stay as follow-ups; the installed-font picker is the "all at once" deliverable.
 
+### C. Unified Activity ledger — background tasks + agents + workflows (spec; verify data model, then greenlight)
+
+Fold Claude Code's per-session "Background tasks" panel into CC's fleet model. It's more than
+shell jobs: the same panel carries agents and workflows (with phases, agent counts, token spend).
+This **extends the existing Fleet activity view** (subagents, SHIPPED v0.11.0) into one unified
+ledger. All of it is passively readable — no new hooks — from the same substrate the subagent
+scanner already uses.
+
+**Data model (verified 2026-07-22 against a Desktop session's transcript + runtime dir):**
+- **Shell task** (`run_in_background: true`) — id shape `b…`. Launch = a transcript `tool_result`
+  string `Command running in background with ID: <id>. Output is being written to: <abs path>`;
+  the paired Bash `tool_use` input holds the command. Live output = that `.output` file (tail-able).
+- **Agent** (subagent) — id shape `a…`. Already scanned (Agent/Task tool_use → tool_result); its
+  transcript is `subagents/.../agent-<id>.jsonl`.
+- **Workflow** — id shape `w…`. Name/description/**phases** come from the persisted script
+  `<session>/workflows/scripts/<name>-<runId>.js` (`meta.phases`); per-phase progress from
+  `<session>/subagents/workflows/<runId>/journal.jsonl` (per-agent `started`/`result`, each keyed
+  to a phase); agents/tokens/duration from the completion signal's `<usage>` block.
+- **Completion signal (all three)** — a `<task-notification>` transcript entry with `<task-id>`,
+  `<status>` (`completed` / `failed` / `stopped` / `killed`), and a `<summary>` (command + exit
+  code). No notification yet ⇒ still running. Elapsed = now − launch timestamp.
+
+**Design decisions (settled with user 2026-07-22):**
+- **ONE merged Activity list**, not separate sections — type-badged (shell / agent / workflow),
+  each row rendered with the detail it has (shell: command + output tail; agent: prompt + parent;
+  workflow: description + phase progress + agents/tokens/duration).
+- **Row-level "⚙ N running" signal** on the rail row: a session with running background work is NOT
+  idle. This is the core fleet win — see the running-vs-idle state work in [[command-center-control-space-exploration]].
+- **A failed task is AWARENESS-tier, not action-tier.** It is "this happened," not "you must act."
+  So it does NOT enter the hard needs-you / blocked gate bucket (those mean *respond to proceed*).
+  It shows as a soft/quiet marker (row + in the ledger), stays visible, and never clogs the
+  needs-you board. This is a **third signal tier** the state model doesn't cleanly have yet
+  (gate = action-required; this = notice-only). Worth naming it explicitly when built.
+- **Workflow → agent nesting** reuses the existing parent/child hierarchy (see
+  [[command-center-hierarchy-model]]) — a workflow's agents render as its children, not a flat list.
+
+**Open forks (my recommendation baked in — say the word to change):**
+- **Scope:** per-session ledger AND a fleet roll-up in the companion pane ("everything running
+  across all sessions right now"). Recommend building the per-session ledger first, roll-up as a
+  fast-follow.
+- **Sequencing:** shell tasks + agents first (the common, high-value case — dev servers, builds,
+  test watchers), then the rich **workflow** rendering (phases/progress/usage) as a fast-follow.
+
+**Verify before building (per [[command-center-release-discipline]]):** confirm a real managed
+**CLI** session (not just this Desktop session) writes the same `tasks/` dir + `task-notification`
+format. Quick check, not a build.
+
+**Effort:** medium. Extends the subagent transcript scanner with a shell-task pass + a workflow
+reader; the completion-status map is one scan of `task-notification` entries.
+
 ## ✅ Pre-release cleanup — DONE (2026-07-20, before The Arbiter)
 
 Sequence the user set and we followed: (1) `feat/bigger-control-space` merged → (2) this cleanup
