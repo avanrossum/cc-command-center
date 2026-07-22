@@ -15,17 +15,25 @@ import path from 'node:path'
 //    Reading the transcript alone misses every workflow agent, which is why a
 //    session that ran a workflow showed nothing.
 //
+// 3. BACKGROUND SHELL TASKS (`Bash` with run_in_background). A `Bash` tool_use
+//    with `input.run_in_background === true`; its IMMEDIATE tool_result is the
+//    LAUNCH — "Command running in background with ID: <id>" — NOT completion, so
+//    a shell task is never marked done just because a result exists. Completion
+//    is a later `<task-notification>` (a user message) carrying `<task-id>` +
+//    `<status>` (completed / failed / killed / stopped). Verified against real
+//    CLI sessions (2026-07-22), not just Desktop.
+//
 // All of this is confirmed against real files (2026-07-20). Notable traps found
 // by looking rather than assuming: the tool is named `Agent` (not `Task`) here;
 // `message.content` is a bare string ~4% of the time, not always a list; the
 // journal's `key` is a content hash, NOT the human label — the useful
 // description is the agent's first user message.
 
-export type SubtaskStatus = 'running' | 'done' | 'stalled'
-export type SubtaskSource = 'task' | 'workflow'
+export type SubtaskStatus = 'running' | 'done' | 'stalled' | 'failed'
+export type SubtaskSource = 'task' | 'workflow' | 'shell'
 
 export interface SubtaskInfo {
-  id: string // tool_use id (task) or agentId (workflow) — stable identity
+  id: string // tool_use id (task) or agentId (workflow) or bg task id (shell)
   description: string
   subagentType?: string
   background: boolean
@@ -62,6 +70,33 @@ function tsToMs(ts: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined
 }
 
+// Map a task-notification <status> to a terminal SubtaskStatus. completed/stopped
+// ended cleanly enough to read as done; failed/killed are the awareness signal.
+function notifStatus(s: string): SubtaskStatus {
+  return s === 'failed' || s === 'killed' ? 'failed' : 'done'
+}
+
+// A readable label for a shell command: first line, with leading `cd …;` and
+// `source …;` boilerplate stripped so the real command (e.g. `npm run dev`)
+// leads instead of a long path. Falls back to the raw first line.
+function commandLabel(cmd: string): string {
+  let s = cmd.split('\n')[0].trim()
+  s = s.replace(/^(?:cd\s+[^;]+;\s*)+/, '')
+  s = s.replace(/^(?:source\s+[^;]+;\s*)+/, '')
+  return s.trim() || cmd.split('\n')[0].trim()
+}
+
+// A tool_result's content is a string, or an array of {type:'text', text} blocks.
+function resultText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .map((b) => (b && typeof b === 'object' ? ((b as { text?: string }).text ?? '') : ''))
+      .join(' ')
+  }
+  return ''
+}
+
 function readWindow(path: string, size: number, maxBytes: number): { buf: string; from: number } | null {
   const from = Math.max(0, size - maxBytes)
   try {
@@ -96,9 +131,20 @@ function scanTranscript(transcriptPath: string): { info: SubtaskInfo; mtimeMs: n
   const start = win.from > 0 ? 1 : 0 // partial first line when we started mid-file
   const uses = new Map<string, SubtaskInfo>()
   const doneIds = new Set<string>()
+  // Background shell tasks: captured by tool_use, linked to a durable task id via
+  // the launch tool_result, and marked terminal only by a later task-notification.
+  const shellUses = new Map<string, { command: string; startedAt?: number }>() // toolu id → shell
+  const toolToTaskId = new Map<string, string>() // toolu id → background task id
+  const taskStatus = new Map<string, SubtaskStatus>() // task id → terminal status
   for (let i = start; i < lines.length; i++) {
     const line = lines[i].trim()
     if (!line) continue
+    // A completion notice is a plain-string user message, skipped by the array
+    // check below, so read its terminal status straight off the raw line.
+    if (line.includes('task-notification')) {
+      const m = line.match(/<task-id>([^<]+)<\/task-id>[\s\S]*?<status>([a-z]+)<\/status>/)
+      if (m) taskStatus.set(m[1], notifStatus(m[2]))
+    }
     let r: Record<string, unknown>
     try {
       r = JSON.parse(line)
@@ -123,16 +169,44 @@ function scanTranscript(transcriptPath: string): { info: SubtaskInfo; mtimeMs: n
           status: 'running',
           startedAt: tsToMs(r.timestamp),
         })
+      } else if (b.type === 'tool_use' && b.name === 'Bash') {
+        const input = (b.input ?? {}) as Record<string, unknown>
+        const id = b.id as string
+        if (id && input.run_in_background === true) {
+          shellUses.set(id, {
+            command: commandLabel((input.command as string) || 'shell task'),
+            startedAt: tsToMs(r.timestamp),
+          })
+        }
       } else if (b.type === 'tool_result') {
         const tid = b.tool_use_id as string | undefined
         if (tid) doneIds.add(tid)
+        const m = resultText(b.content).match(/Command running in background with ID:\s*([A-Za-z0-9]+)/)
+        if (m && tid) toolToTaskId.set(tid, m[1])
       }
     }
   }
-  const tasks = [...uses.values()].map((info) => ({
+  const tasks: { info: SubtaskInfo; mtimeMs: number }[] = [...uses.values()].map((info) => ({
     info: { ...info, status: doneIds.has(info.id) ? ('done' as const) : ('running' as const) },
     mtimeMs: stat.mtimeMs,
   }))
+  // Fold in background shell tasks. Identity is the durable task id (matches the
+  // .output file) when known; status comes ONLY from the notification, so a
+  // long-running dev server stays 'running' — never 'done' from the launch result.
+  for (const [tooluId, u] of shellUses) {
+    const taskId = toolToTaskId.get(tooluId)
+    tasks.push({
+      info: {
+        id: taskId || tooluId,
+        description: u.command.slice(0, 90),
+        background: true,
+        source: 'shell',
+        status: (taskId && taskStatus.get(taskId)) || 'running',
+        startedAt: u.startedAt,
+      },
+      mtimeMs: stat.mtimeMs,
+    })
+  }
   txCache.set(transcriptPath, { mtimeMs: stat.mtimeMs, size: stat.size, tasks })
   return tasks
 }
@@ -294,9 +368,16 @@ function scanWorkflows(transcriptPath: string): { info: SubtaskInfo; mtimeMs: nu
 // ---- public ----------------------------------------------------------------
 
 // A running subtask whose source file hasn't advanced for STALLED_MS reads as
-// stalled — the run was likely interrupted.
+// stalled — the run was likely interrupted. NOT applied to shell tasks: a healthy
+// long-running one (a dev server) sits quiet with the transcript unchanged for
+// hours, so its liveness is the presence/absence of a completion notification,
+// not file mtime.
 function applyStall(entry: { info: SubtaskInfo; mtimeMs: number }, now: number): SubtaskInfo {
-  if (entry.info.status === 'running' && now - entry.mtimeMs > STALLED_MS) {
+  if (
+    entry.info.source !== 'shell' &&
+    entry.info.status === 'running' &&
+    now - entry.mtimeMs > STALLED_MS
+  ) {
     return { ...entry.info, status: 'stalled' }
   }
   return entry.info
