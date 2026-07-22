@@ -2264,6 +2264,14 @@ select.cat-in {
 .fs-stalled {
   background: var(--cc-permission);
 }
+/* Failed = awareness, not a gate: a muted red marker, no pulse, no alarm. */
+.fs-failed {
+  background: var(--cc-blocked);
+}
+.fleet-sub.sub-failed .fleet-desc {
+  color: var(--cc-blocked);
+  opacity: 0.9;
+}
 .fleet-desc {
   min-width: 0;
   overflow: hidden;

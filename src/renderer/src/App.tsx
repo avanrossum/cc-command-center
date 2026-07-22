@@ -39,8 +39,8 @@ interface Session {
     description: string
     subagentType?: string
     background: boolean
-    source: 'task' | 'workflow'
-    status: 'running' | 'done' | 'stalled'
+    source: 'task' | 'workflow' | 'shell'
+    status: 'running' | 'done' | 'stalled' | 'failed'
     startedAt?: number
   }[]
   unhandled?: boolean // open gate you haven't looked at yet — shows a pip until seen
@@ -2497,26 +2497,35 @@ function FleetActivity({
     .map((s) => {
       const subs = s.subtasks!
       const active = subs.filter((t) => t.status === 'running' || t.status === 'stalled')
+      // Failed = awareness, not action: shown as its own soft row, never a gate.
+      const failed = subs.filter((t) => t.status === 'failed')
       const done = subs.filter((t) => t.status === 'done')
       const newest = subs.reduce((m, t) => Math.max(m, t.startedAt ?? 0), 0)
-      return { session: s, active, doneCount: done.length, newest }
+      return { session: s, active, failed, doneCount: done.length, newest }
     })
+    // A group shows while it has live work, OR recently (TTL) if it only has
+    // finished/failed work — so a just-failed task lingers long enough to notice.
     .filter((g) => g.active.length > 0 || now - g.newest <= FLEET_DONE_TTL_MS)
 
   const running = groups.reduce((n, g) => n + g.active.length, 0)
+  const failedN = groups.reduce((n, g) => n + g.failed.length, 0)
   const label =
-    groups.length === 0 ? 'no subagents' : running > 0 ? `${running} running` : 'idle'
+    groups.length === 0
+      ? 'no activity'
+      : [running > 0 ? `${running} running` : '', failedN > 0 ? `${failedN} failed` : '']
+          .filter(Boolean)
+          .join(' · ') || 'idle'
   return (
     <div className={`fleet${open ? ' open' : ''}`}>
-      <button className="fleet-head" onClick={toggle} title="Subagents spawned across the fleet">
+      <button className="fleet-head" onClick={toggle} title="Background activity across the fleet — agents, shell tasks, and workflows">
         <span className="chev">{open ? '▾' : '▸'}</span>
-        <span className="fleet-name">subagents</span>
+        <span className="fleet-name">activity</span>
         <span className="fleet-count">{label}</span>
       </button>
       {open && (
         <div className="fleet-body">
           {groups.length === 0 ? (
-            <div className="fleet-empty">No session has a subagent running.</div>
+            <div className="fleet-empty">No session has background activity.</div>
           ) : (
             groups.map((g) => (
               <div className="fleet-group" key={g.session.sessionId}>
@@ -2524,17 +2533,18 @@ function FleetActivity({
                   {g.session.name ?? `pid ${g.session.pid}`}
                   {g.active.length > 0 && <span className="fleet-owner-n">{g.active.length}</span>}
                 </button>
-                {g.active.map((t) => (
+                {[...g.active, ...g.failed].map((t) => (
                   <div className={`fleet-sub sub-${t.status}`} key={t.id}>
                     <span className={`fleet-dot fs-${t.status}`} />
                     <span className="fleet-desc">{t.description}</span>
                     {t.source === 'workflow' && <span className="fleet-bg">wf</span>}
-                    {t.background && <span className="fleet-bg">bg</span>}
+                    {t.source === 'shell' && <span className="fleet-bg">sh</span>}
+                    {t.source === 'task' && t.background && <span className="fleet-bg">bg</span>}
                   </div>
                 ))}
                 {g.doneCount > 0 && (
                   <div className="fleet-donerow">
-                    {g.doneCount} done{g.active.length === 0 ? ' · idle' : ''}
+                    {g.doneCount} done{g.active.length === 0 && g.failed.length === 0 ? ' · idle' : ''}
                   </div>
                 )}
               </div>
