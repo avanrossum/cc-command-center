@@ -959,7 +959,7 @@ export function App() {
         </FloatCard>
       )}
       {popped.has('subagents') && (
-        <FloatCard id="subagents" title="Subagents" onReturn={() => setPop('subagents', false)}>
+        <FloatCard id="subagents" title="Activity" onReturn={() => setPop('subagents', false)}>
           {fleetPanel}
         </FloatCard>
       )}
@@ -1521,7 +1521,7 @@ export function App() {
                 )}
               </div>
               {popped.has('subagents') ? (
-                <PopStub title="Subagents" onReturn={() => setPop('subagents', false)} />
+                <PopStub title="Activity" onReturn={() => setPop('subagents', false)} />
               ) : (
                 <div className="poppable">
                   <button
