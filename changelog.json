@@ -1,6 +1,16 @@
 {
   "versions": [
     {
+      "version": "0.18.0",
+      "date": "2026-07-22",
+      "critical": false,
+      "features": [
+        "Categories can now be reordered — drag a category in the rail and drop it where you want.",
+        "On launch the app reopens the last category you had selected, instead of the largest one.",
+        "Window size and position are remembered more reliably across quit and reopen, including a maximized window."
+      ]
+    },
+    {
       "version": "0.17.0",
       "date": "2026-07-22",
       "critical": false,
