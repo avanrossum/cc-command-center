@@ -1,6 +1,17 @@
 {
   "versions": [
     {
+      "version": "0.14.4",
+      "date": "2026-07-22",
+      "critical": false,
+      "features": [
+        "Activity view: background shell tasks and workflows now appear alongside agents, each with a type badge, and a failed task shows as a quiet awareness row.",
+        "Rail rows show a \"⚙ N\" count of background work running, so a session churning on a build or dev server no longer looks idle.",
+        "Fixed background agents and tasks being marked done the instant they launched — they now reflect real running / done / failed status.",
+        "A completed turn now surfaces as a \"done — your move\" item for sessions you weren't watching, and clears once you open them."
+      ]
+    },
+    {
       "version": "0.14.3",
       "date": "2026-07-22",
       "critical": false,
