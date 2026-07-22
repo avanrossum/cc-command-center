@@ -340,6 +340,10 @@ export function App() {
   // The category rail selects ONE collection; its tree shows in the pane below.
   const [selectedCat, setSelectedCat] = useState<number | null>(null)
   const initCatRef = useRef(false)
+  // Restore the last-selected category on launch (persisted as a string: the id,
+  // or 'null' for Uncategorized). Loaded async; the init-select effect waits for it.
+  const restoredCatRef = useRef<string | null>(null)
+  const [catRestoreLoaded, setCatRestoreLoaded] = useState(false)
   // Companion pane (right of the terminal): the cross-fleet "needs you" board.
   // Default OPEN; open/hidden state and scope persist across restarts.
   const [companionOpen, setCompanionOpen] = useState(true)
@@ -445,6 +449,10 @@ export function App() {
     window.cc.stateGet('stripWinMin').then((v) => {
       const n = v ? Number(v) : NaN
       if (Number.isFinite(n) && n > 0) setStripWinMin(n)
+    })
+    window.cc.stateGet('lastCategory').then((v) => {
+      restoredCatRef.current = v
+      setCatRestoreLoaded(true)
     })
     const offSessions = window.cc.onSessions((s) => setSnap(s as Snapshot))
     const offShow = window.cc.onTermShow((p) => {
@@ -804,13 +812,27 @@ export function App() {
       rows: [] as TreeRow[],
     }
 
-  // First time sessions load, land on the fullest category rather than an empty one.
+  // First time sessions load, land on the LAST-USED category (if it still exists),
+  // else the fullest — never an empty rail.
   useEffect(() => {
-    if (initCatRef.current || live.length === 0) return
+    if (initCatRef.current || live.length === 0 || !catRestoreLoaded) return
     initCatRef.current = true
+    const raw = restoredCatRef.current
+    const target: number | null | undefined =
+      raw === 'null' ? null : raw != null && raw !== '' ? Number(raw) : undefined
+    if (target !== undefined && groups.some((g) => g.id === target)) {
+      setSelectedCat(target)
+      return
+    }
     const fullest = [...groups].sort((a, b) => b.rows.length - a.rows.length)[0]
     if (fullest) setSelectedCat(fullest.id)
-  }, [groups, live])
+  }, [groups, live, catRestoreLoaded])
+
+  // Remember the selected category so the next launch reopens it.
+  useEffect(() => {
+    if (!initCatRef.current) return
+    window.cc.stateSet('lastCategory', selectedCat === null ? 'null' : String(selectedCat))
+  }, [selectedCat])
 
   const openSession = (s: Session) => {
     lastByCat.current.set(s.categoryId, s.sessionId) // remember per category for rail jump-back
