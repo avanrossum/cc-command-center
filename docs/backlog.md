@@ -1,5 +1,28 @@
 # Backlog — next features (specs)
 
+## ⏭ NEXT — observations & fixes (queued 2026-07-22, after v0.17.0)
+
+1. **Category color doesn't update (BUG).** Open the category-edit modal for a
+   category that already has a color, pick a new color → it doesn't take; the
+   category keeps its old color. Investigate the color-change path in the category
+   editor (renderer) → `cat:setColor` IPC → registry; likely the modal isn't
+   sending the new color, or the update isn't applied/re-rendered.
+
+2. **Reorder categories via drag-and-drop.** The category rail is fixed order;
+   add drag-to-reorder. Needs a persisted `order`/`position` on the category
+   (registry migration) + drag handling in the rail.
+
+3. **Reopen-after-quit:**
+   - **Window size/position NOT remembered (BUG/regression).** Built in v0.14.0
+     (savedBounds/persistBounds in `src/main/index.ts`), but the user reports it
+     doesn't restore. Popped-window state IS remembered (good). Investigate: is
+     persistBounds firing on close, is savedBounds restoring, or is the on-screen
+     validation rejecting? Verify `windowBounds` app_state is written + read.
+   - **Open last-used category instead of the largest.** On launch it currently
+     opens the fullest category (`initCatRef` picks max rows). Change to the
+     last-selected category — persist the selected category id to app_state on
+     change, restore it on launch (fall back to largest if none/invalid).
+
 ## ✅ SHIPPED 2026-07-22 (versions 0.14.2 → 0.16.0)
 
 Everything in the NEXT UP block below is now built and released — kept here as the
