@@ -2050,12 +2050,20 @@ ipcMain.handle('artifact:read', (_e, filePath: string) => {
 // would otherwise open the window off-screen where it can't be reached.
 const MIN_W = 820
 const MIN_H = 480
+let restoreMaximized = false // set by savedBounds(), applied after the window shows
 function savedBounds(): { x?: number; y?: number; width: number; height: number } {
   const def = { width: 1180, height: 800 }
   try {
     const raw = getAppState('windowBounds')
     if (!raw) return def
-    const b = JSON.parse(raw) as { x?: number; y?: number; width?: number; height?: number }
+    const b = JSON.parse(raw) as {
+      x?: number
+      y?: number
+      width?: number
+      height?: number
+      maximized?: boolean
+    }
+    restoreMaximized = b.maximized === true
     const width = Math.max(MIN_W, Math.min(Number(b.width) || def.width, 6000))
     const height = Math.max(MIN_H, Math.min(Number(b.height) || def.height, 4000))
     if (typeof b.x !== 'number' || typeof b.y !== 'number') return { width, height }
@@ -2078,12 +2086,26 @@ function savedBounds(): { x?: number; y?: number; width: number; height: number 
 let saveBoundsTimer: NodeJS.Timeout | null = null
 function persistBounds(): void {
   if (!win || win.isDestroyed() || win.isMinimized()) return
-  // getBounds while maximized/fullscreen reports the fill size — skip so the
-  // restored size is the user's real windowed size, not the screen.
-  if (win.isMaximized() || win.isFullScreen()) return
   try {
+    // Maximized/fullscreen: getBounds reports the fill size, so keep the last
+    // WINDOWED bounds and just flag maximized — un-maximizing then restores the
+    // real size, and the maximized STATE is remembered (previously it was lost,
+    // so a maximized window always reopened at the default windowed size).
+    if (win.isMaximized() || win.isFullScreen()) {
+      let prev: Record<string, unknown> = {}
+      try {
+        prev = JSON.parse(getAppState('windowBounds') || '{}')
+      } catch {
+        /* none yet */
+      }
+      setAppState('windowBounds', JSON.stringify({ ...prev, maximized: true }))
+      return
+    }
     const b = win.getBounds()
-    setAppState('windowBounds', JSON.stringify({ x: b.x, y: b.y, width: b.width, height: b.height }))
+    setAppState(
+      'windowBounds',
+      JSON.stringify({ x: b.x, y: b.y, width: b.width, height: b.height, maximized: false }),
+    )
   } catch {
     /* ignore */
   }
@@ -2107,11 +2129,23 @@ function createWindow(): void {
   })
   const scheduleSave = (): void => {
     if (saveBoundsTimer) clearTimeout(saveBoundsTimer)
-    saveBoundsTimer = setTimeout(persistBounds, 500)
+    saveBoundsTimer = setTimeout(persistBounds, 400)
   }
+  // Cover every way the frame can change across platforms/versions: 'resized' /
+  // 'moved' fire after the gesture, 'resize' / 'move' continuously, plus maximize
+  // toggles. Debounced, so the extra events are cheap.
   win.on('resized', scheduleSave)
   win.on('moved', scheduleSave)
+  win.on('resize', scheduleSave)
+  win.on('move', scheduleSave)
+  win.on('maximize', scheduleSave)
+  win.on('unmaximize', scheduleSave)
+  win.on('enter-full-screen', scheduleSave)
+  win.on('leave-full-screen', scheduleSave)
+  win.on('blur', persistBounds)
   win.on('close', persistBounds)
+  // Restore a remembered maximized state once the window is up.
+  if (restoreMaximized) win.once('ready-to-show', () => win?.maximize())
 
   if (process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(process.env.ELECTRON_RENDERER_URL)
