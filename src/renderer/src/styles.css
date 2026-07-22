@@ -2416,6 +2416,30 @@ select.cat-in {
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
+/* A clear, obvious way to collapse the drawer — a full-width bar at its bottom
+   edge (right above the terminal), with a thick accent border so it reads as the
+   drawer's boundary and its close control at once. */
+.artdrawer-close {
+  flex: none;
+  width: 100%;
+  padding: 6px 14px;
+  background: #10131a;
+  border: 0;
+  border-top: 2px solid var(--cc-working);
+  color: var(--cc-dim);
+  font: 600 11px var(--cc-font-ui);
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  text-align: center;
+}
+.artdrawer-close .chev {
+  color: var(--cc-working);
+  margin-right: 4px;
+}
+.artdrawer-close:hover {
+  color: var(--cc-text);
+  background: #141821;
+}
 .artdrawer-handle {
   display: flex;
   align-items: center;

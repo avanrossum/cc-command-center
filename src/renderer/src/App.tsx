@@ -2757,30 +2757,35 @@ function ArtifactDrawer({ session }: { session: Session | null }): React.ReactEl
         <span className="artdrawer-count">{arts.length}</span>
       </button>
       {open && (
-        <div className="artdrawer-body">
-          <div className="artdrawer-preview">
-            <ArtifactPreview key={sel.path} art={sel} />
+        <>
+          <div className="artdrawer-body">
+            <div className="artdrawer-preview">
+              <ArtifactPreview key={sel.path} art={sel} />
+            </div>
+            <div className="artdrawer-list">
+              {arts.map((a) => (
+                <div className={`artdrawer-item${a.path === sel.path ? ' sel' : ''}`} key={a.path}>
+                  <button className="artdrawer-item-main" onClick={() => setSelPath(a.path)}>
+                    <span className="artifact-kind">{artExt(a.name) || a.kind}</span>
+                    <span className="artdrawer-item-name" title={a.path}>
+                      {a.name}
+                    </span>
+                  </button>
+                  <button
+                    className="artifact-btn"
+                    title="Reveal in Finder"
+                    onClick={() => window.cc.artifactReveal(a.path)}
+                  >
+                    ⤴
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="artdrawer-list">
-            {arts.map((a) => (
-              <div className={`artdrawer-item${a.path === sel.path ? ' sel' : ''}`} key={a.path}>
-                <button className="artdrawer-item-main" onClick={() => setSelPath(a.path)}>
-                  <span className="artifact-kind">{artExt(a.name) || a.kind}</span>
-                  <span className="artdrawer-item-name" title={a.path}>
-                    {a.name}
-                  </span>
-                </button>
-                <button
-                  className="artifact-btn"
-                  title="Reveal in Finder"
-                  onClick={() => window.cc.artifactReveal(a.path)}
-                >
-                  ⤴
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
+          <button className="artdrawer-close" onClick={toggle} title="Close the drawer">
+            <span className="chev">▲</span> close drawer
+          </button>
+        </>
       )}
     </div>
   )

@@ -1,16 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-// Artifact detection: the previewable files a session produced. Two passive
-// sources, no filesystem watcher:
-//   1. THE TRANSCRIPT. Write/Edit tool_use blocks carry a file_path — catches
-//      agent-authored files (HTML mocks, SVGs, docs) anywhere on disk.
-//   2. THE CWD TOP LEVEL. A shallow readdir (one level, never recursive — no
-//      descending into node_modules) catches files a Bash step produced (a chart
-//      a script rendered, a screenshot) that the transcript never names.
-// A path is kept only if it still exists as a file, so a since-deleted artifact
-// drops off on its own. This mirrors the subtask scanner: derive from what's on
-// disk, cache by mtime, surface nothing that isn't really there.
+// Artifact detection: the previewable files THIS session produced. Sourced from
+// the transcript's Write/Edit tool_use blocks — files the agent actually wrote,
+// which is genuinely per-session. A folder (cwd) scan was tried but dropped: it
+// surfaced every previewable file in the directory, so sessions sharing a folder
+// all showed each other's files — confusing, and not "this session's work". The
+// tradeoff is that a file created only by a Bash step (not the Write tool) isn't
+// caught; a folder browser could be a separate view later. A path is kept only if
+// it still exists as a file, so a since-deleted artifact drops off on its own.
 
 export type ArtifactKind = 'image' | 'svg' | 'pdf' | 'html' | 'markdown' | 'text'
 
@@ -35,8 +33,7 @@ const EXT_KIND: Record<string, ArtifactKind> = {
   '.md': 'markdown',
   '.markdown': 'markdown',
   // Plain text / data files an agent commonly produces. JSON/YAML/XML are left
-  // out on purpose — at a project's top level they're usually config, not output,
-  // and the cwd scan would surface package.json / tsconfig.json as noise.
+  // out on purpose — they're usually config, not a produced artifact.
   '.txt': 'text',
   '.csv': 'text',
   '.tsv': 'text',
@@ -44,9 +41,7 @@ const EXT_KIND: Record<string, ArtifactKind> = {
 }
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit'])
 const MAX_ARTIFACTS = 40
-const RECENT_MS = 24 * 60 * 60 * 1000 // a cwd file counts if touched within a day
 const MAX_SCAN_BYTES = 8 * 1024 * 1024 // tail window of the transcript, like the subtask scan
-const MAX_CWD_ENTRIES = 2000 // don't stat an enormous directory
 
 function kindOf(p: string): ArtifactKind | null {
   return EXT_KIND[path.extname(p).toLowerCase()] ?? null
@@ -103,62 +98,30 @@ function fromTranscript(transcriptPath: string, size: number, cwd: string): stri
   return out
 }
 
-// Previewable files at the TOP LEVEL of the cwd, touched recently. One readdir,
-// never recursive.
-function fromCwd(cwd: string, now: number): string[] {
-  if (!cwd) return []
-  let entries: fs.Dirent[]
-  try {
-    entries = fs.readdirSync(cwd, { withFileTypes: true })
-  } catch {
-    return []
-  }
-  const out: string[] = []
-  for (const e of entries.slice(0, MAX_CWD_ENTRIES)) {
-    if (!e.isFile() || e.name.startsWith('.')) continue
-    if (!kindOf(e.name)) continue
-    const full = path.join(cwd, e.name)
-    try {
-      if (now - fs.statSync(full).mtimeMs <= RECENT_MS) out.push(full)
-    } catch {
-      /* gone */
-    }
-  }
-  return out
-}
-
-// Previewable files this session produced, newest first. mtime-cached by the
-// transcript's size/mtime plus the cwd's mtime (a new file bumps the dir mtime).
+// Previewable files this session wrote, newest first. mtime-cached by the
+// transcript's size/mtime (a new Write appends, so both change).
 export function scanArtifacts(
   transcriptPath: string | undefined,
   cwd: string,
-  now = Date.now(),
+  _now = Date.now(),
 ): ArtifactInfo[] {
+  if (!transcriptPath) return []
   let txSize = 0
   let txMtime = 0
-  if (transcriptPath) {
-    try {
-      const st = fs.statSync(transcriptPath)
-      txSize = st.size
-      txMtime = st.mtimeMs
-    } catch {
-      /* no transcript — cwd scan still runs */
-    }
-  }
-  let cwdMtime = 0
   try {
-    cwdMtime = fs.statSync(cwd).mtimeMs
+    const st = fs.statSync(transcriptPath)
+    txSize = st.size
+    txMtime = st.mtimeMs
   } catch {
-    /* no cwd */
+    return [] // no transcript — nothing to attribute to this session
   }
-  const key = `${txSize}:${txMtime}:${cwdMtime}`
-  const cacheKey = `${transcriptPath ?? ''}|${cwd}`
+  const key = `${txSize}:${txMtime}`
+  const cacheKey = `${transcriptPath}|${cwd}`
   const hit = cache.get(cacheKey)
   if (hit && hit.key === key) return hit.artifacts
 
   const paths = new Set<string>()
-  if (transcriptPath && txSize) for (const p of fromTranscript(transcriptPath, txSize, cwd)) paths.add(p)
-  for (const p of fromCwd(cwd, now)) paths.add(p)
+  if (txSize) for (const p of fromTranscript(transcriptPath, txSize, cwd)) paths.add(p)
 
   const out: ArtifactInfo[] = []
   for (const p of paths) {
