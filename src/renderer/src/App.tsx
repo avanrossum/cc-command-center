@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { Component, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { insertablePath } from './util'
 import { TerminalView } from './Terminal'
 import { THEMES, themeByName, DEFAULT_THEME_NAME } from './themes'
 import { listMonospaceFonts, fontFamilyCss, DEFAULT_TERMINAL_FONT_SIZE } from './fonts'
 import { highlightCode } from './highlight'
+import { renderMarkdown } from './markdown'
+import { rtfToHtml } from './rtf'
 
 type CoarseState = 'working' | 'waiting' | 'idle' | 'unknown'
 // 'blocked' and 'permission' are DERIVED display states, not coarse engine states.
@@ -56,7 +58,7 @@ interface Session {
   artifacts?: {
     path: string
     name: string
-    kind: 'image' | 'svg' | 'pdf' | 'html' | 'markdown' | 'text' | 'audio' | 'code' | 'office'
+    kind: 'image' | 'svg' | 'pdf' | 'html' | 'markdown' | 'text' | 'audio' | 'code' | 'office' | 'rtf'
     mtimeMs: number
   }[]
   unhandled?: boolean // open gate you haven't looked at yet — shows a pip until seen
@@ -357,6 +359,15 @@ export function App() {
     const ti = ids.indexOf(targetId)
     if (fi < 0 || ti < 0) return
     ids.splice(ti, 0, ids.splice(fi, 1)[0]) // move the dragged category to the target slot
+    // Optimistic: reorder the rail NOW so the drop feels instant. Without this the
+    // rail only moved on the next 1.5s snapshot push — the drop looked like it did
+    // nothing for a beat, so people re-dragged and it jumped. The snapshot carries
+    // the same persisted order, so there's no flicker when it lands.
+    const rank = new Map(ids.map((id, i) => [id, i]))
+    setSnap((s) => ({
+      ...s,
+      categories: [...s.categories].sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0)),
+    }))
     window.cc.catReorder(ids)
   }
   // Companion pane (right of the terminal): the cross-fleet "needs you" board.
@@ -1835,7 +1846,7 @@ function SettingsModal({
   }
   return (
     <div className="spawnscrim" onClick={close}>
-      <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
+      <div className="spawnmodal settings-modal" onClick={(e) => e.stopPropagation()}>
         <div className="spawntitle">Settings</div>
         <div className="settabs">
           {(['general', 'terminal', 'arbiter', 'keys'] as const).map((t) => (
@@ -1849,6 +1860,7 @@ function SettingsModal({
           ))}
         </div>
 
+        <div className="settbody">
         {tab === 'general' && (
         <>
         <label className="setrow">
@@ -2105,6 +2117,7 @@ function SettingsModal({
           </div>
         </div>
         )}
+        </div>
 
         <div className="spawnactions">
           <button className="rbtn" onClick={close}>
@@ -2772,6 +2785,81 @@ function FleetActivity({
 // default app. Hidden entirely when the session produced nothing previewable.
 const artExt = (name: string): string => (name.includes('.') ? name.split('.').pop() ?? '' : '')
 
+// Short relative age for an artifact's mtime — "just now", "5m ago", "3h ago",
+// "2d ago", then an absolute short date past a week. Full timestamp on hover.
+const fmtArtTime = (ms: number): string => {
+  const d = Date.now() - ms
+  if (d < 0) return 'just now'
+  if (d < 60_000) return 'just now'
+  if (d < 3_600_000) return `${Math.floor(d / 60_000)}m ago`
+  if (d < 86_400_000) return `${Math.floor(d / 3_600_000)}h ago`
+  const days = Math.floor(d / 86_400_000)
+  if (days < 7) return `${days}d ago`
+  return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+// m:ss for the audio player's time readout.
+const fmtDur = (s: number): string => {
+  if (!isFinite(s) || s < 0) s = 0
+  const m = Math.floor(s / 60)
+  const ss = Math.floor(s % 60)
+  return `${m}:${ss.toString().padStart(2, '0')}`
+}
+
+// A themed audio player — the native <audio> control renders as a stark light
+// pill that clashes with the app. This is a minimal custom transport (play/pause,
+// click-to-seek, time) styled with the app's palette. The <audio> element is
+// hidden and driven programmatically.
+function AudioPlayer({ src }: { src: string }): React.ReactElement {
+  const ref = useRef<HTMLAudioElement | null>(null)
+  const [playing, setPlaying] = useState(false)
+  const [cur, setCur] = useState(0)
+  const [dur, setDur] = useState(0)
+  const toggle = (): void => {
+    const el = ref.current
+    if (!el) return
+    if (el.paused) el.play().catch(() => {}) // decode failure just no-ops the button
+    else el.pause()
+  }
+  // Only seek when we have a finite duration — some formats report Infinity (or
+  // NaN before metadata), and assigning a non-finite currentTime throws.
+  const seek = (e: React.MouseEvent<HTMLDivElement>): void => {
+    const el = ref.current
+    if (!el || !dur) return
+    const r = e.currentTarget.getBoundingClientRect()
+    const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))
+    const t = frac * dur
+    if (Number.isFinite(t)) el.currentTime = t
+  }
+  const setDuration = (d: number): void => setDur(Number.isFinite(d) && d > 0 ? d : 0)
+  const pct = dur ? (cur / dur) * 100 : 0
+  return (
+    <div className="aplayer-wrap">
+      <div className="aplayer">
+      <audio
+        ref={ref}
+        src={src}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onTimeUpdate={(e) => setCur(e.currentTarget.currentTime)}
+        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+        onDurationChange={(e) => setDuration(e.currentTarget.duration)}
+        onEnded={() => setPlaying(false)}
+      />
+      <button className="aplayer-btn" onClick={toggle} title={playing ? 'Pause' : 'Play'}>
+        {playing ? '❚❚' : '▶'}
+      </button>
+      <div className="aplayer-bar" onClick={seek}>
+        <div className="aplayer-fill" style={{ width: `${pct}%` }} />
+      </div>
+      <span className="aplayer-time">
+        {fmtDur(cur)} / {fmtDur(dur)}
+      </span>
+      </div>
+    </div>
+  )
+}
+
 function ArtifactPreview({
   art,
 }: {
@@ -2784,6 +2872,8 @@ function ArtifactPreview({
     tooBig?: boolean
     failed?: boolean
   }>({ loading: true })
+  // Markdown previews toggle between the rendered view (default) and raw source.
+  const [mdMode, setMdMode] = useState<'rendered' | 'raw'>('rendered')
   useEffect(() => {
     let cancelled = false
     setState({ loading: true })
@@ -2803,11 +2893,46 @@ function ArtifactPreview({
   if (state.loading) return <div className="artdrawer-msg">loading…</div>
   if (state.dataUrl)
     return art.kind === 'audio' ? (
-      <audio className="artdrawer-audio" controls src={state.dataUrl} />
+      <AudioPlayer src={state.dataUrl} />
     ) : (
       <img className="artdrawer-img" src={state.dataUrl} alt={art.name} />
     )
   if (state.text != null) {
+    if (art.kind === 'markdown') {
+      // renderMarkdown returns null if marked throws (deeply nested input); fall
+      // back to the raw source rather than crashing or showing an empty pane.
+      const mdHtml = mdMode === 'rendered' ? renderMarkdown(state.text) : null
+      return (
+        <div className="artdrawer-md">
+          <div className="artdrawer-md-bar">
+            <button
+              className={`artdrawer-md-btn${mdMode === 'rendered' ? ' on' : ''}`}
+              onClick={() => setMdMode('rendered')}
+            >
+              rendered
+            </button>
+            <button
+              className={`artdrawer-md-btn${mdMode === 'raw' ? ' on' : ''}`}
+              onClick={() => setMdMode('raw')}
+            >
+              raw
+            </button>
+          </div>
+          {mdHtml != null ? (
+            <div className="artdrawer-rich" dangerouslySetInnerHTML={{ __html: mdHtml }} />
+          ) : (
+            <pre className="artdrawer-text">{state.text || '(empty file)'}</pre>
+          )}
+        </div>
+      )
+    }
+    if (art.kind === 'rtf') {
+      const html = rtfToHtml(state.text)
+      if (html) return <div className="artdrawer-rich" dangerouslySetInnerHTML={{ __html: html }} />
+      return (
+        <OpenCard name={art.name} path={art.path} why="Couldn’t render this RTF — open it instead." />
+      )
+    }
     if (art.kind === 'code' && state.text) {
       const html = highlightCode(state.text, art.name)
       if (html != null)
@@ -2830,29 +2955,86 @@ function ArtifactPreview({
           : state.failed
             ? 'Could not read this file.'
             : 'No inline preview for this type.'
+  return <OpenCard name={art.name} path={art.path} why={why} />
+}
+
+// Centered "open externally" card — for pdf/office/html, too-large files, and RTF
+// we couldn't render. Leads with the filename, then the reason, then Open.
+function OpenCard({
+  name,
+  path,
+  why,
+}: {
+  name: string
+  path: string
+  why: string
+}): React.ReactElement {
   return (
     <div className="artdrawer-msg">
-      {why}{' '}
-      <button className="artifact-btn" onClick={() => window.cc.artifactOpen(art.path)}>
-        open
-      </button>
+      <div className="artdrawer-card">
+        <div className="artdrawer-card-name" title={path}>
+          {name}
+        </div>
+        <div className="artdrawer-card-text">{why}</div>
+        <button className="artdrawer-card-btn" onClick={() => window.cc.artifactOpen(path)}>
+          Open
+        </button>
+      </div>
     </div>
   )
 }
 
+// Isolates a preview render failure so a single bad artifact can never blank-screen
+// the whole app. Keyed by artifact path in the drawer, so it remounts fresh (state
+// reset) when you switch artifacts. A caught throw shows a message + Open fallback.
+class PreviewBoundary extends Component<
+  { onOpen: () => void; children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false }
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true }
+  }
+  render(): ReactNode {
+    if (this.state.failed)
+      return (
+        <div className="artdrawer-msg">
+          <div className="artdrawer-card">
+            <div className="artdrawer-card-text">Couldn’t preview this file.</div>
+            <button className="artdrawer-card-btn" onClick={this.props.onOpen}>
+              Open
+            </button>
+          </div>
+        </div>
+      )
+    return this.props.children
+  }
+}
+
 function ArtifactDrawer({ session }: { session: Session | null }): React.ReactElement | null {
   const [open, setOpen] = useState(false)
+  // Sort the list by most-recent (default) or by name. Persisted so a long-running
+  // session keeps the ordering you chose across restarts.
+  const [sortBy, setSortBy] = useState<'recent' | 'name'>('recent')
   useEffect(() => {
     window.cc.stateGet('artifactsOpen').then((v) => v === 'true' && setOpen(true))
+    window.cc.stateGet('artifactsSort').then((v) => (v === 'name' || v === 'recent') && setSortBy(v))
   }, [])
   const [selPath, setSelPath] = useState<string | null>(null)
   const arts = session?.artifacts ?? []
   if (arts.length === 0) return null
-  const sel = arts.find((a) => a.path === selPath) ?? arts[0]
+  const sorted = [...arts].sort((a, b) =>
+    sortBy === 'name' ? a.name.localeCompare(b.name) : b.mtimeMs - a.mtimeMs,
+  )
+  const sel = sorted.find((a) => a.path === selPath) ?? sorted[0]
   const toggle = (): void => {
     const n = !open
     setOpen(n)
     window.cc.stateSet('artifactsOpen', String(n))
+  }
+  const setSort = (v: 'recent' | 'name'): void => {
+    setSortBy(v)
+    window.cc.stateSet('artifactsSort', v)
   }
   return (
     <div className={`artdrawer${open ? ' open' : ''}`}>
@@ -2865,15 +3047,40 @@ function ArtifactDrawer({ session }: { session: Session | null }): React.ReactEl
         <>
           <div className="artdrawer-body">
             <div className="artdrawer-preview">
-              <ArtifactPreview key={sel.path} art={sel} />
+              <PreviewBoundary key={sel.path} onOpen={() => window.cc.artifactOpen(sel.path)}>
+                <ArtifactPreview art={sel} />
+              </PreviewBoundary>
             </div>
             <div className="artdrawer-list">
-              {arts.map((a) => (
+              <div className="artdrawer-sort">
+                <span className="artdrawer-sort-lbl">sort</span>
+                <button
+                  className={`artdrawer-sort-btn${sortBy === 'recent' ? ' on' : ''}`}
+                  onClick={() => setSort('recent')}
+                >
+                  recent
+                </button>
+                <button
+                  className={`artdrawer-sort-btn${sortBy === 'name' ? ' on' : ''}`}
+                  onClick={() => setSort('name')}
+                >
+                  name
+                </button>
+              </div>
+              {sorted.map((a) => (
                 <div className={`artdrawer-item${a.path === sel.path ? ' sel' : ''}`} key={a.path}>
                   <button className="artdrawer-item-main" onClick={() => setSelPath(a.path)}>
                     <span className="artifact-kind">{artExt(a.name) || a.kind}</span>
-                    <span className="artdrawer-item-name" title={a.path}>
-                      {a.name}
+                    <span className="artdrawer-item-body">
+                      <span className="artdrawer-item-name" title={a.path}>
+                        {a.name}
+                      </span>
+                      <span
+                        className="artdrawer-item-time"
+                        title={new Date(a.mtimeMs).toLocaleString()}
+                      >
+                        {fmtArtTime(a.mtimeMs)}
+                      </span>
                     </span>
                   </button>
                   <button

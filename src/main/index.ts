@@ -2041,9 +2041,9 @@ ipcMain.handle('artifact:read', (_e, filePath: string) => {
       if (size > MAX_MEDIA_BYTES) return { ok: true as const, tooBig: true }
       return { ok: true as const, dataUrl: `data:${mime};base64,${readFileSync(filePath).toString('base64')}` }
     }
-    // Text, markdown, and code all come back as a (capped) string; the renderer
-    // syntax-highlights the code ones.
-    if (kind === 'text' || kind === 'markdown' || kind === 'code') {
+    // Text, markdown, code, and RTF all come back as a (capped) string; the
+    // renderer highlights code, renders markdown, and parses the RTF markup.
+    if (kind === 'text' || kind === 'markdown' || kind === 'code' || kind === 'rtf') {
       if (size > MAX_TEXT_BYTES) return { ok: true as const, tooBig: true }
       return { ok: true as const, text: readFileSync(filePath, 'utf8') }
     }

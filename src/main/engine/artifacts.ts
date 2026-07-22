@@ -6,9 +6,10 @@ import path from 'node:path'
 // sharing a directory showing each other's files):
 //   1. TRANSCRIPT (Write/Edit paths) — text, code, markdown, html the agent
 //      authored. Genuinely per-session.
-//   2. CWD, BINARIES ONLY (image/audio/pdf/office), recent — the chart/chime/
-//      generated doc a Bash step made, which never appears as a Write. Binaries
-//      are rare in a project dir, so scanning just those stays low-noise.
+//   2. CWD, DOCUMENT/BINARY KINDS ONLY (image/audio/pdf/office/rtf), recent —
+//      the chart/chime/generated doc a Bash step made, which never appears as a
+//      Write. These are rare in a project dir, so scanning just them stays
+//      low-noise (unlike text/config, which the folder is full of).
 // A path is kept only if it still exists as a file, so a since-deleted artifact
 // drops off on its own.
 
@@ -22,6 +23,7 @@ export type ArtifactKind =
   | 'audio'
   | 'code'
   | 'office'
+  | 'rtf'
 
 export interface ArtifactInfo {
   path: string
@@ -43,7 +45,9 @@ const EXT_KIND: Record<string, ArtifactKind> = {
   '.txt': 'text', '.csv': 'text', '.tsv': 'text', '.log': 'text',
   '.wav': 'audio', '.mp3': 'audio', '.m4a': 'audio', '.ogg': 'audio', '.flac': 'audio', '.aac': 'audio',
   '.docx': 'office', '.doc': 'office', '.xlsx': 'office', '.xls': 'office', '.pptx': 'office',
-  '.ppt': 'office', '.odt': 'office', '.ods': 'office', '.odp': 'office', '.rtf': 'office',
+  '.ppt': 'office', '.odt': 'office', '.ods': 'office', '.odp': 'office',
+  '.rtf': 'rtf', // text-based markup — rendered in-pane, not opened externally
+
   '.py': 'code', '.js': 'code', '.mjs': 'code', '.cjs': 'code', '.ts': 'code', '.tsx': 'code',
   '.jsx': 'code', '.sh': 'code', '.bash': 'code', '.zsh': 'code', '.rb': 'code', '.go': 'code',
   '.rs': 'code', '.java': 'code', '.c': 'code', '.h': 'code', '.cpp': 'code', '.cc': 'code',
@@ -60,7 +64,7 @@ const MAX_SCAN_BYTES = 8 * 1024 * 1024 // tail window of the transcript, like th
 // files, because unlike text/config a project dir rarely has stray binaries, so
 // this adds the coverage without the folder-wide noise that made us drop the
 // general cwd scan.
-const CWD_KINDS = new Set<ArtifactKind>(['image', 'audio', 'pdf', 'office'])
+const CWD_KINDS = new Set<ArtifactKind>(['image', 'audio', 'pdf', 'office', 'rtf'])
 const RECENT_MS = 24 * 60 * 60 * 1000
 const MAX_CWD_ENTRIES = 3000
 
@@ -125,9 +129,9 @@ function fromTranscript(transcriptPath: string, size: number, cwd: string): stri
   return out
 }
 
-// Recent BINARY previewables at the top level of the cwd — the chart/chime/PDF a
-// Bash step made, which the transcript never names. One shallow readdir, never
-// recursive; skips dotfiles and anything older than RECENT_MS.
+// Recent document/binary previewables at the top level of the cwd — the chart/
+// chime/PDF a Bash step made, which the transcript never names. One shallow
+// readdir, never recursive; skips dotfiles and anything older than RECENT_MS.
 function fromCwdBinaries(cwd: string, now: number): string[] {
   if (!cwd) return []
   let entries: fs.Dirent[]

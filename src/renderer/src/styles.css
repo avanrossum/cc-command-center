@@ -1531,12 +1531,28 @@ body {
   font-size: 15px;
   font-weight: 650;
 }
+/* Settings modal is a FIXED height so switching tabs never resizes it — a
+   centered modal that grows/shrinks makes the tab bar jump under the cursor. The
+   tab content scrolls inside .settbody; title, tabs, and actions stay pinned. */
+.settings-modal {
+  height: min(600px, calc(100vh - 48px));
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.settbody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 /* Settings tab bar. */
 .settabs {
   display: flex;
   gap: 2px;
   border-bottom: 1px solid var(--border);
   margin: 12px 0 16px;
+  flex: none;
 }
 .settab {
   background: transparent;
@@ -2408,13 +2424,15 @@ select.cat-in {
 }
 .artifact-kind {
   flex: none;
+  min-width: 42px; /* fixed so the filenames line up in a column regardless of ext length */
+  text-align: center;
   font: 8px var(--cc-font-mono);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--cc-meta);
   border: 1px solid var(--cc-border);
   border-radius: 3px;
-  padding: 0 3px;
+  padding: 2px 4px;
 }
 .artifact-name {
   min-width: 0;
@@ -2500,11 +2518,15 @@ select.cat-in {
 }
 .artdrawer-count {
   font-family: var(--cc-font-mono);
-  font-size: 9px;
-  color: var(--cc-meta);
-  border: 1px solid var(--cc-border);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--cc-text);
+  background: var(--cc-fill-hover);
+  border: 1px solid var(--cc-dim2);
   border-radius: 20px;
-  padding: 0 6px;
+  padding: 1px 8px;
+  min-width: 14px;
+  text-align: center;
 }
 .artdrawer-body {
   display: flex;
@@ -2538,14 +2560,246 @@ select.cat-in {
   background: transparent;
   padding: 0;
 }
-.artdrawer-audio {
-  width: 100%;
-  margin-top: 6px;
+/* Markdown preview: rendered (default) / raw toggle, pinned to the top of the
+   preview pane as it scrolls. */
+.artdrawer-md {
+  min-height: 100%;
 }
+.artdrawer-md-bar {
+  position: sticky;
+  top: -10px; /* cancels the preview pane's 10px padding so it pins flush */
+  display: flex;
+  gap: 4px;
+  padding: 4px 0 8px;
+  margin-bottom: 4px;
+  background: var(--term-bg);
+  border-bottom: 1px solid var(--border);
+  z-index: 1;
+}
+.artdrawer-md-btn {
+  background: transparent;
+  border: 1px solid var(--cc-border);
+  color: var(--cc-dim);
+  border-radius: 4px;
+  padding: 1px 10px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.artdrawer-md-btn:hover {
+  color: var(--cc-text);
+}
+.artdrawer-md-btn.on {
+  color: var(--cc-text);
+  border-color: var(--cc-working);
+  background: var(--cc-fill-hover);
+}
+/* Rendered rich text (markdown + RTF). Compact GitHub-ish typography scoped to
+   the drawer so it doesn't leak into the rest of the app. */
+.artdrawer-rich {
+  font: 13px/1.55 var(--cc-font-ui);
+  color: var(--cc-text);
+  word-break: break-word;
+}
+.artdrawer-rich h1,
+.artdrawer-rich h2,
+.artdrawer-rich h3,
+.artdrawer-rich h4 {
+  margin: 14px 0 8px;
+  line-height: 1.3;
+  font-weight: 650;
+}
+.artdrawer-rich h1 {
+  font-size: 18px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 5px;
+}
+.artdrawer-rich h2 {
+  font-size: 16px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.artdrawer-rich h3 {
+  font-size: 14px;
+}
+.artdrawer-rich h4 {
+  font-size: 13px;
+}
+.artdrawer-rich p,
+.artdrawer-rich ul,
+.artdrawer-rich ol,
+.artdrawer-rich blockquote,
+.artdrawer-rich table {
+  margin: 0 0 10px;
+}
+.artdrawer-rich :first-child {
+  margin-top: 0;
+}
+.artdrawer-rich ul,
+.artdrawer-rich ol {
+  padding-left: 22px;
+}
+.artdrawer-rich li {
+  margin: 2px 0;
+}
+.artdrawer-rich a {
+  color: var(--cc-accent-soft);
+  text-decoration: none;
+}
+.artdrawer-rich a:hover {
+  text-decoration: underline;
+}
+.artdrawer-rich code {
+  font: 12px var(--cc-font-mono);
+  background: var(--cc-fill-hover);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.artdrawer-rich pre {
+  background: var(--cc-accordion-bg);
+  border: 1px solid var(--cc-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.artdrawer-rich pre code {
+  background: none;
+  padding: 0;
+  font-size: 11.5px;
+}
+.artdrawer-rich blockquote {
+  border-left: 3px solid var(--cc-dim2);
+  padding-left: 12px;
+  color: var(--cc-dim);
+}
+.artdrawer-rich table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+.artdrawer-rich th,
+.artdrawer-rich td {
+  border: 1px solid var(--cc-border);
+  padding: 4px 9px;
+  text-align: left;
+}
+.artdrawer-rich th {
+  background: var(--cc-fill-hover);
+}
+.artdrawer-rich img {
+  max-width: 100%;
+}
+.artdrawer-rich hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 14px 0;
+}
+/* Themed audio transport (custom, not the stark native <audio> pill). Centered
+   both ways in the preview pane, capped width. */
+.aplayer-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+.aplayer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 420px;
+  padding: 12px 16px;
+  background: var(--cc-accordion-bg);
+  border: 1px solid var(--cc-dim2);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+.aplayer-btn {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--cc-working);
+  color: #0b0d12;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.aplayer-btn:hover {
+  filter: brightness(1.08);
+}
+.aplayer-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 4px;
+  background: var(--cc-fill-hover);
+  cursor: pointer;
+  overflow: hidden;
+}
+.aplayer-fill {
+  height: 100%;
+  background: var(--cc-working);
+  border-radius: 4px;
+}
+.aplayer-time {
+  flex: none;
+  font: 10px var(--cc-font-mono);
+  color: var(--cc-dim);
+  min-width: 66px;
+  text-align: right;
+}
+/* "Open externally" card — centered in the preview pane, standing out against
+   the terminal-dark background. Used for PDF / office / html / too-large files. */
 .artdrawer-msg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
   color: var(--cc-dim);
   font-size: 12px;
-  padding: 4px 2px;
+}
+.artdrawer-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 340px;
+  padding: 26px 30px;
+  background: var(--cc-accordion-bg);
+  border: 1px solid var(--cc-dim2);
+  border-radius: 12px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.3);
+}
+.artdrawer-card-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 14px var(--cc-font-mono);
+  color: var(--cc-text);
+}
+.artdrawer-card-text {
+  margin-top: -6px; /* sits just under the filename, tighter than the button gap */
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--cc-dim);
+  text-align: center;
+}
+/* Soft-green primary, matching .rbtn.primary — an accent, not a solid slab. */
+.artdrawer-card-btn {
+  background: rgba(52, 211, 153, 0.14);
+  color: var(--cc-accent-soft);
+  border: 1px solid rgba(52, 211, 153, 0.4);
+  border-radius: 7px;
+  padding: 8px 26px;
+  font: 600 13px var(--cc-font-ui);
+  cursor: pointer;
+}
+.artdrawer-card-btn:hover {
+  background: rgba(52, 211, 153, 0.22);
 }
 .artdrawer-list {
   flex: none;
@@ -2579,12 +2833,55 @@ select.cat-in {
 .artdrawer-item-main:hover {
   color: var(--cc-text);
 }
+.artdrawer-item-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
 .artdrawer-item-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 11px;
+}
+.artdrawer-item-time {
+  font: 9px var(--cc-font-mono);
+  color: var(--cc-meta);
+}
+/* Sort toggle at the top of the artifact list — recent (default) or name. */
+.artdrawer-sort {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.artdrawer-sort-lbl {
+  font: 9px var(--cc-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--cc-meta);
+  margin-right: auto;
+}
+.artdrawer-sort-btn {
+  background: transparent;
+  border: 1px solid var(--cc-border);
+  color: var(--cc-dim);
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 10px;
+  cursor: pointer;
+}
+.artdrawer-sort-btn:hover {
+  color: var(--cc-text);
+}
+.artdrawer-sort-btn.on {
+  color: var(--cc-text);
+  border-color: var(--cc-working);
+  background: var(--cc-fill-hover);
 }
 
 /* Collapsed "N done" line per fleet group — done subagents don't get a row each. */
