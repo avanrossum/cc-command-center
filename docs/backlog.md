@@ -99,20 +99,29 @@ scanner already uses.
   workflow: description + phase progress + agents/tokens/duration).
 - **Row-level "⚙ N running" signal** on the rail row: a session with running background work is NOT
   idle. This is the core fleet win — see the running-vs-idle state work in [[command-center-control-space-exploration]].
-- **A failed task is AWARENESS-tier, not action-tier.** It is "this happened," not "you must act."
-  So it does NOT enter the hard needs-you / blocked gate bucket (those mean *respond to proceed*).
-  It shows as a soft/quiet marker (row + in the ledger), stays visible, and never clogs the
-  needs-you board. This is a **third signal tier** the state model doesn't cleanly have yet
-  (gate = action-required; this = notice-only). Worth naming it explicitly when built.
+- **A failed task is AWARENESS-tier, not action-tier — and does NOT auto-nudge needs-you.** It is
+  "this happened," not "you must act." A failed shell task shows as a soft/quiet marker (row + in
+  the ledger), stays visible, and never enters the hard needs-you / blocked gate bucket. Rationale
+  (user, 2026-07-22): most failures are expected/transient (a test you know is red, an endpoint
+  that blips), so auto-nudging every one is noise. If a failure is *truly fatal*, the session's own
+  state detection produces a real needs-you entry through the normal gate path pretty quickly —
+  so we do NOT wire failure→needs-you at all. This is a **third signal tier** the state model
+  doesn't cleanly have yet (gate = action-required; this = notice-only). Name it explicitly when built.
 - **Workflow → agent nesting** reuses the existing parent/child hierarchy (see
   [[command-center-hierarchy-model]]) — a workflow's agents render as its children, not a flat list.
 
-**Open forks (my recommendation baked in — say the word to change):**
-- **Scope:** per-session ledger AND a fleet roll-up in the companion pane ("everything running
-  across all sessions right now"). Recommend building the per-session ledger first, roll-up as a
-  fast-follow.
-- **Sequencing:** shell tasks + agents first (the common, high-value case — dev servers, builds,
-  test watchers), then the rich **workflow** rendering (phases/progress/usage) as a fast-follow.
+All three forks are now settled:
+- **Scope = open-session detail + rollup of the rest (user, 2026-07-22).** The OPEN (active) session
+  shows its FULL Activity ledger. Every OTHER session with background activity collapses to a
+  compact per-session **rollup chip** in the companion — a colored/flagged summary (e.g.
+  `payments-api ⚙3 ⚠1`). Clicking a rollup chip **switches to that session and makes it primary**,
+  which then shows its full ledger. So it's not two parallel views — it's "detail for who you're
+  looking at, glanceable rollup + click-to-focus for everyone else." Fits the full layout without a
+  new permanent pane.
+- **Sequencing (my call, user deferred):** shell tasks + agents first (the common, high-value case —
+  dev servers, builds, test watchers), then the rich **workflow** rendering (phases/progress/usage)
+  as a fast-follow. The rollup chips ship with the first cut (they're cheap: a per-session
+  running/failed count).
 
 **Verify before building (per [[command-center-release-discipline]]):** confirm a real managed
 **CLI** session (not just this Desktop session) writes the same `tasks/` dir + `task-notification`
