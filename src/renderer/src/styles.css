@@ -14,6 +14,11 @@
   --cc-hairline: #201e1a;
   --cc-fill-sel: rgba(255, 255, 255, 0.055);
   --cc-fill-hover: rgba(255, 255, 255, 0.03);
+  /* Raised bar for foldable/accordion headers (activity, artifacts, timeline,
+     Arbiter) so they read as distinct, clickable section headers instead of
+     blending into the panel. */
+  --cc-accordion-bg: #221e17;
+  --cc-accordion-hover: #2b261d;
 
   /* text (4 tiers) */
   --cc-text: #e7e3db;
@@ -982,7 +987,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  background: transparent;
+  background: var(--cc-accordion-bg);
   border: 0;
   color: var(--cc-faint);
   font: 600 10px var(--cc-font-mono);
@@ -1887,7 +1892,7 @@ body {
   gap: 7px;
   width: 100%;
   padding: 7px 10px;
-  background: transparent;
+  background: var(--cc-accordion-bg);
   border: 0;
   cursor: pointer;
   font-size: 11px;
@@ -1895,7 +1900,7 @@ body {
   text-align: left;
 }
 .arb-head:hover {
-  background: var(--cc-fill-hover);
+  background: var(--cc-accordion-hover);
 }
 .arb-dot {
   width: 6px;
@@ -2188,7 +2193,7 @@ select.cat-in {
   gap: 7px;
   width: 100%;
   padding: 7px 10px;
-  background: transparent;
+  background: var(--cc-accordion-bg);
   border: 0;
   cursor: pointer;
   font-size: 11px;
@@ -2196,7 +2201,7 @@ select.cat-in {
   text-align: left;
 }
 .fleet-head:hover {
-  background: var(--cc-fill-hover);
+  background: var(--cc-accordion-hover);
 }
 .fleet-head .chev {
   font-size: 8px;
@@ -2447,7 +2452,7 @@ select.cat-in {
   width: 100%;
   flex: none;
   padding: 5px 14px;
-  background: #10131a;
+  background: var(--cc-accordion-bg);
   border: 0;
   color: var(--cc-dim);
   font: 600 11px var(--cc-font-ui);
@@ -2459,6 +2464,7 @@ select.cat-in {
 }
 .artdrawer-handle:hover {
   color: var(--cc-text);
+  background: var(--cc-accordion-hover);
 }
 .artdrawer-htitle {
   letter-spacing: 0.3px;
