@@ -111,6 +111,13 @@ function sendToWin(channel: string, payload?: unknown): void {
 let pollTimer: NodeJS.Timeout | null = null
 let winFocused = true // OS window focus — a gate is auto-"seen" only while you're actually looking
 let lastUnhandled = new Set<string>() // last good unhandled set, retained if a scan's ledger sync throws
+// Per session, the transcript mtime at the moment you last VIEWED it (focused +
+// attached). A completed turn surfaces as 'done' only if it finished AFTER this
+// watermark — so the session you're watching never stacks up dones (clear-on-
+// seen), and a completion you already looked at doesn't re-surface. In-memory:
+// after a restart everything is dormant (dones don't show for dormant), so no
+// spurious dones on launch.
+const lastViewedMtime = new Map<string, number>()
 const DORMANT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000 // dormant/resumable sessions age out after a week
 
 // ---------- session polling (status board) ----------
@@ -133,7 +140,9 @@ type EnrichedSession = LiveSession & {
   // the session asked. Blocked-on-child is derived in the renderer from the edge
   // graph. whyGloss is the Arbiter seam: a plain-English gloss the control agent
   // fills later — always undefined here, so nothing depends on it or on a key.
-  whyKind?: 'permission' | 'question'
+  // 'done' = a turn that ended on a statement (job complete), surfaced only for a
+  // session you weren't looking at (clear-on-seen), never an action gate.
+  whyKind?: 'permission' | 'question' | 'done'
   why?: string
   whyCoarse?: boolean // coarse label, no verbatim command (adopted / elicitation dialog)
   whyGloss?: string // reserved for the Arbiter; never populated by this path
@@ -536,6 +545,9 @@ function snapshot(): Snapshot {
   const names = getSessionNames()
   const hookStates = readHookStates()
   const usage = readUsageStates()
+  // The session you're viewing right now (attached terminal + focused window).
+  // Used to suppress its 'done' and to advance its last-viewed watermark.
+  const seenSid = winFocused && attachedKey ? terminals.get(attachedKey)?.sessionId ?? null : null
   const enriched: EnrichedSession[] = sessions.map((s) => {
     const managed = managedIds.has(s.sessionId)
     // Only managed sessions have a live PTY buffer to scan; adopted/external
@@ -603,7 +615,7 @@ function snapshot(): Snapshot {
     // genuine your-turn question HOLDS: it is rescued from aging to idle, so it
     // stays visible until you act. Blocked-on-child is derived in the renderer.
     let why: string | undefined
-    let whyKind: 'permission' | 'question' | undefined
+    let whyKind: 'permission' | 'question' | 'done' | undefined
     let whyCoarse: boolean | undefined
     if (attention === 'permission') {
       whyKind = 'permission'
@@ -639,8 +651,27 @@ function snapshot(): Snapshot {
           state = 'waiting'
           stateReason = 'your turn — asked a question'
         }
+      } else {
+        // Turn ended on a STATEMENT: the job is complete / the agent thinks it's
+        // done. Surface as 'done' ONLY if it finished after you last looked at this
+        // session AND you aren't looking now — so the session you're watching never
+        // stacks dones, and only unattended completions surface. Clears when you
+        // open it (its watermark then catches up). The Arbiter gloss, if any, rides
+        // along via whyGloss; the base text stays a plain 'done'.
+        // Leave state as-is: dstate() surfaces 'done' from whyKind, so no need to
+        // promote to 'waiting' — and promoting would make a done blocking-child keep
+        // its parent flagged blocked (blockedSet keys on working/waiting).
+        const viewingNow = s.sessionId === seenSid
+        const finishedAt = s.transcriptMtimeMs ?? 0
+        if (!viewingNow && finishedAt > (lastViewedMtime.get(s.sessionId) ?? 0)) {
+          whyKind = 'done'
+          why = 'done'
+        }
       }
     }
+    // Advance the last-viewed watermark for the session you're looking at, so its
+    // completions never surface as 'done' and stay cleared after you switch away.
+    if (s.sessionId === seenSid) lastViewedMtime.set(s.sessionId, s.transcriptMtimeMs ?? 0)
     return {
       ...s,
       state,
@@ -738,10 +769,9 @@ function snapshot(): Snapshot {
       gatedSids.add(e.sessionId)
     }
   }
-  // Auto-"seen" only when the app window is actually focused — a gate that appears
-  // while you're in another app must still fire the pip (this is the common case).
-  const attachedSid = attachedKey ? terminals.get(attachedKey)?.sessionId ?? null : null
-  const seenSid = winFocused ? attachedSid : null
+  // seenSid (computed above the enrichment loop) is the focused+attached session —
+  // auto-"seen" only when the window is focused, so a gate that appears while you're
+  // in another app still fires the pip (the common case).
   // Bound the question cache to live sessions so it can't grow without limit.
   for (const k of questionCache.keys()) if (!liveIds.has(k)) questionCache.delete(k)
   let unhandled = lastUnhandled // retain the last-known pips if this scan's sync throws

@@ -735,6 +735,10 @@ body {
   width: 7px;
   height: 7px;
 }
+.cc-dot--done {
+  border-radius: 50%;
+  background: #5eead4; /* calm teal — completed turn */
+}
 .dot {
   width: 8px;
   height: 8px;
@@ -860,6 +864,9 @@ body {
 }
 .why-blocked {
   color: var(--cc-blocked);
+}
+.why-done {
+  color: #5eead4; /* calm teal — job complete, your move (not an alarm) */
 }
 .whytag {
   font-size: 8.5px;
@@ -1112,6 +1119,9 @@ body {
 .wcard.ns-blocked {
   box-shadow: inset 2.5px 0 0 var(--cc-blocked);
 }
+.wcard.ns-done {
+  box-shadow: inset 2.5px 0 0 #5eead4;
+}
 /* unhandled = you haven't looked yet: a bright pip. Seen cards stay fully readable
    (no dimming) — the pip's absence is the "already saw it" signal. */
 .wc-pip {
@@ -1181,6 +1191,9 @@ body {
 }
 .wc-why.why-blocked {
   color: var(--cc-blocked);
+}
+.wc-why.why-done {
+  color: #5eead4;
 }
 .wc-why code {
   background: rgba(245, 158, 11, 0.1);

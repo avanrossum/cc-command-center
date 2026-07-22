@@ -10,7 +10,7 @@ type CoarseState = 'working' | 'waiting' | 'idle' | 'unknown'
 // 'permission': a managed session parked on a dialog (the engine reports it via
 // s.attention, scanned from the live PTY buffer — it reads as 'working' in the
 // transcript, so this is the only way it surfaces as needing you).
-type DisplayState = CoarseState | 'blocked' | 'permission'
+type DisplayState = CoarseState | 'blocked' | 'permission' | 'done'
 
 interface Session {
   pid: number
@@ -30,7 +30,7 @@ interface Session {
   attention?: 'permission' | 'question' // parked on a dialog: approve (door) vs answer (brain)
   // The substance behind a needs-you moment — see EnrichedSession in main. Blocked
   // -on-child is derived here from the edge graph, not sent from main.
-  whyKind?: 'permission' | 'question'
+  whyKind?: 'permission' | 'question' | 'done'
   why?: string
   whyCoarse?: boolean
   whyGloss?: string // Arbiter seam — a plain-English gloss, rendered only when present
@@ -162,6 +162,9 @@ const STATE: Record<DisplayState, { label: string; color: string; order: number 
   // dialog surfaces as 'permission' above) — so the honest label is "Your turn".
   waiting: { label: 'Your turn', color: '#60a5fa', order: 1 },
   blocked: { label: 'Blocked', color: '#e070c8', order: 2 },
+  // A turn that ended on a statement — job complete, your move. A calm teal, and
+  // lower urgency than the action gates above (awareness of completion, not a block).
+  done: { label: 'Done', color: '#5eead4', order: 2.5 },
   idle: { label: 'Idle', color: '#6b7280', order: 3 },
   unknown: { label: 'Unknown', color: '#a78bfa', order: 4 },
 }
@@ -528,7 +531,9 @@ export function App() {
           ? 'waiting'
           : blockedSet.has(s.sessionId)
             ? 'blocked'
-            : s.state
+            : s.whyKind === 'done'
+              ? 'done'
+              : s.state
 
   const nameOf = (s: Session): string =>
     s.name ?? (s.dormant ? s.sessionId.slice(0, 8) : `pid ${s.pid}`)
@@ -551,7 +556,12 @@ export function App() {
   // gate, a genuine question, or a blocked parent ever gets a why-line).
   const whyOf = (
     s: Session,
-  ): { kind: 'permission' | 'question' | 'blocked'; text: string; coarse?: boolean; gloss?: string } | null => {
+  ): {
+    kind: 'permission' | 'question' | 'blocked' | 'done'
+    text: string
+    coarse?: boolean
+    gloss?: string
+  } | null => {
     if (s.dormant) return null
     const d = dstate(s)
     if (d === 'permission' && s.why) return { kind: 'permission', text: s.why, coarse: s.whyCoarse, gloss: s.whyGloss }
@@ -563,6 +573,9 @@ export function App() {
     // 'waiting' (blue) and carry whyKind==='question'.
     if (d === 'waiting' && s.whyKind === 'question' && s.why)
       return { kind: 'question', text: s.why, coarse: s.whyCoarse, gloss: s.whyGloss }
+    // A turn that ended on a statement (job complete). Base text is a plain 'done';
+    // the Arbiter gloss, when present, says what it finished.
+    if (d === 'done') return { kind: 'done', text: s.why || 'done', gloss: s.whyGloss }
     return null
   }
 
@@ -572,6 +585,7 @@ export function App() {
       working: 0,
       waiting: 0,
       blocked: 0,
+      done: 0,
       idle: 0,
       unknown: 0,
     }
@@ -582,9 +596,11 @@ export function App() {
   const dormantCount = useMemo(() => live.filter((s) => s.dormant).length, [live])
   // The "NEEDS YOU" ledger: sessions that genuinely want you — a permission gate
   // (open a door), a question (interactive or a turn that ended asking you, both
-  // whyKind==='question'), or a parent blocked on an unfinished child. A turn that
-  // ended WITHOUT a question is NOT included — that's the replied-and-idle noise
-  // the ledger was built to drop.
+  // whyKind==='question'), a parent blocked on an unfinished child, OR a turn that
+  // ended on a statement (whyKind==='done' — job complete, your move). The 'done'
+  // entry only reaches here for a session you WEREN'T looking at (main gates it by
+  // the last-viewed watermark), so it's the unattended-completion signal, not the
+  // replied-and-idle noise the ledger was built to drop.
   // Dormant sessions are included when the ledger still holds an unresolved gate
   // for them. After a restart everything the app owns starts dormant, and the
   // thing you were in the middle of is exactly what you must not have to go
@@ -595,7 +611,10 @@ export function App() {
       live
         .filter(
           (s) =>
-            s.attention === 'permission' || s.whyKind === 'question' || blockedSet.has(s.sessionId),
+            s.attention === 'permission' ||
+            s.whyKind === 'question' ||
+            s.whyKind === 'done' ||
+            blockedSet.has(s.sessionId),
         )
         .sort((a, b) => {
           if (!!a.dormant !== !!b.dormant) return a.dormant ? 1 : -1
@@ -1180,6 +1199,7 @@ export function App() {
                           <span className="whyverb">blocked →</span> {why.text}
                         </>
                       )}
+                      {why.kind === 'done' && <span className="whyverb">✓ done — your move</span>}
                       {why.gloss && <span className="whygloss">{why.gloss}</span>}
                     </span>
                   )}
@@ -1483,6 +1503,12 @@ export function App() {
                             {why.kind === 'blocked' && (
                               <>
                                 <span className="whyverb">blocked →</span> {why.text}
+                              </>
+                            )}
+                            {why.kind === 'done' && (
+                              <>
+                                <span className="whyverb">✓ done — your move</span>
+                                {why.gloss && <span className="whygloss"> {why.gloss}</span>}
                               </>
                             )}
                           </div>
