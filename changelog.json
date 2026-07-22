@@ -1,6 +1,14 @@
 {
   "versions": [
     {
+      "version": "0.14.3",
+      "date": "2026-07-22",
+      "critical": false,
+      "features": [
+        "Fixed an \"Object has been destroyed\" error that could surface when the app quit to install an update. Every update from this version on quits cleanly."
+      ]
+    },
+    {
       "version": "0.14.2",
       "date": "2026-07-21",
       "critical": false,
