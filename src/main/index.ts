@@ -655,7 +655,14 @@ function snapshot(): Snapshot {
     // right after the last transcript write still wins. During active work the
     // transcript pulls ahead within a second or two, so it re-takes ownership if
     // a hook event was ever missed (hooks are fire-and-forget).
-    const hs = s.alive && !s.isSpare ? hookStates.get(s.sessionId) : undefined
+    let hs = s.alive && !s.isSpare ? hookStates.get(s.sessionId) : undefined
+    // A hook event older than THIS process is stale. The load-bearing case is
+    // resume: the CLI can't restore an interactive dialog, so a session that ended
+    // mid-permission comes back with no dialog on screen — but its pre-resume
+    // 'permission' Notification is still in the hook file. Ignoring events from
+    // before the current process's spawn stops that ghost gate from reappearing
+    // orange; the live buffer (scanned above) is then the authority.
+    if (hs && term && hs.at < term.spawnedAt - 1500) hs = undefined
     const hookFresh = !!hs && hs.at + 1500 >= (s.transcriptMtimeMs ?? 0)
     if (hs && hookFresh) {
       const age = now - hs.at
@@ -1162,6 +1169,7 @@ interface Term {
   sessionId?: string
   cwd: string
   key: string // mutable: a new:<pid> terminal is rehomed to its session id on adoption
+  spawnedAt: number // when THIS process started — hook events older than this are stale
 }
 // Managed terminals keyed by a STABLE string key: the Claude session id for a
 // scanned session, or `new:<pid>` for a freshly-launched one not yet adopted.
@@ -1245,7 +1253,15 @@ interface OpenOpts {
 function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: string }): Term {
   // Handlers read term.key (mutable) rather than the captured key, so a terminal
   // rehomed from new:<pid> to its session id keeps routing correctly.
-  const term: Term = { pty: p, buffer: '', exited: false, sessionId: meta.sessionId, cwd: meta.cwd, key }
+  const term: Term = {
+    pty: p,
+    buffer: '',
+    exited: false,
+    sessionId: meta.sessionId,
+    cwd: meta.cwd,
+    key,
+    spawnedAt: Date.now(),
+  }
   terminals.set(key, term)
   p.onData((data) => {
     term.buffer = (term.buffer + data).slice(-BUFFER_CAP)
