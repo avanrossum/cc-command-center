@@ -47,6 +47,9 @@ const LABEL: Record<NotifyClass, string> = {
 // done, clear when the session leaves it. Without this it would re-fire every tick.
 const doneNotified = new Set<string>()
 const lastNotifiedAt = new Map<string, number>()
+// Shown-but-not-yet-dismissed notifications, held so they (and their click
+// listeners) survive until the user acts. Removed on click/close.
+const live = new Set<Notification>()
 
 // Per-category override wins over the global switch; null/undefined inherits.
 function classEnabled(cls: NotifyClass, categoryId: number | null, ctx: NotifyCtx): boolean {
@@ -92,7 +95,20 @@ function fire(
     body: trim(body) || LABEL[cls],
     silent: false,
   })
-  n.on('click', () => ctx.onActivate(sessionId))
+  // Hold a reference until the notification is done. Without this the Notification
+  // object is eligible for GC as soon as fire() returns — macOS still shows the
+  // banner, but the JS object (and its 'click' listener) can be collected before
+  // the user clicks, so the click does nothing. This is the fix for "notifications
+  // fire but clicking them doesn't open the session".
+  live.add(n)
+  const done = (): void => {
+    live.delete(n)
+  }
+  n.on('click', () => {
+    done()
+    ctx.onActivate(sessionId)
+  })
+  n.on('close', done)
   n.show()
   return true
 }

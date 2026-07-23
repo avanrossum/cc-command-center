@@ -977,7 +977,10 @@ export function App() {
     if (!pendingFocus) return
     const s = snap.sessions.find((x) => x.sessionId === pendingFocus)
     if (!s) return
-    openSession(s) // switches the rail to its category itself
+    // reallyOpen, not openSession: a notification click means "take me to this
+    // live session now" — it must never stop at the resume-params modal. reallyOpen
+    // still switches the rail to its category and selects the row.
+    reallyOpen(s)
     setPendingFocus(null)
   }, [pendingFocus, snap.sessions]) // eslint-disable-line react-hooks/exhaustive-deps
 
