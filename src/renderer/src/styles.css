@@ -3534,6 +3534,36 @@ select.cat-in {
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
+/* "Your turn" is two things. A soft turn-end (your move, whatever) reads as a
+   MUTED blue; a session that asked you a DIRECT question keeps full blue, gains a
+   subtle glow, and a ? badge — so the ones actually waiting on your answer stand
+   out. Blue stays "your turn" either way (governance); this is intensity, not a
+   new hue. Only 'waiting' tiles are affected — permission/working/done unchanged. */
+.ov-tile.state-waiting:not(.asked) {
+  border-left-color: color-mix(in srgb, var(--tile-color) 42%, var(--cc-border));
+}
+.ov-tile.state-waiting:not(.asked) .ov-tile-state {
+  opacity: 0.72;
+}
+.ov-tile.asked {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--tile-color) 55%, transparent);
+}
+.ov-tile.asked:hover {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tile-color) 60%, transparent);
+}
+.ov-tile-q {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--tile-color);
+  color: #0b0d12;
+  font: 700 10px var(--cc-font-ui);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
 .ov-tile-term {
   flex: 1;
   min-height: 0;

@@ -20,6 +20,7 @@ export interface OverviewSession {
   dstate: string // display-state key, drives the outline color class + label
   stateLabel: string
   stateColor: string
+  question: boolean // asked you a DIRECT question — a more urgent subtype of "your turn"
   categoryColor?: string
   categoryEmoji?: string | null
   categoryLabel?: string
@@ -186,7 +187,7 @@ export function OverviewGrid({
               data-sid={s.sessionId}
               role="button"
               tabIndex={0}
-              className={`ov-tile state-${s.dstate}`}
+              className={`ov-tile state-${s.dstate}${s.question ? ' asked' : ''}`}
               style={{ ['--tile-color' as string]: s.stateColor }}
               onClick={() => onPick(s.sessionId)}
               onKeyDown={(e) => {
@@ -201,6 +202,11 @@ export function OverviewGrid({
                 {s.categoryColor && (
                   <span className="ov-tile-cat" style={{ background: s.categoryColor }}>
                     {s.categoryEmoji || ''}
+                  </span>
+                )}
+                {s.question && (
+                  <span className="ov-tile-q" title="Asked you a direct question">
+                    ?
                   </span>
                 )}
                 <span className="ov-tile-name">{s.name}</span>

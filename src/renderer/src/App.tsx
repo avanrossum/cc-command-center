@@ -789,6 +789,15 @@ export function App() {
   // count so a busy fleet can't flood the grid.
   const OVERVIEW_CAP = 24
   const OVERVIEW_STATES = new Set<DisplayState>(['permission', 'working', 'waiting', 'blocked', 'done'])
+  // "Your turn" splits in two: a session that asked a DIRECT question (whyKind
+  // 'question') is genuinely waiting on your answer, vs a soft turn-end that's just
+  // your move. Both stay blue (governance), but the question sorts AHEAD of the
+  // soft ones — a half-step below plain waiting — so the ones needing an answer
+  // land first. (A fuller re-tiering — question just below permission everywhere —
+  // is stubbed in the roadmap for later.)
+  const hasQuestion = (s: Session): boolean => dstate(s) === 'waiting' && s.whyKind === 'question'
+  const overviewOrder = (s: Session): number =>
+    hasQuestion(s) ? STATE.waiting.order - 0.5 : STATE[dstate(s)].order
   const overviewAll = useMemo(
     () =>
       live
@@ -798,9 +807,7 @@ export function App() {
             (OVERVIEW_STATES.has(dstate(s)) || (overviewIdle && dstate(s) === 'idle')),
         )
         .sort(
-          (a, b) =>
-            STATE[dstate(a)].order - STATE[dstate(b)].order ||
-            (a.name ?? '').localeCompare(b.name ?? ''),
+          (a, b) => overviewOrder(a) - overviewOrder(b) || (a.name ?? '').localeCompare(b.name ?? ''),
         ),
     [live, overviewIdle], // eslint-disable-line react-hooks/exhaustive-deps
   )
@@ -1856,12 +1863,14 @@ export function App() {
             sessions={overviewTiles.map((s): OverviewSession => {
               const d = dstate(s)
               const cat = s.categoryId != null ? catById.get(s.categoryId) : undefined
+              const question = hasQuestion(s)
               return {
                 sessionId: s.sessionId,
                 name: nameOf(s),
                 dstate: d,
-                stateLabel: STATE[d].label,
+                stateLabel: question ? 'Asked you' : STATE[d].label,
                 stateColor: STATE[d].color,
+                question,
                 categoryColor: cat?.color,
                 categoryEmoji: cat?.emoji ?? null,
                 categoryLabel: cat?.label ?? cat?.name,
