@@ -1,4 +1,13 @@
-import { Component, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import {
+  Component,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react'
 import { insertablePath } from './util'
 import { TerminalView } from './Terminal'
 import { THEMES, themeByName, DEFAULT_THEME_NAME } from './themes'
@@ -907,6 +916,13 @@ export function App() {
       hadLiveOriginal: !!(s.alive && !s.managed), // a real second copy only if live elsewhere
     })
   }
+  // Scroll the opened row into view. Switching category isn't enough on its own —
+  // in a long tree the row lands below the fold and the sidebar looks unchanged.
+  // 'nearest' is deliberate: an already-visible row doesn't jog the list.
+  const selRowRef = useRef<HTMLLIElement | null>(null)
+  useLayoutEffect(() => {
+    selRowRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [selected?.sessionId, selectedCat])
   const closeTerminal = () => {
     if (selected) window.cc.termClose(selected.key)
     setSelected(null)
@@ -922,8 +938,7 @@ export function App() {
     if (!pendingFocus) return
     const s = snap.sessions.find((x) => x.sessionId === pendingFocus)
     if (!s) return
-    setSelectedCat(s.categoryId ?? null)
-    openSession(s)
+    openSession(s) // switches the rail to its category itself
     setPendingFocus(null)
   }, [pendingFocus, snap.sessions]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -984,11 +999,9 @@ export function App() {
     if (type === 'blocking' || type === 'tangential') window.cc.edgeSet(child.sessionId, parent.sessionId, type)
     setMenu(null)
   }
-  // Beacon "needs you" click: switch the rail to that session's category, then open it.
-  const jumpTo = (s: Session) => {
-    setSelectedCat(s.categoryId)
-    openSession(s)
-  }
+  // Beacon "needs you" click. openSession switches the rail itself now, so this is
+  // a plain alias kept for the call site's readability.
+  const jumpTo = openSession
 
   // The two poppable companion panels, built once. Each renders either inline in
   // the companion (not popped) or inside a floating card at the app root (popped)
@@ -1196,9 +1209,13 @@ export function App() {
                   setSelectedCat(g.id)
                   // Jump back to the last session opened in this category. Only if
                   // it still exists — never surprise-resume a session you didn't pick.
+                  // It must ALSO still belong to this category: lastByCat is keyed by
+                  // the category the session had when it was opened and isn't re-keyed
+                  // on reassignment, so without this check openSession's category
+                  // switch would land you somewhere other than the cell you clicked.
                   const lastId = lastByCat.current.get(g.id)
                   const target = lastId ? live.find((s) => s.sessionId === lastId) : undefined
-                  if (target) openSession(target)
+                  if (target && target.categoryId === g.id) openSession(target)
                 }}
                 onContextMenu={(e) => {
                   e.preventDefault()
@@ -1274,7 +1291,11 @@ export function App() {
               return (
               <li
                 key={s.sessionId}
-                className={`row state-${dstate(s)}${s.dormant ? ' dormant' : ''}${selected?.key === s.sessionId ? ' sel' : ''}${why ? ' has-why' : ''}${s.unhandled ? ' unhandled' : ''}`}
+                // Match on sessionId, not key: an in-app launched session carries
+                // key `new:<pid>` until the scan adopts it, and FleetActivity
+                // already compares sessionId — one concept, one field.
+                ref={selected?.sessionId === s.sessionId ? selRowRef : null}
+                className={`row state-${dstate(s)}${s.dormant ? ' dormant' : ''}${selected?.sessionId === s.sessionId ? ' sel' : ''}${why ? ' has-why' : ''}${s.unhandled ? ' unhandled' : ''}`}
                 style={{ paddingLeft: 10 + depth * 16 }}
                 title={s.stateReason}
                 onClick={() => openSession(s)}
