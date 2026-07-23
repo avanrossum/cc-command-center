@@ -201,6 +201,7 @@ interface AppSettings {
   lastModel: string // remembered New-session model choice ('' = default)
   lastEffort: string // remembered reasoning effort ('' = default)
   lastContext: string // remembered context window ('' = default, '1m' = [1m] suffix)
+  lastMode: string // remembered permission mode ('' = emit no flag)
   statusHooksInstalled: boolean // hook-driven status wired into ~/.claude/settings.json
   spawnAutoMode: boolean // last "start child in auto mode" choice (default ON)
   terminalFont: string // xterm fontFamily override ('' = built-in default stack)
@@ -233,6 +234,7 @@ function getSettings(): AppSettings {
     lastModel: getAppState('lastModel') || '',
     lastEffort: getAppState('lastEffort') || '',
     lastContext: getAppState('lastContext') || '',
+    lastMode: getAppState('lastMode') || '',
     statusHooksInstalled: getAppState('statusHooksInstalled') === 'true',
     spawnAutoMode: getAppState('spawnAutoMode') !== 'false', // default ON
     terminalFont: getAppState('terminalFont') || '',

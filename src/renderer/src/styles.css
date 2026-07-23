@@ -1747,6 +1747,10 @@ body {
   display: flex;
   gap: 10px;
 }
+/* Second picker row (Context | Mode) sits under the first (Model | Effort). */
+.nsrow + .nsrow {
+  margin-top: 8px;
+}
 .nscol {
   flex: 1;
   min-width: 0;

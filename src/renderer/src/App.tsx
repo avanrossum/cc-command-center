@@ -131,6 +131,7 @@ interface AppSettings {
   lastModel: string
   lastEffort: string
   lastContext: string
+  lastMode: string
   arbiterEnabled: boolean
   arbiterKeyId: number | null
   arbiterCapUsd: number
@@ -1815,6 +1816,7 @@ export function App() {
           lastModel={snap.settings?.lastModel ?? ''}
           lastEffort={snap.settings?.lastEffort ?? ''}
           lastContext={snap.settings?.lastContext ?? ''}
+          lastMode={snap.settings?.lastMode ?? ''}
           apiKeys={snap.apiKeys ?? []}
           close={() => setNewSessionOpen(false)}
         />
@@ -3372,6 +3374,32 @@ function withContext(model: string, ctx: string): string {
   return model.replace(/(\[1m\])+$/i, '') + '[1m]'
 }
 
+// `--effort ultracode` needs a model that supports xhigh. Haiku doesn't, and the
+// CLI accepts the flag silently in that case — no warning, no effect — so the
+// option is hidden rather than left to fail quietly. "Default" and "Custom…"
+// can't be resolved to a concrete model here, so they stay permissive.
+function supportsUltracode(model: string, customModel: string): boolean {
+  if (model === '__custom__') return customModel.trim() !== ''
+  return model !== 'haiku'
+}
+
+// Permission mode at launch (--permission-mode). '' emits no flag, leaving the
+// CLI to use permissions.defaultMode from the user's settings; 'manual' actively
+// forces ask-every-time, overriding it. ('manual' is the supported spelling —
+// the CLI maps it to 'default' internally.)
+const MODE_OPTS = [
+  { v: '', label: 'Default' },
+  { v: 'plan', label: 'Plan' },
+  { v: 'acceptEdits', label: 'Accept edits' },
+  { v: 'auto', label: 'Auto' },
+  { v: 'dontAsk', label: "Don't ask" },
+  { v: 'manual', label: 'Manual (ask every time)' },
+  { v: 'bypassPermissions', label: 'Bypass all (danger)' },
+]
+// Bypass is deliberately never remembered: left selected, it would silently
+// launch every later session with all permission checks off.
+const stickyMode = (m: string): string => (m === 'bypassPermissions' ? '' : m)
+
 function NewSessionComposer({
   categories,
   defaultCat,
@@ -3380,6 +3408,7 @@ function NewSessionComposer({
   lastModel,
   lastEffort,
   lastContext,
+  lastMode,
   apiKeys,
   close,
 }: {
@@ -3390,6 +3419,7 @@ function NewSessionComposer({
   lastModel: string
   lastEffort: string
   lastContext: string
+  lastMode: string
   apiKeys: ApiKey[]
   close: () => void
 }) {
@@ -3405,7 +3435,13 @@ function NewSessionComposer({
   const [customModel, setCustomModel] = useState(knownModel ? '' : lastModel)
   const [effort, setEffort] = useState(lastEffort)
   const [ctx, setCtx] = useState(lastContext)
+  const [mode, setMode] = useState(lastMode)
   const ctxOk = supports1m(model, customModel)
+  const ultraOk = supportsUltracode(model, customModel)
+  // Re-applied here, not just in the dropdown, so switching to a model that can't
+  // do ultracode visibly snaps the selection back instead of leaking a flag that
+  // would silently no-op.
+  const effortVal = effort === 'ultracode' && !ultraOk ? 'xhigh' : effort
   const pick = async () => {
     const p = await window.cc.pickFolder()
     if (p) setCwd(p)
@@ -3414,19 +3450,23 @@ function NewSessionComposer({
     if (!cwd) return
     const baseModel = model === '__custom__' ? customModel.trim() : model
     const chosenModel = ctxOk ? withContext(baseModel, ctx) : baseModel
-    // Prepend --model / --effort to whatever the user typed in Flags.
+    // Prepend --model / --effort / --permission-mode to whatever the user typed
+    // in Flags. Anything they type there lands last and therefore wins.
     const allFlags = [
       chosenModel && `--model ${chosenModel}`,
-      effort && `--effort ${effort}`,
+      effortVal && `--effort ${effortVal}`,
+      mode && `--permission-mode ${mode}`,
       flags.trim(),
     ]
       .filter(Boolean)
       .join(' ')
     // Remember the bare model; the context choice is remembered separately so
-    // the two restore independently.
+    // the two restore independently. effortVal (not effort) so a stale
+    // 'ultracode' can't be remembered against a model that rejects it.
     window.cc.settingsSet('lastModel', baseModel)
-    window.cc.settingsSet('lastEffort', effort)
+    window.cc.settingsSet('lastEffort', effortVal)
     window.cc.settingsSet('lastContext', ctx)
+    window.cc.settingsSet('lastMode', stickyMode(mode))
     window.cc.sessionCreate({
       cwd,
       flags: allFlags || undefined,
@@ -3511,14 +3551,25 @@ function NewSessionComposer({
           </div>
           <div className="nscol">
             <div className="spawnlabel">Effort</div>
-            <select className="cat-in" value={effort} onChange={(e) => setEffort(e.target.value)}>
-              {EFFORT_OPTS.map((v) => (
-                <option key={v} value={v}>
-                  {v === '' ? 'Default' : v}
+            <select
+              className="cat-in"
+              value={effortVal}
+              title={
+                ultraOk
+                  ? 'ultracode = xhigh effort plus standing workflow orchestration (needs workflows enabled)'
+                  : 'reasoning effort — ultracode needs a model that supports xhigh'
+              }
+              onChange={(e) => setEffort(e.target.value)}
+            >
+              {EFFORT_OPTS.filter((o) => !o.ultra || ultraOk).map((o) => (
+                <option key={o.v} value={o.v}>
+                  {o.label}
                 </option>
               ))}
             </select>
           </div>
+        </div>
+        <div className="nsrow">
           <div className="nscol">
             <div className="spawnlabel">Context</div>
             <select
@@ -3529,6 +3580,21 @@ function NewSessionComposer({
               onChange={(e) => setCtx(e.target.value)}
             >
               {CONTEXT_OPTS.map((o) => (
+                <option key={o.v} value={o.v}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="nscol">
+            <div className="spawnlabel">Mode</div>
+            <select
+              className="cat-in"
+              value={mode}
+              title="Permission mode at launch. Default follows your settings; Plan works out an approach before touching anything."
+              onChange={(e) => setMode(e.target.value)}
+            >
+              {MODE_OPTS.map((o) => (
                 <option key={o.v} value={o.v}>
                   {o.label}
                 </option>
@@ -3551,7 +3617,7 @@ function NewSessionComposer({
         <input
           className="cat-in"
           value={flags}
-          placeholder="e.g. --dangerously-skip-permissions"
+          placeholder="e.g. --add-dir ../shared"
           onChange={(e) => setFlags(e.target.value)}
         />
 
