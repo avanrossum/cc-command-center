@@ -1847,6 +1847,10 @@ export function App() {
               window.cc.stateSet('activeSessionId', '')
             }
           }}
+          onLaunchParams={(s) => {
+            setMenu(null)
+            setResumeGate(s)
+          }}
           onRename={(s) => {
             if (!s.sessionId) return
             setNameEdit({ sessionId: s.sessionId, name: s.name ?? '', x: menu.x, y: menu.y })
@@ -2428,6 +2432,7 @@ function ContextMenu({
   onCopy,
   onRemove,
   onRename,
+  onLaunchParams,
 }: {
   menu: Menu
   snap: Snapshot
@@ -2442,6 +2447,7 @@ function ContextMenu({
   onCopy: (s: Session) => void
   onRemove: (s: Session) => void
   onRename: (s: Session) => void
+  onLaunchParams: (s: Session) => void
 }) {
   const s = menu.session
   const hasParent = edgeByChild.has(s.sessionId)
@@ -2482,6 +2488,12 @@ function ContextMenu({
             <div className="menusep" />
             <button className="menuitem" onClick={() => onRename(s)}>
               Rename…
+            </button>
+            {/* The only way to change or clear a session's remembered launch
+                parameters once they're sticky — otherwise ticking "always" with
+                the wrong model would be a one-way door. */}
+            <button className="menuitem" onClick={() => onLaunchParams(s)}>
+              Launch settings…
             </button>
             <button className="menuitem" onClick={() => onCopy(s)}>
               Copy last output
