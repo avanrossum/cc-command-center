@@ -3433,8 +3433,19 @@ select.cat-in {
   font: 11px var(--cc-font-mono);
   color: var(--cc-dim);
 }
-.ov-close {
+.ov-idle {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 11px var(--cc-font-ui);
+  color: var(--cc-dim);
+  cursor: pointer;
+}
+.ov-idle input {
+  cursor: pointer;
+}
+.ov-close {
   background: transparent;
   border: 1px solid var(--cc-border);
   color: var(--cc-dim);
@@ -3532,8 +3543,31 @@ select.cat-in {
 .ov-tile-term .xterm {
   height: 100%;
 }
-.ovbtn.on {
+/* "Show all" — the overview toggle in the beacon, left of the usage bars. */
+.showallbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  background: transparent;
+  border: 1px solid var(--cc-border);
+  color: var(--cc-dim);
+  border-radius: var(--cc-r-sm);
+  padding: 4px 10px;
+  font: 11px var(--cc-font-ui);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.showallbtn:hover {
+  color: var(--cc-text);
+  border-color: var(--cc-dim2);
+}
+.showallbtn.on {
   color: var(--cc-text);
   border-color: var(--cc-working);
   background: color-mix(in srgb, var(--cc-working) 16%, transparent);
+}
+.showall-ico {
+  font-size: 13px;
+  line-height: 1;
 }

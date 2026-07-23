@@ -108,6 +108,8 @@ function TileTerm({
 export function OverviewGrid({
   sessions,
   overflow,
+  showIdle,
+  onToggleIdle,
   themeName,
   fontFamily,
   fontSize,
@@ -116,6 +118,8 @@ export function OverviewGrid({
 }: {
   sessions: OverviewSession[]
   overflow: number
+  showIdle: boolean
+  onToggleIdle: () => void
   themeName?: string | null
   fontFamily?: string | null
   fontSize?: number | null
@@ -162,6 +166,10 @@ export function OverviewGrid({
         <span className="ov-count">
           {sessions.length} active{overflow > 0 ? ` · +${overflow} more` : ''}
         </span>
+        <label className="ov-idle" onClick={(e) => e.stopPropagation()}>
+          <input type="checkbox" checked={showIdle} onChange={onToggleIdle} />
+          <span>show idle</span>
+        </label>
         <button className="ov-close" onClick={onClose} title="Close (Esc)">
           Close ✕
         </button>

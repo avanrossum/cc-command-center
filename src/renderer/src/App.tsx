@@ -384,8 +384,19 @@ export function App() {
   // Drag-to-reorder categories in the rail (Uncategorized isn't draggable).
   // A session waiting on the "set the starting parameters" modal before it resumes.
   // The "50k-foot" overview grid — a fleet-wide view of every active session.
-  // Toggled by ⌘E / the beacon button; Esc closes; clicking a tile dives in.
+  // Toggled by ⌘⇧E / the beacon button; Esc closes; clicking a tile dives in.
   const [overviewOpen, setOverviewOpen] = useState(false)
+  // Also show live-idle sessions in the grid (still never dormant/needs-resume).
+  // Persisted; off by default so the grid stays focused on what's in motion.
+  const [overviewIdle, setOverviewIdle] = useState(false)
+  useEffect(() => {
+    window.cc.stateGet('overviewIdle').then((v) => v === 'true' && setOverviewIdle(true))
+  }, [])
+  const toggleOverviewIdle = (): void =>
+    setOverviewIdle((v) => {
+      window.cc.stateSet('overviewIdle', String(!v))
+      return !v
+    })
   // A session waiting on the launch-parameters modal. `edit` true = opened from the
   // context menu to change stored flags (save & close); false = the gate before a
   // non-sticky resume (save optional, then open).
@@ -781,13 +792,17 @@ export function App() {
   const overviewAll = useMemo(
     () =>
       live
-        .filter((s) => !s.dormant && OVERVIEW_STATES.has(dstate(s)))
+        .filter(
+          (s) =>
+            !s.dormant &&
+            (OVERVIEW_STATES.has(dstate(s)) || (overviewIdle && dstate(s) === 'idle')),
+        )
         .sort(
           (a, b) =>
             STATE[dstate(a)].order - STATE[dstate(b)].order ||
             (a.name ?? '').localeCompare(b.name ?? ''),
         ),
-    [live], // eslint-disable-line react-hooks/exhaustive-deps
+    [live, overviewIdle], // eslint-disable-line react-hooks/exhaustive-deps
   )
   const overviewTiles = overviewAll.slice(0, OVERVIEW_CAP)
   const overviewOverflow = overviewAll.length - overviewTiles.length
@@ -1011,12 +1026,13 @@ export function App() {
     setPendingFocus(null)
   }, [pendingFocus, snap.sessions]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ⌘E toggles the fleet overview; Esc closes it. A window-level listener works
+  // ⌘⇧E toggles the fleet overview; Esc closes it. (⌘E alone is a common global
+  // hotkey — Rize, etc. — so Shift keeps it clear.) A window-level listener works
   // even while the terminal has focus: xterm returns false for any Cmd combo, so
-  // ⌘E is never consumed as PTY input and bubbles here.
+  // the combo is never consumed as PTY input and bubbles here.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'e' && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+      if (e.key.toLowerCase() === 'e' && e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault()
         setOverviewOpen((v) => !v)
       } else if (e.key === 'Escape' && overviewOpen) {
@@ -1262,14 +1278,14 @@ export function App() {
             {snap.awarenessPaused ? '⏸' : '✉'} {snap.messages?.length ?? 0}
           </button>
         )}
-        <UsageMeter usage={snap.usage} now={snap.scannedAt || Date.now()} />
         <button
-          className={`gearbtn ovbtn${overviewOpen ? ' on' : ''}`}
+          className={`showallbtn${overviewOpen ? ' on' : ''}`}
           onClick={() => setOverviewOpen((v) => !v)}
-          title="Fleet overview — every active session at once (⌘E)"
+          title="Fleet overview — every active session at once (⌘⇧E)"
         >
-          ▦
+          <span className="showall-ico">▦</span> Show all
         </button>
+        <UsageMeter usage={snap.usage} now={snap.scannedAt || Date.now()} />
         <button className="gearbtn" onClick={() => setSettingsOpen(true)} title="Settings">
           ⚙
         </button>
@@ -1852,6 +1868,8 @@ export function App() {
               }
             })}
             overflow={overviewOverflow}
+            showIdle={overviewIdle}
+            onToggleIdle={toggleOverviewIdle}
             themeName={selThemeName}
             fontFamily={fontFamilyCss(snap.settings?.terminalFont)}
             fontSize={snap.settings?.terminalFontSize || DEFAULT_TERMINAL_FONT_SIZE}
