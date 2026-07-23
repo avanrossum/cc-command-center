@@ -13,6 +13,10 @@ interface Props {
   pid?: number
   cwd: string
   resume: boolean
+  // One-shot launch params chosen in the resume modal, for a session that has
+  // none stored. Serialized into the effect's deps — a fresh object literal each
+  // render would otherwise tear down and rebuild the whole xterm instance.
+  resumeFlags?: { model: string; context: string; effort: string; mode: string }
   themeName?: string | null
   // Terminal font (a global user setting). CSS font-family string + px size.
   fontFamily?: string | null
@@ -32,6 +36,7 @@ export function TerminalView({
   pid,
   cwd,
   resume,
+  resumeFlags,
   themeName,
   fontFamily,
   fontSize,
@@ -237,7 +242,15 @@ export function TerminalView({
     // after the buffer has been written and the grid fitted.
     let redrawTimer: ReturnType<typeof setTimeout> | null = null
     window.cc
-      .termOpen(termKey, { sessionId, pid, cwd, resume, cols: term.cols, rows: term.rows })
+      .termOpen(termKey, {
+        sessionId,
+        pid,
+        cwd,
+        resume,
+        resumeFlags,
+        cols: term.cols,
+        rows: term.rows,
+      })
       .then(() => {
         window.cc.termResize(termKey, term.cols, term.rows)
         if (resume) redrawTimer = setTimeout(() => window.cc.termRedraw(termKey), 400)
@@ -281,7 +294,8 @@ export function TerminalView({
       fitRef.current = null
       // Intentionally NOT closing the PTY: it keeps running in the background.
     }
-  }, [termKey, sessionId, cwd, resume])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [termKey, sessionId, cwd, resume, JSON.stringify(resumeFlags ?? null)])
 
   // Apply theme changes live without tearing down the terminal.
   useEffect(() => {

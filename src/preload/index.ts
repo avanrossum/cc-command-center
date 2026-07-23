@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
+interface ResumeFlags {
+  model: string
+  context: string
+  effort: string
+  mode: string
+}
+
 interface OpenOpts {
   sessionId?: string
   pid?: number
@@ -7,6 +14,8 @@ interface OpenOpts {
   resume: boolean
   cols: number
   rows: number
+  // One-shot launch params from the resume modal, for a session with none stored.
+  resumeFlags?: ResumeFlags
 }
 
 function sub<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -60,6 +69,10 @@ contextBridge.exposeInMainWorld('cc', {
   // null clears the override, so the category inherits the global switch again.
   catSetNotify: (id: number, cls: 'permission' | 'question' | 'done', on: boolean | null) =>
     ipcRenderer.invoke('cat:setNotify', id, cls, on),
+  // Remember a session's launch parameters. sticky=false still records them
+  // (so the modal prefills next time) but keeps gating.
+  resumeFlagsSet: (sessionId: string, flags: unknown, sticky: boolean) =>
+    ipcRenderer.invoke('resume-flags:set', sessionId, flags, sticky),
   catAssign: (sessionId: string, categoryId: number | null) =>
     ipcRenderer.invoke('cat:assign', sessionId, categoryId),
 
@@ -95,6 +108,8 @@ contextBridge.exposeInMainWorld('cc', {
     name?: string
     instructions?: string
     apiKeyId?: number
+    resumeFlags?: ResumeFlags
+    resumeSticky?: boolean
   }) => ipcRenderer.invoke('session:create', opts),
   sessionStartFresh: (cwd: string) => ipcRenderer.invoke('session:startFresh', cwd),
   sessionRemove: (sessionId: string) => ipcRenderer.invoke('session:remove', sessionId),

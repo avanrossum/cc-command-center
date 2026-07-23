@@ -1,5 +1,12 @@
 export {}
 
+interface ResumeFlags {
+  model: string
+  context: string
+  effort: string
+  mode: string
+}
+
 interface OpenOpts {
   sessionId?: string
   pid?: number
@@ -7,6 +14,7 @@ interface OpenOpts {
   resume: boolean
   cols: number
   rows: number
+  resumeFlags?: ResumeFlags
 }
 
 interface ApiKey {
@@ -69,6 +77,11 @@ declare global {
         cls: 'permission' | 'question' | 'done',
         on: boolean | null,
       ) => Promise<boolean>
+      resumeFlagsSet: (
+        sessionId: string,
+        flags: ResumeFlags,
+        sticky: boolean,
+      ) => Promise<boolean>
       catAssign: (sessionId: string, categoryId: number | null) => Promise<boolean>
       edgeSet: (
         childId: string,
@@ -98,6 +111,8 @@ declare global {
         name?: string
         instructions?: string
         apiKeyId?: number
+        resumeFlags?: ResumeFlags
+        resumeSticky?: boolean
       }) => Promise<{ pid: number; cwd: string } | null>
       sessionStartFresh: (cwd: string) => Promise<{ pid: number; cwd: string } | null>
       sessionRemove: (sessionId: string) => Promise<{ removed: string[] }>

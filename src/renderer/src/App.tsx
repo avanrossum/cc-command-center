@@ -39,6 +39,11 @@ interface Session {
   theme: string | null
   dormant?: boolean
   managed?: boolean
+  // Remembered launch params, and whether they apply without asking. `claude
+  // --resume` doesn't carry model/effort/permission-mode forward, so a session
+  // without sticky flags is gated behind the params modal before it resumes.
+  resumeFlags?: ResumeFlags
+  resumeSticky?: boolean
   attention?: 'permission' | 'question' // parked on a dialog: approve (door) vs answer (brain)
   // The substance behind a needs-you moment — see EnrichedSession in main. Blocked
   // -on-child is derived here from the edge graph, not sent from main.
@@ -132,6 +137,7 @@ interface AppSettings {
   lastEffort: string
   lastContext: string
   lastMode: string
+  lastResumeSticky: boolean
   arbiterEnabled: boolean
   arbiterKeyId: number | null
   arbiterCapUsd: number
@@ -164,6 +170,12 @@ interface Snapshot {
     sevenDay: { pct: number; resetsAt: number } | null
   }
 }
+interface ResumeFlags {
+  model: string
+  context: string
+  effort: string
+  mode: string
+}
 interface Selected {
   key: string
   pid?: number
@@ -175,6 +187,8 @@ interface Selected {
   // open time — i.e. this is genuinely a second copy. A dormant/restart resume is
   // NOT one, so the "original keeps running" notice must not claim it.
   hadLiveOriginal: boolean
+  // One-shot params from the resume modal; forwarded to term:open.
+  resumeFlags?: ResumeFlags
 }
 type MenuMode = 'root' | 'blocking' | 'tangential'
 interface Menu {
@@ -367,6 +381,11 @@ export function App() {
   const restoredCatRef = useRef<string | null>(null)
   const [catRestoreLoaded, setCatRestoreLoaded] = useState(false)
   // Drag-to-reorder categories in the rail (Uncategorized isn't draggable).
+  // A session waiting on the "set the starting parameters" modal before it resumes.
+  const [resumeGate, setResumeGate] = useState<Session | null>(null)
+  // Restore-on-launch found a session that would need the modal. Rather than
+  // popping one on every app start, select it and offer a Resume button.
+  const [deferredResume, setDeferredResume] = useState<Session | null>(null)
   const [dragCat, setDragCat] = useState<number | null>(null)
   const dropCat = (targetId: number | null): void => {
     const from = dragCat
@@ -893,7 +912,22 @@ export function App() {
     window.cc.stateSet('lastCategory', selectedCat === null ? 'null' : String(selectedCat))
   }, [selectedCat])
 
-  const openSession = (s: Session) => {
+  // Does resuming this session need to ask for launch parameters first? Only a
+  // real spawn can: if the app already owns the PTY it just re-attaches, and no
+  // flags are involved. Sticky sessions have their answer stored. Everything else
+  // — adopted, pre-feature, or created without ticking the box — gets asked.
+  const needsResumeGate = (s: Session): boolean => !s.managed && !s.resumeSticky
+  const openSession = (s: Session): void => {
+    if (needsResumeGate(s)) {
+      setResumeGate(s) // reallyOpen runs from the modal's confirm, not here
+      return
+    }
+    reallyOpen(s)
+  }
+  // The actual open. Every side effect lives here rather than in openSession, so a
+  // cancelled modal leaves nothing behind — especially activeSessionId, which would
+  // otherwise arm restore-on-launch for a session the user declined to resume.
+  const reallyOpen = (s: Session, oneShot?: ResumeFlags): void => {
     // Switch the rail to this session's category FIRST, so the row you just opened
     // is actually visible and highlighted instead of the terminal changing under a
     // rail that stayed put. Every cross-category surface — the needs-you why-cards,
@@ -915,6 +949,7 @@ export function App() {
       name: s.name ?? `pid ${s.pid}`,
       resume: true,
       hadLiveOriginal: !!(s.alive && !s.managed), // a real second copy only if live elsewhere
+      resumeFlags: oneShot ?? s.resumeFlags,
     })
   }
   // Scroll the opened row into view. Switching category isn't enough on its own —
@@ -976,7 +1011,18 @@ export function App() {
     const s = live.find((x) => x.sessionId === pendingRestore && x.alive)
     if (s) {
       restoredRef.current = true
-      openSession(s)
+      // Never pop the params modal on app start. If the open is silent — the app
+      // already owns the PTY, or the flags are remembered — restore as before.
+      // Otherwise select it and offer a Resume button, so the ask happens at a
+      // moment the user chose. This is what ticking "always use these flags" buys:
+      // the session comes back by itself.
+      if (needsResumeGate(s)) {
+        if (s.categoryId === null || groups.some((g) => g.id === s.categoryId))
+          setSelectedCat(s.categoryId)
+        setDeferredResume(s)
+      } else {
+        reallyOpen(s)
+      }
     }
   }, [live, selected, pendingRestore]) // eslint-disable-line react-hooks/exhaustive-deps
   // The theme shown for the open terminal: the just-picked override (instant),
@@ -1429,6 +1475,7 @@ export function App() {
                 pid={selected.pid}
                 cwd={selected.cwd}
                 resume={selected.resume}
+                resumeFlags={selected.resumeFlags}
                 themeName={selThemeName}
                 fontFamily={fontFamilyCss(snap.settings?.terminalFont)}
                 fontSize={snap.settings?.terminalFontSize || DEFAULT_TERMINAL_FONT_SIZE}
@@ -1554,6 +1601,34 @@ export function App() {
                 </span>
               </div>
             </>
+          ) : deferredResume ? (
+            /* Restore-on-launch found this session but it needs launch parameters.
+               Asking at startup would mean a modal every time the app opens, so it
+               waits here for a click. */
+            <div className="placeholder">
+              <div className="recovercard">
+                <div className="recovertitle">{deferredResume.name ?? 'Last session'}</div>
+                <div className="recoversub">
+                  Not running. Resuming needs its launch parameters — model, effort, context and
+                  mode — because <code>claude --resume</code> doesn&rsquo;t carry them forward.
+                </div>
+                <div className="recoveractions">
+                  <button
+                    className="rbtn primary"
+                    onClick={() => {
+                      const s = deferredResume
+                      setDeferredResume(null)
+                      openSession(s)
+                    }}
+                  >
+                    Resume&hellip;
+                  </button>
+                  <button className="rbtn" onClick={() => setDeferredResume(null)}>
+                    Not now
+                  </button>
+                </div>
+              </div>
+            </div>
           ) : (
             <div className="placeholder">
               <p>Select a session to open its terminal.</p>
@@ -1817,8 +1892,25 @@ export function App() {
           lastEffort={snap.settings?.lastEffort ?? ''}
           lastContext={snap.settings?.lastContext ?? ''}
           lastMode={snap.settings?.lastMode ?? ''}
+          lastResumeSticky={snap.settings?.lastResumeSticky ?? false}
           apiKeys={snap.apiKeys ?? []}
           close={() => setNewSessionOpen(false)}
+        />
+      )}
+      {resumeGate && (
+        <ResumeParamsComposer
+          session={resumeGate}
+          settings={snap.settings}
+          onCancel={() => setResumeGate(null)}
+          onConfirm={(flags, remember) => {
+            const s = resumeGate
+            setResumeGate(null)
+            // Persist for next time (remember=false still records them, so the
+            // modal prefills), and pass inline as a one-shot so the spawn doesn't
+            // race the async write — the node row may not even exist yet.
+            window.cc.resumeFlagsSet(s.sessionId, flags, remember)
+            reallyOpen(s, flags)
+          }}
         />
       )}
       {catEdit && <CategoryEditor edit={catEdit} setEdit={setCatEdit} onCreated={(id) => setSelectedCat(id)} />}
@@ -3400,6 +3492,208 @@ const MODE_OPTS = [
 // launch every later session with all permission checks off.
 const stickyMode = (m: string): string => (m === 'bypassPermissions' ? '' : m)
 
+// Derived launch-parameter rules, shared so the composer and the resume modal
+// apply identical gating. effortVal is the re-application of the ultracode gate:
+// a model that can't do xhigh must never emit --effort ultracode, which the CLI
+// accepts and silently ignores.
+function launchDerived(
+  model: string,
+  customModel: string,
+  effort: string,
+): { ctxOk: boolean; ultraOk: boolean; effortVal: string } {
+  const ctxOk = supports1m(model, customModel)
+  const ultraOk = supportsUltracode(model, customModel)
+  return { ctxOk, ultraOk, effortVal: effort === 'ultracode' && !ultraOk ? 'xhigh' : effort }
+}
+
+// The four launch-parameter pickers. Used by the New-session composer AND by the
+// resume-parameters modal, so the two can't drift apart.
+function LaunchParams({
+  model,
+  setModel,
+  customModel,
+  setCustomModel,
+  effort,
+  setEffort,
+  ctx,
+  setCtx,
+  mode,
+  setMode,
+}: {
+  model: string
+  setModel: (v: string) => void
+  customModel: string
+  setCustomModel: (v: string) => void
+  effort: string
+  setEffort: (v: string) => void
+  ctx: string
+  setCtx: (v: string) => void
+  mode: string
+  setMode: (v: string) => void
+}): React.ReactElement {
+  const { ctxOk, ultraOk, effortVal } = launchDerived(model, customModel, effort)
+  return (
+    <>
+          <div className="nsrow">
+            <div className="nscol">
+              <div className="spawnlabel">Model</div>
+              <select className="cat-in" value={model} onChange={(e) => setModel(e.target.value)}>
+                {MODEL_OPTS.map((o) => (
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="nscol">
+              <div className="spawnlabel">Effort</div>
+              <select
+                className="cat-in"
+                value={effortVal}
+                title={
+                  ultraOk
+                    ? 'ultracode = xhigh effort plus standing workflow orchestration (needs workflows enabled)'
+                    : 'reasoning effort — ultracode needs a model that supports xhigh'
+                }
+                onChange={(e) => setEffort(e.target.value)}
+              >
+                {EFFORT_OPTS.filter((o) => !o.ultra || ultraOk).map((o) => (
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="nsrow">
+            <div className="nscol">
+              <div className="spawnlabel">Context</div>
+              <select
+                className="cat-in"
+                value={ctxOk ? ctx : ''}
+                disabled={!ctxOk}
+                title={ctxOk ? '1M adds the [1m] suffix to the model' : 'pick a model that has a 1M variant'}
+                onChange={(e) => setCtx(e.target.value)}
+              >
+                {CONTEXT_OPTS.map((o) => (
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="nscol">
+              <div className="spawnlabel">Mode</div>
+              <select
+                className="cat-in"
+                value={mode}
+                title="Permission mode at launch. Default follows your settings; Plan works out an approach before touching anything."
+                onChange={(e) => setMode(e.target.value)}
+              >
+                {MODE_OPTS.map((o) => (
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {model === '__custom__' && (
+            <input
+              className="cat-in"
+              value={customModel}
+              placeholder="model id, e.g. claude-opus-4-8"
+              onChange={(e) => setCustomModel(e.target.value)}
+            />
+          )}
+    </>
+  )
+}
+
+// "Set the starting parameters for this session" — shown before a session that
+// has no remembered flags is resumed. It exists because `claude --resume` starts
+// the session at the CLI defaults regardless of how it was originally launched,
+// so without this the model/effort/mode silently change under you on every resume.
+// Cancel aborts the open entirely; resuming with defaults would make the modal
+// cosmetic, which is the outcome this whole feature exists to prevent.
+function ResumeParamsComposer({
+  session,
+  settings,
+  onCancel,
+  onConfirm,
+}: {
+  session: Session
+  settings?: AppSettings
+  onCancel: () => void
+  onConfirm: (flags: ResumeFlags, remember: boolean) => void
+}): React.ReactElement {
+  // Prefill from what the session already remembers; failing that, the app-global
+  // last-used choices, so an adopted or pre-existing session isn't a blank form.
+  const seed = session.resumeFlags
+  const seedModel = seed?.model ?? settings?.lastModel ?? ''
+  const known = MODEL_OPTS.some((o) => o.v === seedModel)
+  const [model, setModel] = useState(known ? seedModel : seedModel ? '__custom__' : '')
+  const [customModel, setCustomModel] = useState(known ? '' : seedModel)
+  const [effort, setEffort] = useState(seed?.effort ?? settings?.lastEffort ?? '')
+  const [ctx, setCtx] = useState(seed?.context ?? settings?.lastContext ?? '')
+  const [mode, setMode] = useState(seed?.mode ?? settings?.lastMode ?? '')
+  const [remember, setRemember] = useState(false)
+  const { ctxOk, effortVal } = launchDerived(model, customModel, effort)
+  const confirm = (): void => {
+    const baseModel = model === '__custom__' ? customModel.trim() : model
+    onConfirm(
+      {
+        model: baseModel,
+        context: ctxOk ? ctx : '',
+        effort: effortVal,
+        mode: stickyMode(mode),
+      },
+      remember,
+    )
+  }
+  return (
+    <div className="spawnscrim" onClick={onCancel}>
+      <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
+        <div className="spawntitle">Set the starting parameters for this session</div>
+        <div className="spawnsub">
+          <b>{session.name ?? session.sessionId.slice(0, 8)}</b> — resuming starts it at the CLI
+          defaults unless these are set.
+        </div>
+
+        <LaunchParams
+          model={model}
+          setModel={setModel}
+          customModel={customModel}
+          setCustomModel={setCustomModel}
+          effort={effort}
+          setEffort={setEffort}
+          ctx={ctx}
+          setCtx={setCtx}
+          mode={mode}
+          setMode={setMode}
+        />
+
+        <label className="setrow nsremember">
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+          <span>
+            <b>Remember these settings when resuming in the future</b>
+            <span className="setsub">This session will resume with them without asking again.</span>
+          </span>
+        </label>
+
+        <div className="spawnactions">
+          <button className="rbtn" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="rbtn primary" onClick={confirm}>
+            Resume
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function NewSessionComposer({
   categories,
   defaultCat,
@@ -3409,6 +3703,7 @@ function NewSessionComposer({
   lastEffort,
   lastContext,
   lastMode,
+  lastResumeSticky,
   apiKeys,
   close,
 }: {
@@ -3420,6 +3715,7 @@ function NewSessionComposer({
   lastEffort: string
   lastContext: string
   lastMode: string
+  lastResumeSticky: boolean
   apiKeys: ApiKey[]
   close: () => void
 }) {
@@ -3436,12 +3732,10 @@ function NewSessionComposer({
   const [effort, setEffort] = useState(lastEffort)
   const [ctx, setCtx] = useState(lastContext)
   const [mode, setMode] = useState(lastMode)
-  const ctxOk = supports1m(model, customModel)
-  const ultraOk = supportsUltracode(model, customModel)
   // Re-applied here, not just in the dropdown, so switching to a model that can't
-  // do ultracode visibly snaps the selection back instead of leaking a flag that
-  // would silently no-op.
-  const effortVal = effort === 'ultracode' && !ultraOk ? 'xhigh' : effort
+  // do ultracode never leaks a flag the CLI would silently ignore.
+  const { ctxOk, effortVal } = launchDerived(model, customModel, effort)
+  const [remember, setRemember] = useState(lastResumeSticky)
   const pick = async () => {
     const p = await window.cc.pickFolder()
     if (p) setCwd(p)
@@ -3467,6 +3761,7 @@ function NewSessionComposer({
     window.cc.settingsSet('lastEffort', effortVal)
     window.cc.settingsSet('lastContext', ctx)
     window.cc.settingsSet('lastMode', stickyMode(mode))
+    window.cc.settingsSet('lastResumeSticky', String(remember))
     window.cc.sessionCreate({
       cwd,
       flags: allFlags || undefined,
@@ -3474,6 +3769,14 @@ function NewSessionComposer({
       name: name.trim() || undefined,
       instructions: instructions.trim() || undefined,
       apiKeyId,
+      // The four structured fields only — never `flags`, which is arbitrary text.
+      resumeFlags: {
+        model: baseModel,
+        context: ctxOk ? ctx : '',
+        effort: effortVal,
+        mode: stickyMode(mode),
+      },
+      resumeSticky: remember,
     })
     close()
   }
@@ -3538,78 +3841,29 @@ function NewSessionComposer({
           </>
         )}
 
-        <div className="nsrow">
-          <div className="nscol">
-            <div className="spawnlabel">Model</div>
-            <select className="cat-in" value={model} onChange={(e) => setModel(e.target.value)}>
-              {MODEL_OPTS.map((o) => (
-                <option key={o.v} value={o.v}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="nscol">
-            <div className="spawnlabel">Effort</div>
-            <select
-              className="cat-in"
-              value={effortVal}
-              title={
-                ultraOk
-                  ? 'ultracode = xhigh effort plus standing workflow orchestration (needs workflows enabled)'
-                  : 'reasoning effort — ultracode needs a model that supports xhigh'
-              }
-              onChange={(e) => setEffort(e.target.value)}
-            >
-              {EFFORT_OPTS.filter((o) => !o.ultra || ultraOk).map((o) => (
-                <option key={o.v} value={o.v}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <div className="nsrow">
-          <div className="nscol">
-            <div className="spawnlabel">Context</div>
-            <select
-              className="cat-in"
-              value={ctxOk ? ctx : ''}
-              disabled={!ctxOk}
-              title={ctxOk ? '1M adds the [1m] suffix to the model' : 'pick a model that has a 1M variant'}
-              onChange={(e) => setCtx(e.target.value)}
-            >
-              {CONTEXT_OPTS.map((o) => (
-                <option key={o.v} value={o.v}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="nscol">
-            <div className="spawnlabel">Mode</div>
-            <select
-              className="cat-in"
-              value={mode}
-              title="Permission mode at launch. Default follows your settings; Plan works out an approach before touching anything."
-              onChange={(e) => setMode(e.target.value)}
-            >
-              {MODE_OPTS.map((o) => (
-                <option key={o.v} value={o.v}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        {model === '__custom__' && (
-          <input
-            className="cat-in"
-            value={customModel}
-            placeholder="model id, e.g. claude-opus-4-8"
-            onChange={(e) => setCustomModel(e.target.value)}
-          />
-        )}
+        <LaunchParams
+          model={model}
+          setModel={setModel}
+          customModel={customModel}
+          setCustomModel={setCustomModel}
+          effort={effort}
+          setEffort={setEffort}
+          ctx={ctx}
+          setCtx={setCtx}
+          mode={mode}
+          setMode={setMode}
+        />
+
+        <label className="setrow nsremember">
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+          <span>
+            <b>When resuming this session, always use these flags</b>
+            <span className="setsub">
+              <code>claude --resume</code> doesn&rsquo;t carry them forward. Leave this off and
+              you&rsquo;ll be asked each time you resume it.
+            </span>
+          </span>
+        </label>
 
         <div className="spawnlabel">
           Flags <span className="spawnopt">optional extra CLI args</span>

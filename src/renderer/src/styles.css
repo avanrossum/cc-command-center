@@ -3351,3 +3351,9 @@ select.cat-in {
   overflow-x: auto;
   font-variant-ligatures: contextual;
 }
+
+/* "Always use these flags on resume" / "Remember these settings" — a setrow
+   inside the session modals, which need a little breathing room above. */
+.nsremember {
+  margin-top: 12px;
+}
