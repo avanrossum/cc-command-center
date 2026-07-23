@@ -2671,7 +2671,19 @@ const MODEL_OPTS = [
   { v: 'fable', label: 'Fable' },
   { v: '__custom__', label: 'Custom…' },
 ]
-const EFFORT_OPTS = ['', 'low', 'medium', 'high', 'xhigh', 'max']
+// `ultracode` is not a sixth effort level: the CLI maps it to xhigh AND injects a
+// standing instruction to orchestrate with the Workflow tool. It's accepted by
+// --effort but undocumented in --help, and it silently no-ops on a model without
+// xhigh, so it's gated per-model below.
+const EFFORT_OPTS: { v: string; label: string; ultra?: boolean }[] = [
+  { v: '', label: 'Default' },
+  { v: 'low', label: 'low' },
+  { v: 'medium', label: 'medium' },
+  { v: 'high', label: 'high' },
+  { v: 'xhigh', label: 'xhigh' },
+  { v: 'max', label: 'max' },
+  { v: 'ultracode', label: 'ultracode', ultra: true },
+]
 // The Arbiter console: docked at the bottom of the companion pane. This is NOT
 // where the insight lives — the gloss renders inline on the session it describes.
 // This is where you audit the agent: what it is doing, and what it has cost.
