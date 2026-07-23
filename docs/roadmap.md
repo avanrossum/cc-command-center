@@ -294,6 +294,21 @@ For **stuck / needs permission**, lift the whole permission query into the body 
 
 ---
 
+## "Your turn" vs "your turn but I asked you a direct question" — the question sub-state (user, 2026-07-23)
+
+**Symptom (surfaced by the overview grid).** Both a soft turn-end ("I can do more if you want — tell me what next") and a genuine direct question ("what format do you want?") render as one flat blue "your turn". In the sidebar the two are already distinguishable — the engine sets `whyKind === 'question'` and renders an "asked …" why-line for the real question — but the overview grid collapses everything to `dstate === 'waiting'` and throws that signal away. So at 50k feet you can't see which sessions actually asked you something.
+
+**It's a surfacing gap, not a detection gap.** `whyKind === 'question'` already exists per session. The grid just needs to carry it.
+
+**Agreed grid fix (user chose 1+2+3, 2026-07-23) — a MODIFIER on blue, never a new color** (blue must stay "your turn" per the color governance):
+1. **Badge** — a `?` glyph / "asked" chip on tiles (and mirror it on the sidebar) where `whyKind === 'question'`; soft turn-ends get nothing.
+2. **Sort** — question-your-turns sort ahead of soft ones within the your-turn tier, so the sessions actually waiting on your answer land top-left.
+3. **Intensity** — soft your-turns get a muted/desaturated blue; a real question gets full-saturation blue + the badge. (User: the muted tone is a *good* signal as long as it's not near-transparent — it reads, doesn't damage clarity.)
+
+**STUBBED for a later build — the deeper, complete version (user, 2026-07-23; do it if the grid-only fix draws complaints).** A direct question genuinely BLOCKS the assistant — it cannot proceed without your answer — which is closer to a soft permission gate than to "your move." So the question sub-state arguably deserves its own rung in the whole attention hierarchy, just below `permission` and above plain `waiting`/`working`, with **every surface agreeing**: beacon tally, sidebar ordering, the overview sort, AND the notification class (today `question` already notifies, but it shares the `waiting` display tier). This is the bigger change — it touches the shared urgency ranking (`STATE[].order`, the `urgencyRank` used by the state hysteresis, the notify classes) — so it's deliberately deferred. Plan for the eventuality: if users complain that a real question doesn't stand out enough even with the badge, promote `question` to its own tier here rather than piling on more grid-only affordances.
+
+---
+
 ## v0 task breakdown (Phase 0 + first usable milestone)
 
 v0 = Phase 0 spike proven, then the smallest usable app: adopted sessions visible with correct coarse status, resumable on restart. This spans Phase 0 through Phase 4 with a minimal read-only UI.
