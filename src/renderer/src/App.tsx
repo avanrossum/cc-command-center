@@ -382,7 +382,10 @@ export function App() {
   const [catRestoreLoaded, setCatRestoreLoaded] = useState(false)
   // Drag-to-reorder categories in the rail (Uncategorized isn't draggable).
   // A session waiting on the "set the starting parameters" modal before it resumes.
-  const [resumeGate, setResumeGate] = useState<Session | null>(null)
+  // A session waiting on the launch-parameters modal. `edit` true = opened from the
+  // context menu to change stored flags (save & close); false = the gate before a
+  // non-sticky resume (save optional, then open).
+  const [resumeGate, setResumeGate] = useState<{ session: Session; edit: boolean } | null>(null)
   // Restore-on-launch found a session that would need the modal. Rather than
   // popping one on every app start, select it and offer a Resume button.
   const [deferredResume, setDeferredResume] = useState<Session | null>(null)
@@ -919,7 +922,7 @@ export function App() {
   const needsResumeGate = (s: Session): boolean => !s.managed && !s.resumeSticky
   const openSession = (s: Session): void => {
     if (needsResumeGate(s)) {
-      setResumeGate(s) // reallyOpen runs from the modal's confirm, not here
+      setResumeGate({ session: s, edit: false }) // reallyOpen runs from the modal's confirm
       return
     }
     reallyOpen(s)
@@ -1849,7 +1852,7 @@ export function App() {
           }}
           onLaunchParams={(s) => {
             setMenu(null)
-            setResumeGate(s)
+            setResumeGate({ session: s, edit: true })
           }}
           onRename={(s) => {
             if (!s.sessionId) return
@@ -1903,17 +1906,20 @@ export function App() {
       )}
       {resumeGate && (
         <ResumeParamsComposer
-          session={resumeGate}
+          session={resumeGate.session}
           settings={snap.settings}
+          edit={resumeGate.edit}
           onCancel={() => setResumeGate(null)}
           onConfirm={(flags, remember) => {
-            const s = resumeGate
+            const { session: s, edit } = resumeGate
             setResumeGate(null)
             // Persist for next time (remember=false still records them, so the
             // modal prefills), and pass inline as a one-shot so the spawn doesn't
             // race the async write — the node row may not even exist yet.
             window.cc.resumeFlagsSet(s.sessionId, flags, remember)
-            reallyOpen(s, flags)
+            // Edit mode is a pure settings change — don't resume/attach; the row is
+            // now sticky, so a later click opens it silently with these flags.
+            if (!edit) reallyOpen(s, flags)
           }}
         />
       )}
@@ -3666,16 +3672,26 @@ function ResumeParamsComposer({
         effort: effortVal,
         mode: stickyMode(mode),
       },
-      remember,
+      edit ? true : remember, // editing from the menu always saves
     )
   }
+  const who = session.name ?? session.sessionId.slice(0, 8)
   return (
     <div className="spawnscrim" onClick={onCancel}>
       <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
-        <div className="spawntitle">Set the starting parameters for this session</div>
+        <div className="spawntitle">
+          {edit ? 'Launch settings' : 'Set the starting parameters for this session'}
+        </div>
         <div className="spawnsub">
-          <b>{session.name ?? session.sessionId.slice(0, 8)}</b> — resuming starts it at the CLI
-          defaults unless these are set.
+          {edit ? (
+            <>
+              <b>{who}</b> — applied each time this session resumes.
+            </>
+          ) : (
+            <>
+              <b>{who}</b> — resuming starts it at the CLI defaults unless these are set.
+            </>
+          )}
         </div>
 
         <LaunchParams
@@ -3691,20 +3707,27 @@ function ResumeParamsComposer({
           setMode={setMode}
         />
 
-        <label className="setrow nsremember">
-          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-          <span>
-            <b>Remember these settings when resuming in the future</b>
-            <span className="setsub">This session will resume with them without asking again.</span>
-          </span>
-        </label>
+        {/* No checkbox in edit mode: choosing "Launch settings…" already means save. */}
+        {!edit && (
+          <label className="setrow nsremember">
+            <input
+              type="checkbox"
+              checked={remember}
+              onChange={(e) => setRemember(e.target.checked)}
+            />
+            <span>
+              <b>Remember these settings when resuming in the future</b>
+              <span className="setsub">This session will resume with them without asking again.</span>
+            </span>
+          </label>
+        )}
 
         <div className="spawnactions">
           <button className="rbtn" onClick={onCancel}>
             Cancel
           </button>
           <button className="rbtn primary" onClick={confirm}>
-            Resume
+            {edit ? 'Save' : 'Resume'}
           </button>
         </div>
       </div>
