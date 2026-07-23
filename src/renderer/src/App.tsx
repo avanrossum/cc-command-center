@@ -3631,11 +3631,17 @@ function LaunchParams({
 function ResumeParamsComposer({
   session,
   settings,
+  edit,
   onCancel,
   onConfirm,
 }: {
   session: Session
   settings?: AppSettings
+  // Edit mode = opened from the context menu to change the remembered flags. The
+  // intent is unambiguously "save these", so there's no checkbox and no resume —
+  // it just stores them and closes. Resume mode = the gate shown before a
+  // non-sticky session resumes, where remembering is the user's choice.
+  edit?: boolean
   onCancel: () => void
   onConfirm: (flags: ResumeFlags, remember: boolean) => void
 }): React.ReactElement {
