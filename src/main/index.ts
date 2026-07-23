@@ -1981,6 +1981,20 @@ ipcMain.on('term:attach', (_e, key: string) => {
   const t = terminals.get(key)
   if (t?.buffer) sendToWin('term:data', { key, data: t.buffer })
 })
+// Read-only peek at the tail of each session's live output buffer, for the
+// overview grid's thumbnails. Deliberately does NOT touch attachedKey or send
+// term:data — attaching would steal the single live stream from the terminal the
+// user is actually in and corrupt the seen-watermark. Returns the raw ANSI tail
+// (main already keeps term.buffer for every managed session, 256KB-capped), which
+// the renderer paints into a small static xterm once per refresh tick.
+const PEEK_TAIL = 8 * 1024
+ipcMain.handle('term:peek', (_e, sessionIds: string[]) => {
+  if (!Array.isArray(sessionIds)) return []
+  return sessionIds.map((id) => {
+    const t = findManagedTerm(id)
+    return { sessionId: id, tail: t && !t.exited ? t.buffer.slice(-PEEK_TAIL) : '' }
+  })
+})
 ipcMain.on('term:input', (_e, key: string, data: string) => {
   terminals.get(key)?.pty.write(data)
 })

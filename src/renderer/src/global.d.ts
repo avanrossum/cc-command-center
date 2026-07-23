@@ -134,6 +134,7 @@ declare global {
       stateSet: (key: string, value: string) => void
       termOpen: (key: string, opts: OpenOpts) => Promise<boolean>
       termAttach: (key: string) => void
+      termPeek: (sessionIds: string[]) => Promise<{ sessionId: string; tail: string }[]>
       termInput: (key: string, data: string) => void
       termOpenPath: (key: string, path: string) => Promise<{ ok: boolean }>
       openExternal: (url: string) => Promise<{ ok: boolean }>

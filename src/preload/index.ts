@@ -152,6 +152,10 @@ contextBridge.exposeInMainWorld('cc', {
   // terminals — keyed by a stable string (session id, or `new:<pid>`)
   termOpen: (key: string, opts: OpenOpts) => ipcRenderer.invoke('term:open', key, opts),
   termAttach: (key: string) => ipcRenderer.send('term:attach', key),
+  // Read-only tail of each session's output, for the overview grid thumbnails.
+  // Never attaches, so it can't disturb the live terminal underneath.
+  termPeek: (sessionIds: string[]) =>
+    ipcRenderer.invoke('term:peek', sessionIds) as Promise<{ sessionId: string; tail: string }[]>,
   termInput: (key: string, data: string) => ipcRenderer.send('term:input', key, data),
   termOpenPath: (key: string, path: string) => ipcRenderer.invoke('term:openPath', key, path),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
