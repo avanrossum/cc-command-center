@@ -1751,6 +1751,35 @@ body {
 .nsrow + .nsrow {
   margin-top: 8px;
 }
+/* New-session composer: wider, and split into two columns — identity/location on
+   the left, launch config on the right — so the whole form fits without scrolling
+   on small windows. It has far more fields than the other modals; stacking them
+   one per row made it taller than short viewports. Scoped to .nswide so the other
+   modals (which share .spawnmodal) keep their 460px single column. */
+.spawnmodal.nswide {
+  width: 700px;
+}
+.nssplit {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+.nssplit > .nscol {
+  flex: 1;
+  min-width: 0;
+}
+/* The column's own fields keep the normal label rhythm, but the first label in
+   each column shouldn't add a top margin under the split's own spacing. */
+.nssplit > .nscol > .spawnlabel:first-child,
+.nssplit > .nscol > .nsrow:first-child {
+  margin-top: 0;
+}
+.nswide .recentfolders {
+  max-height: 66px;
+}
+.nswide .spawnnote {
+  min-height: 56px;
+}
 .nscol {
   flex: 1;
   min-width: 0;

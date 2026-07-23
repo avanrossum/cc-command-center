@@ -3824,97 +3824,109 @@ function NewSessionComposer({
   const shortCwd = home && cwd.startsWith(home) ? cwd.replace(home, '~') : cwd
   return (
     <div className="spawnscrim" onClick={close}>
-      <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
+      {/* Wider, two-column layout: this form has many more fields than the other
+          modals, and one-per-row made it taller than short viewports. Pairing the
+          short fields keeps everything on one page without scrolling. */}
+      <div className="spawnmodal nswide" onClick={(e) => e.stopPropagation()}>
         <div className="spawntitle">New session</div>
         <div className="spawnsub">launches a managed Claude session and adopts it here.</div>
 
-        <div className="spawnlabel">
-          Name <span className="spawnopt">optional</span>
-        </div>
-        <input
-          className="cat-in"
-          autoFocus
-          value={name}
-          placeholder="e.g. schema-fix"
-          onChange={(e) => setName(e.target.value)}
-        />
-
-        <div className="spawnlabel">Category</div>
-        <select
-          className="cat-in"
-          value={cat ?? ''}
-          onChange={(e) => setCat(e.target.value === '' ? null : Number(e.target.value))}
-        >
-          <option value="">Uncategorized</option>
-          {categories.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-
-        <div className="spawnlabel">Folder</div>
-        <div className="spawnfolder">
-          <span className="spawncwd" title={cwd}>
-            {cwd ? shortCwd : 'choose a folder…'}
-          </span>
-          <button className="rbtn" onClick={pick}>
-            Choose…
-          </button>
-        </div>
-        {recent.length > 0 && (
-          <>
+        <div className="nssplit">
+          {/* LEFT: what & where. */}
+          <div className="nscol">
             <div className="spawnlabel">
-              Recent <span className="spawnopt">click to reuse</span>
+              Name <span className="spawnopt">optional</span>
             </div>
-            <div className="recentfolders">
-              {recent.map((f) => (
-                <button
-                  key={f}
-                  className="recentfolder"
-                  title={f}
-                  onClick={() => setCwd(f)}
-                >
-                  {home && f.startsWith(home) ? f.replace(home, '~') : f}
-                </button>
+            <input
+              className="cat-in"
+              autoFocus
+              value={name}
+              placeholder="e.g. schema-fix"
+              onChange={(e) => setName(e.target.value)}
+            />
+
+            <div className="spawnlabel">Category</div>
+            <select
+              className="cat-in"
+              value={cat ?? ''}
+              onChange={(e) => setCat(e.target.value === '' ? null : Number(e.target.value))}
+            >
+              <option value="">Uncategorized</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
               ))}
+            </select>
+
+            <div className="spawnlabel">Folder</div>
+            <div className="spawnfolder">
+              <span className="spawncwd" title={cwd}>
+                {cwd ? shortCwd : 'choose a folder…'}
+              </span>
+              <button className="rbtn" onClick={pick}>
+                Choose…
+              </button>
             </div>
-          </>
-        )}
+            {recent.length > 0 && (
+              <>
+                <div className="spawnlabel">
+                  Recent <span className="spawnopt">click to reuse</span>
+                </div>
+                <div className="recentfolders">
+                  {recent.map((f) => (
+                    <button key={f} className="recentfolder" title={f} onClick={() => setCwd(f)}>
+                      {home && f.startsWith(home) ? f.replace(home, '~') : f}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
 
-        <LaunchParams
-          model={model}
-          setModel={setModel}
-          customModel={customModel}
-          setCustomModel={setCustomModel}
-          effort={effort}
-          setEffort={setEffort}
-          ctx={ctx}
-          setCtx={setCtx}
-          mode={mode}
-          setMode={setMode}
-        />
+          {/* RIGHT: how it runs. */}
+          <div className="nscol">
+            <LaunchParams
+              model={model}
+              setModel={setModel}
+              customModel={customModel}
+              setCustomModel={setCustomModel}
+              effort={effort}
+              setEffort={setEffort}
+              ctx={ctx}
+              setCtx={setCtx}
+              mode={mode}
+              setMode={setMode}
+            />
 
-        <label className="setrow nsremember">
-          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
-          <span>
-            <b>When resuming this session, always use these flags</b>
-            <span className="setsub">
-              <code>claude --resume</code> doesn&rsquo;t carry them forward. Leave this off and
-              you&rsquo;ll be asked each time you resume it.
-            </span>
-          </span>
-        </label>
+            <div className="spawnlabel">
+              Flags <span className="spawnopt">optional extra CLI args</span>
+            </div>
+            <input
+              className="cat-in"
+              value={flags}
+              placeholder="e.g. --add-dir ../shared"
+              onChange={(e) => setFlags(e.target.value)}
+            />
 
-        <div className="spawnlabel">
-          Flags <span className="spawnopt">optional extra CLI args</span>
+            <label className="setrow nsremember">
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(e) => setRemember(e.target.checked)}
+              />
+              <span>
+                <b>Always use these flags on resume</b>
+                <span className="setsub">
+                  <code>claude --resume</code> won&rsquo;t carry them; otherwise you&rsquo;re asked
+                  each time.
+                </span>
+              </span>
+            </label>
+
+            <ApiKeyPicker apiKeys={apiKeys} value={apiKeyId} onChange={setApiKeyId} />
+          </div>
         </div>
-        <input
-          className="cat-in"
-          value={flags}
-          placeholder="e.g. --add-dir ../shared"
-          onChange={(e) => setFlags(e.target.value)}
-        />
 
         <div className="spawnlabel">
           Initial instructions <span className="spawnopt">optional — sent as the first message</span>
@@ -3925,8 +3937,6 @@ function NewSessionComposer({
           placeholder="What should it start on?"
           onChange={(e) => setInstructions(e.target.value)}
         />
-
-        <ApiKeyPicker apiKeys={apiKeys} value={apiKeyId} onChange={setApiKeyId} />
 
         <div className="spawnactions">
           <button className="rbtn" onClick={close}>
