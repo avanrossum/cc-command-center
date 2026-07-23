@@ -34,7 +34,7 @@ import {
 } from './engine/sessions'
 import { readLastAssistantText } from './engine/transcript'
 import { parseDialogCommand, questionFromText } from './engine/dialog'
-import type { LiveSession } from './engine/types'
+import type { LiveSession, CoarseState } from './engine/types'
 import { installAppMenu, setAboutPanel } from './about'
 import {
   initUpdater,
@@ -152,6 +152,41 @@ const DORMANT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000 // dormant/resumable sessions
 // a question). Derived from the live PTY buffer and the hook — NOT the transcript,
 // which cannot see a live dialog.
 type AttentionKind = 'permission' | 'question'
+
+// ---------- state release-hysteresis ----------
+// The fused (state, attention) is recomputed from scratch each ~1.5s scan, and
+// each signal (hook / transcript / buffer scan) has a deliberate cap that DROPS a
+// high-signal state after a timeout so a crashed session can't pin green/orange
+// forever. Those caps are correct — but the drop was HARD: a single stale tick
+// (a buffer scan that momentarily doesn't re-find the still-open dialog, or a
+// hook 'working' that just aged past its window while a long tool run continues)
+// collapsed the state for one scan, then the next scan re-latched it. Flicker —
+// which the overview grid made painfully visible by animating a reorder on every
+// bounce (and showed a live permission gate briefly as "your turn").
+//
+// Fix: a high-signal state must be absent for a few CONSECUTIVE scans before it's
+// released. A genuine transition still releases immediately, because a fresh hook
+// event (newer than when we latched) overrides the hold — approving a gate fires
+// PostToolUse, which we trust at once. Only a same-signal flicker is smoothed.
+const URGENCY: Record<string, number> = { idle: 1, unknown: 1, waiting: 2, working: 3 }
+function urgencyRank(state: CoarseState, attention?: AttentionKind): number {
+  if (attention === 'permission') return 5
+  if (attention === 'question') return 4
+  return URGENCY[state] ?? 0
+}
+interface StateHold {
+  rank: number
+  state: CoarseState
+  attention?: AttentionKind
+  hookAt: number // hs.at when this state was latched — a newer hook releases the hold
+  downgradeSince: number // when the current lower reading began (0 = not downgrading)
+}
+// Time-based (not scan-count): pushSessions can fire several times between scans,
+// so a count would drain in a burst. Hold a dropped high state this long before
+// releasing it.
+const HOLD_MS = 3000
+const stateHold = new Map<string, StateHold>()
+
 type EnrichedSession = LiveSession & {
   categoryId: number | null
   theme: string | null
@@ -656,6 +691,34 @@ function snapshot(): Snapshot {
     if (!attention && !hookFresh && hs && hs.state === 'permission') {
       attention = hs.kind === 'elicitation_dialog' ? 'question' : 'permission'
     }
+
+    // Release-hysteresis on (state, attention): hold a higher-urgency state for
+    // HOLD_MS across a flicker, but release at once on a genuine transition (a hook
+    // event newer than the one we latched on). See the StateHold notes above.
+    if (s.alive && !s.isSpare) {
+      const rank = urgencyRank(state, attention)
+      const held = stateHold.get(s.sessionId)
+      const hookAt = hs?.at ?? 0
+      if (!held || rank >= held.rank) {
+        // Same or higher urgency — accept, and clear any in-progress downgrade.
+        stateHold.set(s.sessionId, { rank, state, attention, hookAt, downgradeSince: 0 })
+      } else if (hookAt > held.hookAt) {
+        // A newer hook event confirms the change (e.g. you approved) — trust it now.
+        stateHold.set(s.sessionId, { rank, state, attention, hookAt, downgradeSince: 0 })
+      } else {
+        const since = held.downgradeSince || now
+        if (now - since >= HOLD_MS) {
+          // Held long enough with no authoritative change — the drop is real.
+          stateHold.set(s.sessionId, { rank, state, attention, hookAt, downgradeSince: 0 })
+        } else {
+          // Same-signal flicker — keep showing the held state.
+          state = held.state
+          attention = held.attention
+          stateReason = `${stateReason} · held (flicker)`
+          stateHold.set(s.sessionId, { ...held, downgradeSince: since })
+        }
+      }
+    }
     // The "why" behind a needs-you moment. Permission → the gated command (from
     // the buffer) or a coarse label. Question → the interactive dialog ("needs your
     // answer") or, for a turn that ended on a question, the actual question. A
@@ -825,6 +888,7 @@ function snapshot(): Snapshot {
   // in another app still fires the pip (the common case).
   // Bound the question cache to live sessions so it can't grow without limit.
   for (const k of questionCache.keys()) if (!liveIds.has(k)) questionCache.delete(k)
+  for (const k of stateHold.keys()) if (!liveIds.has(k)) stateHold.delete(k)
   let unhandled = lastUnhandled // retain the last-known pips if this scan's sync throws
   try {
     // Only sessions we could actually observe this scan are eligible for
