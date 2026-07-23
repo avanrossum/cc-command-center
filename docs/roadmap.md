@@ -251,6 +251,39 @@ verbatim base so it degrades cleanly with no key. Full handoff:
 
 **Approach.** Same no-daemon file-scan the state engine uses, extended to `~/.claude/projects/*/` subagent/task artifacts + workflow journals (they carry per-agent progress). Aggregate into a live list grouped by session: spawned / running / done / stalled. This is `open-questions.md` Q2 promoted to a build item — it pairs with Phase 7 and the control agent (which would consume the same signal). Slot alongside Phase 7/8 for pre-share readiness.
 
+## macOS system notifications — granular, and interactive where possible (user, 2026-07-22)
+
+**Why this hasn't been built yet (user).** Not because it's hard to fire a notification — because naively "enabling notifications" on a fleet this active would notify *constantly*, which is worse than nothing. The feature is only worth shipping with the granularity controls designed in from the start. That constraint is the feature.
+
+**Granularity is the core requirement.** Two levels, both required:
+- **Global granularity** — which event classes notify at all.
+- **Per-category granularity** — the same switches per category, so clients can notify while personal stays quiet (or the reverse). Categories are already hard-separated with their own identity (emoji/shortcode), so they're the natural scope.
+
+Event classes to switch on, mapping to the existing state taxonomy: **stuck / needs permission**, **task complete** (the existing "done — your move"), **waiting / your turn**, and others as the taxonomy grows.
+
+**Rich notification content.** Where possible, lift the actual issue into the notification rather than a generic "a session needs you." Target shape:
+
+```
+CCCC — <category-shortcode> · <session name>
+"Application built. Ready to publish?"
+[ Yes ] [ No ] [ Other ]
+```
+
+For **stuck / needs permission**, lift the whole permission query into the body with its options as buttons, and route the chosen answer back into the session. "Other" would open an inline reply field for a typed response.
+
+**Feasibility (worth confirming early, but it looks viable).** Electron's `Notification` on macOS supports `actions` (buttons), `hasReply` + `replyPlaceholder` (inline typed reply, delivered via the `reply` event), plus `subtitle` and `sound`. Known constraints to design around:
+- macOS surfaces only the **first action as the main button**; additional actions sit behind an alternate-action affordance. A three-option query may need the two most likely answers plus a fallback, not three equal buttons.
+- Buttons/reply reliably require the app's notification style to be **Alert**, not Banner — that's a per-app *user* setting in System Settings and can't be forced programmatically. Onboarding should explain it.
+- Requires notification permission granted, and a signed app — CCCC is signed and notarized, so that's satisfied.
+
+**The substance and the return path already exist.** The **gate ledger's `gate.payload` is the verbatim command / question / blocker** — exactly the text a rich notification should carry, so no new extraction is needed. And writing an answer back is the same send-keys/PTY path the app already uses. This is mostly wiring existing pieces to a new surface.
+
+**Design risks to solve, not discover late.**
+- **Only notify for UNATTENDED sessions.** Reuse the per-session last-viewed watermark built for "done — your move": the session you're currently looking at should never notify. This alone removes most of the noise.
+- **Coalesce and cool down.** One notification per gate, not per poll tick; a cooldown per session so a flapping state can't storm.
+- **Stale actions.** A user may answer a notification minutes later, after the session moved on. Validate the gate is still open before injecting the answer, and drop it (with a visible note) if not.
+- Respect Focus / Do Not Disturb rather than fighting it.
+
 ---
 
 ## v0 task breakdown (Phase 0 + first usable milestone)
