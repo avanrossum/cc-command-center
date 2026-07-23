@@ -72,6 +72,10 @@ interface Category {
   label: string | null
   emoji: string | null
   arbiter_context: number // 1 → this category's session substance may go to the API
+  // Per-category notification overrides. null = inherit the global switch.
+  notify_permission: number | null
+  notify_question: number | null
+  notify_done: number | null
 }
 interface ArbiterPanel {
   status: 'idle' | 'running' | 'capped' | 'error' | 'off' | 'paused'
@@ -128,6 +132,10 @@ interface AppSettings {
   terminalFont: string
   terminalFontSize: number
   hideUnmanaged: boolean
+  notifyEnabled: boolean
+  notifyPermission: boolean
+  notifyQuestion: boolean
+  notifyDone: boolean
 }
 interface Snapshot {
   home: string
@@ -411,6 +419,8 @@ export function App() {
     emoji: string | null
     count: number // sessions currently in it — shown before a delete
     arbiterContext: number // 1 → substance from this category may go to the API
+    // Per-class notification overrides; null = inherit the global switch.
+    notify: { permission: number | null; question: number | null; done: number | null }
     x: number
     y: number
   } | null>(null)
@@ -811,6 +821,9 @@ export function App() {
       label: c.label,
       emoji: c.emoji,
       arbiter_context: c.arbiter_context ?? 0,
+      notify_permission: c.notify_permission ?? null,
+      notify_question: c.notify_question ?? null,
+      notify_done: c.notify_done ?? null,
       rows: buildTree(byCat.get(c.id) ?? []),
     }))
     const uncat = {
@@ -820,6 +833,10 @@ export function App() {
       label: null as string | null,
       emoji: null as string | null,
       arbiter_context: 0, // Uncategorized is never cleared to send substance
+      // Not a real category row, so it has no overrides — it always follows global.
+      notify_permission: null as number | null,
+      notify_question: null as number | null,
+      notify_done: null as number | null,
       rows: buildTree(byCat.get(null) ?? []),
     }
     // Uncat is ALWAYS shown, even when empty. It used to be hidden on zero rows,
@@ -884,6 +901,21 @@ export function App() {
     if (selected) window.cc.termClose(selected.key)
     setSelected(null)
   }
+
+  // Clicking an OS notification opens that session. Held as a pending request
+  // rather than acted on inline, because the session may not be in the current
+  // snapshot yet — this retries on each push until it resolves, and switches to
+  // the session's category first so it's actually visible in the rail.
+  const [pendingFocus, setPendingFocus] = useState<string | null>(null)
+  useEffect(() => window.cc.onFocusSession((sid) => setPendingFocus(sid)), [])
+  useEffect(() => {
+    if (!pendingFocus) return
+    const s = snap.sessions.find((x) => x.sessionId === pendingFocus)
+    if (!s) return
+    setSelectedCat(s.categoryId ?? null)
+    openSession(s)
+    setPendingFocus(null)
+  }, [pendingFocus, snap.sessions]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reconcile an in-app launched session (key new:<pid>) to its adopted session
   // id once the scan surfaces it: the row highlights, the theme picker persists,
@@ -1169,6 +1201,11 @@ export function App() {
                       emoji: g.emoji,
                       count: g.rows.length,
                       arbiterContext: g.arbiter_context ?? 0,
+                      notify: {
+                        permission: g.notify_permission,
+                        question: g.notify_question,
+                        done: g.notify_done,
+                      },
                       x: e.clientX,
                       y: e.clientY,
                     })
@@ -1191,6 +1228,7 @@ export function App() {
                 color: '',
                 label: null,
                 emoji: null,
+                notify: { permission: null, question: null, done: null },
                 count: 0,
                 arbiterContext: 0,
                 x: r.right + 6,
@@ -1654,6 +1692,7 @@ export function App() {
               color: '',
               label: null,
               emoji: null,
+              notify: { permission: null, question: null, done: null },
               count: 0,
               arbiterContext: 0,
               x: pos.x,
@@ -1808,7 +1847,9 @@ function SettingsModal({
   showFlash: (m: string) => void
   close: () => void
 }) {
-  const [tab, setTab] = useState<'general' | 'terminal' | 'arbiter' | 'keys'>('general')
+  const [tab, setTab] = useState<'general' | 'terminal' | 'notifications' | 'arbiter' | 'keys'>(
+    'general',
+  )
   const trust = settings?.trustChildrenByDefault ?? true
   const mailGranted = settings?.mailAllowGranted ?? false
   const hooksInstalled = settings?.statusHooksInstalled ?? false
@@ -1849,13 +1890,21 @@ function SettingsModal({
       <div className="spawnmodal settings-modal" onClick={(e) => e.stopPropagation()}>
         <div className="spawntitle">Settings</div>
         <div className="settabs">
-          {(['general', 'terminal', 'arbiter', 'keys'] as const).map((t) => (
+          {(['general', 'terminal', 'notifications', 'arbiter', 'keys'] as const).map((t) => (
             <button
               key={t}
               className={`settab${tab === t ? ' on' : ''}`}
               onClick={() => setTab(t)}
             >
-              {t === 'general' ? 'General' : t === 'terminal' ? 'Terminal' : t === 'arbiter' ? 'Arbiter' : 'API keys'}
+              {t === 'general'
+                ? 'General'
+                : t === 'terminal'
+                  ? 'Terminal'
+                  : t === 'notifications'
+                    ? 'Notifications'
+                    : t === 'arbiter'
+                      ? 'Arbiter'
+                      : 'API keys'}
             </button>
           ))}
         </div>
@@ -1995,6 +2044,73 @@ function SettingsModal({
             The quick brown fox 0123 () {'{}'} =&gt; != ~/dev &amp;&amp; ll
           </div>
         </div>
+        )}
+
+        {tab === 'notifications' && (
+        <>
+        <label className="setrow">
+          <input
+            type="checkbox"
+            checked={settings?.notifyEnabled ?? false}
+            onChange={(e) => window.cc.settingsSet('notifyEnabled', String(e.target.checked))}
+          />
+          <span>
+            <b>macOS notifications</b>
+            <span className="setsub">
+              Off by default. Turning this on is also when macOS asks for notification
+              permission. Notifications never fire while this window is focused — the
+              needs-you bar already covers that.
+            </span>
+          </span>
+        </label>
+
+        <div className="setsection">
+          <b>Notify me when a session…</b>
+          <span className="spawnsub">
+            Defaults cover the cases where something is stopped and only you can unstick it.
+            Each category can override these individually (right-click a category → Edit).
+          </span>
+          <label className="setrow">
+            <input
+              type="checkbox"
+              disabled={!(settings?.notifyEnabled ?? false)}
+              checked={settings?.notifyPermission ?? true}
+              onChange={(e) => window.cc.settingsSet('notifyPermission', String(e.target.checked))}
+            />
+            <span>
+              <b>Needs permission</b>
+              <span className="setsub">Parked on a permission dialog. Nothing moves until you answer.</span>
+            </span>
+          </label>
+          <label className="setrow">
+            <input
+              type="checkbox"
+              disabled={!(settings?.notifyEnabled ?? false)}
+              checked={settings?.notifyQuestion ?? true}
+              onChange={(e) => window.cc.settingsSet('notifyQuestion', String(e.target.checked))}
+            />
+            <span>
+              <b>Your turn</b>
+              <span className="setsub">Asked you a question and is waiting on the answer.</span>
+            </span>
+          </label>
+          <label className="setrow">
+            <input
+              type="checkbox"
+              disabled={!(settings?.notifyEnabled ?? false)}
+              checked={settings?.notifyDone ?? false}
+              onChange={(e) => window.cc.settingsSet('notifyDone', String(e.target.checked))}
+            />
+            <span>
+              <b>Finished a task</b>
+              <span className="setsub">
+                Off by default — nothing is blocked and this is the highest-volume class, so
+                leaving it on is the fastest way to start ignoring notifications.
+              </span>
+            </span>
+          </label>
+        </div>
+        </>
         )}
 
         {tab === 'arbiter' && (
@@ -3587,6 +3703,8 @@ function CategoryEditor({
     emoji: string | null
     count: number
     arbiterContext: number
+    // Per-class notification overrides; null = inherit the global switch.
+    notify: { permission: number | null; question: number | null; done: number | null }
     x: number
     y: number
   }
@@ -3602,6 +3720,13 @@ function CategoryEditor({
   // container holding sessions, so it asks first and says where they go.
   const [confirmDel, setConfirmDel] = useState(false)
   const [arbCtx, setArbCtx] = useState(edit.arbiterContext === 1)
+  // Notification overrides, tri-state per class: inherit (null) / on / off. Saved
+  // live like the other category fields — no Save click.
+  const [notify, setNotify] = useState(edit.notify)
+  const setNotifyCls = (cls: 'permission' | 'question' | 'done', v: boolean | null): void => {
+    setNotify((n) => ({ ...n, [cls]: v === null ? null : v ? 1 : 0 }))
+    if (edit.id !== null) window.cc.catSetNotify(edit.id, cls, v)
+  }
   const close = () => setEdit(null)
   const save = async () => {
     const nm = name.trim()
@@ -3746,6 +3871,47 @@ function CategoryEditor({
               </span>
             </span>
           </label>
+        )}
+        {/* Per-category notification overrides. Each class defaults to "inherit",
+            so a category behaves like the global setting until you diverge. */}
+        {edit.id !== null && (
+          <div className="catnotify">
+            <div className="catnotify-head">Notify me</div>
+            {(
+              [
+                ['permission', 'Needs permission'],
+                ['question', 'Your turn'],
+                ['done', 'Finished'],
+              ] as const
+            ).map(([cls, label]) => {
+              const cur = notify[cls]
+              return (
+                <div className="catnotify-row" key={cls}>
+                  <span className="catnotify-label">{label}</span>
+                  <div className="catnotify-seg">
+                    {(
+                      [
+                        [null, 'auto'],
+                        [true, 'on'],
+                        [false, 'off'],
+                      ] as const
+                    ).map(([val, txt]) => (
+                      <button
+                        key={txt}
+                        className={`catnotify-btn${
+                          (val === null ? cur == null : cur === (val ? 1 : 0)) ? ' on' : ''
+                        }`}
+                        title={val === null ? 'Follow the global setting' : undefined}
+                        onClick={() => setNotifyCls(cls, val)}
+                      >
+                        {txt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         )}
         {edit.id !== null &&
           (confirmDel ? (

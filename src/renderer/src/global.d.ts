@@ -46,6 +46,7 @@ declare global {
       onUpdateStaged: (cb: () => void) => () => void
       onUpdateError: (cb: (p: { message: string }) => void) => () => void
       onMenuSettings: (cb: () => void) => () => void
+      onFocusSession: (cb: (sessionId: string) => void) => () => void
       getSessions: () => Promise<unknown>
       onSessions: (cb: (snapshot: unknown) => void) => () => void
       catCreate: (name: string) => Promise<{ id: number; name: string; color: string }>
@@ -63,6 +64,11 @@ declare global {
       catSetColor: (id: number, color: string) => Promise<boolean>
       catReorder: (ids: number[]) => Promise<boolean>
       catSetEmoji: (id: number, emoji: string | null) => Promise<boolean>
+      catSetNotify: (
+        id: number,
+        cls: 'permission' | 'question' | 'done',
+        on: boolean | null,
+      ) => Promise<boolean>
       catAssign: (sessionId: string, categoryId: number | null) => Promise<boolean>
       edgeSet: (
         childId: string,

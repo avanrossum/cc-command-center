@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('cc', {
   onUpdateStaged: (cb: () => void) => sub('update:staged', cb),
   onUpdateError: (cb: (p: { message: string }) => void) => sub('update:error', cb),
   onMenuSettings: (cb: () => void) => sub('menu:settings', cb),
+  // Clicking an OS notification asks the renderer to open that session.
+  onFocusSession: (cb: (sessionId: string) => void) => sub('cc:focusSession', cb),
 
   // status board
   getSessions: () => ipcRenderer.invoke('cc:getSessions'),
@@ -55,6 +57,9 @@ contextBridge.exposeInMainWorld('cc', {
   catSetColor: (id: number, color: string) => ipcRenderer.invoke('cat:setColor', id, color),
   catReorder: (ids: number[]) => ipcRenderer.invoke('cat:reorder', ids),
   catSetEmoji: (id: number, emoji: string | null) => ipcRenderer.invoke('cat:setEmoji', id, emoji),
+  // null clears the override, so the category inherits the global switch again.
+  catSetNotify: (id: number, cls: 'permission' | 'question' | 'done', on: boolean | null) =>
+    ipcRenderer.invoke('cat:setNotify', id, cls, on),
   catAssign: (sessionId: string, categoryId: number | null) =>
     ipcRenderer.invoke('cat:assign', sessionId, categoryId),
 

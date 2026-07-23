@@ -1901,6 +1901,53 @@ body {
 }
 
 /* Per-category privacy toggle inside the category editor. */
+/* Per-category notification overrides: a tri-state segment per event class.
+   "auto" (the default) follows the global switch. */
+.catnotify {
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--border);
+}
+.catnotify-head {
+  font: 9px var(--cc-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--cc-meta);
+  margin-bottom: 5px;
+}
+.catnotify-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.catnotify-label {
+  font-size: 11px;
+  color: var(--cc-dim);
+  white-space: nowrap;
+}
+.catnotify-seg {
+  display: flex;
+  flex: none;
+  gap: 2px;
+}
+.catnotify-btn {
+  background: transparent;
+  border: 1px solid var(--cc-border);
+  color: var(--cc-dim);
+  border-radius: 4px;
+  padding: 1px 7px;
+  font-size: 9.5px;
+  cursor: pointer;
+}
+.catnotify-btn:hover {
+  color: var(--cc-text);
+}
+.catnotify-btn.on {
+  color: var(--cc-text);
+  border-color: var(--cc-working);
+  background: var(--cc-fill-hover);
+}
 .arb-optin {
   display: flex;
   align-items: flex-start;

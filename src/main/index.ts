@@ -83,6 +83,9 @@ import {
   setNodeApiKey,
   getNodeApiKey,
   syncGates,
+  setCategoryNotify,
+  type OpenedGate,
+  type NotifyClass,
   getUnhandledSessions,
   getHeldGates,
   type ApiKeyRow,
@@ -103,6 +106,12 @@ import {
   type WorkflowInfo,
 } from './engine/subtasks'
 import { scanArtifacts, artifactKindOf, type ArtifactInfo } from './engine/artifacts'
+import {
+  notifyOpenedGates,
+  notifyDone,
+  forgetNotifyState,
+  type NotifyCtx,
+} from './engine/notify'
 
 let win: BrowserWindow | null = null
 // Send to the renderer, guarding the window's whole lifecycle. `win?.` only
@@ -197,6 +206,13 @@ interface AppSettings {
   terminalFont: string // xterm fontFamily override ('' = built-in default stack)
   terminalFontSize: number // xterm font size in px
   hideUnmanaged: boolean // hide live Claude sessions this app doesn't own (default OFF)
+  // macOS notifications. Master is OFF until turned on (enabling it is also when
+  // macOS asks for permission). Per-class defaults notify only for the BLOCKING
+  // classes; 'done' is the high-volume one and stays off unless asked for.
+  notifyEnabled: boolean
+  notifyPermission: boolean
+  notifyQuestion: boolean
+  notifyDone: boolean
   // The Arbiter. Off unless BOTH enabled and pointed at a stored key, so the
   // feature can never start spending by default.
   arbiterEnabled: boolean
@@ -225,6 +241,10 @@ function getSettings(): AppSettings {
       return Number.isFinite(n) && n >= 6 && n <= 40 ? n : 12.5
     })(),
     hideUnmanaged: getAppState('hideUnmanaged') === 'true', // default OFF
+    notifyEnabled: getAppState('notifyEnabled') === 'true', // default OFF (opt-in)
+    notifyPermission: getAppState('notifyPermission') !== 'false', // default ON (blocking)
+    notifyQuestion: getAppState('notifyQuestion') !== 'false', // default ON (blocking)
+    notifyDone: getAppState('notifyDone') === 'true', // default OFF (highest volume)
     arbiterEnabled: getAppState('arbiterEnabled') === 'true', // default OFF
     arbiterPaused: getAppState('arbiterPaused') === 'true',
     arbiterKeyId: getAppState('arbiterKeyId') ? Number(getAppState('arbiterKeyId')) : null,
@@ -791,9 +811,17 @@ function snapshot(): Snapshot {
   try {
     // Only sessions we could actually observe this scan are eligible for
     // auto-resolve. Otherwise a restart (everything dormant) wipes the ledger.
-    syncGates(openGates, seenSid, now, new Set(sessions.map((x) => x.sessionId).filter(Boolean) as string[]))
+    const opened = syncGates(
+      openGates,
+      seenSid,
+      now,
+      new Set(sessions.map((x) => x.sessionId).filter(Boolean) as string[]),
+    )
     unhandled = getUnhandledSessions()
     lastUnhandled = unhandled
+    // OS notifications ride the same edge: a gate that just opened, plus sessions
+    // that just went 'done'. Every suppression rule lives in the notifier.
+    runNotifications(opened, enriched, now)
   } catch (err) {
     console.error('[main] gate ledger sync failed', err)
   }
@@ -886,6 +914,47 @@ function maybeSeed(): void {
   } catch (e) {
     console.error('[main] seed error', e)
   }
+}
+
+// Bridge from the scan to the OS notifier. Reads just the four notify keys (not
+// the whole settings object) since this runs every 1.5s tick, and skips the
+// category query entirely when the master switch is off. notifyDone still runs
+// while disabled: it marks currently-done sessions as already-handled, so turning
+// notifications ON doesn't immediately blast every session that finished earlier.
+function runNotifications(opened: OpenedGate[], enriched: EnrichedSession[], now: number): void {
+  const enabled = getAppState('notifyEnabled') === 'true'
+  const ctx: NotifyCtx = {
+    prefs: {
+      enabled,
+      permission: getAppState('notifyPermission') !== 'false',
+      question: getAppState('notifyQuestion') !== 'false',
+      done: getAppState('notifyDone') === 'true',
+    },
+    focused: winFocused,
+    // Only read when enabled — with the master off, fire() bails before touching it.
+    categoryById: enabled ? new Map(listCategories().map((c) => [c.id, c])) : new Map(),
+    nameOf: (id) => enriched.find((e) => e.sessionId === id)?.name || id.slice(0, 8),
+    onActivate: (id) => {
+      if (win && !win.isDestroyed()) {
+        if (win.isMinimized()) win.restore()
+        win.show()
+        win.focus()
+      }
+      sendToWin('cc:focusSession', id)
+    },
+  }
+  notifyOpenedGates(opened, now, ctx)
+  notifyDone(
+    enriched.map((e) => ({
+      sessionId: e.sessionId,
+      categoryId: e.categoryId ?? null,
+      isDone: e.whyKind === 'done',
+      why: e.why,
+    })),
+    now,
+    ctx,
+  )
+  forgetNotifyState(new Set(enriched.map((e) => e.sessionId)))
 }
 
 function pushSessions(): void {
@@ -2371,6 +2440,14 @@ ipcMain.handle('cat:setColor', (_e, id: number, color: string) => {
 })
 ipcMain.handle('cat:setEmoji', (_e, id: number, emoji: string | null) => {
   setCategoryEmoji(id, emoji)
+  pushSessions()
+  return true
+})
+// Per-category notification override. `on === null` clears it back to inheriting
+// the global switch for that class.
+ipcMain.handle('cat:setNotify', (_e, id: number, cls: NotifyClass, on: boolean | null) => {
+  if (cls !== 'permission' && cls !== 'question' && cls !== 'done') return false
+  setCategoryNotify(id, cls, on)
   pushSessions()
   return true
 })

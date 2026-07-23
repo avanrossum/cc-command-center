@@ -18,6 +18,11 @@ export interface Category {
   // category's sessions may be sent to the API; 1 → the substance may go too.
   // Opt-in by design: an untouched category never leaks session content.
   arbiter_context: number
+  // Per-category OS-notification overrides, one per event class. null = inherit
+  // the global setting, 0 = off, 1 = on.
+  notify_permission: number | null
+  notify_question: number | null
+  notify_done: number | null
 }
 
 export interface NodeRow {
@@ -235,6 +240,17 @@ export function initRegistry(dbPath: string): void {
     db.exec(`ALTER TABLE node ADD COLUMN outbox_token TEXT;`)
     db.pragma('user_version = 12')
   }
+  if (v < 13) {
+    // Per-category notification overrides. NULL = inherit the global setting for
+    // that class, 0 = off, 1 = on. Nullable on purpose: a new category needs zero
+    // configuration and simply follows global until you deliberately diverge.
+    db.exec(`
+      ALTER TABLE category ADD COLUMN notify_permission INTEGER;
+      ALTER TABLE category ADD COLUMN notify_question INTEGER;
+      ALTER TABLE category ADD COLUMN notify_done INTEGER;
+    `)
+    db.pragma('user_version = 13')
+  }
 }
 
 export function setNodeApiKey(sessionId: string, apiKeyId: number | null): void {
@@ -385,9 +401,28 @@ export function getEdges(): Edge[] {
 export function listCategories(): Category[] {
   return must()
     .prepare(
-      'SELECT id, name, color, sort, label, emoji, arbiter_context FROM category ORDER BY sort, id',
+      `SELECT id, name, color, sort, label, emoji, arbiter_context,
+              notify_permission, notify_question, notify_done
+       FROM category ORDER BY sort, id`,
     )
     .all() as Category[]
+}
+
+export type NotifyClass = 'permission' | 'question' | 'done'
+const NOTIFY_COL: Record<NotifyClass, string> = {
+  permission: 'notify_permission',
+  question: 'notify_question',
+  done: 'notify_done',
+}
+
+// Set one category's override for one event class. null clears it back to
+// "inherit the global setting" — the tri-state the settings UI exposes.
+export function setCategoryNotify(id: number, cls: NotifyClass, value: boolean | null): void {
+  const col = NOTIFY_COL[cls]
+  if (!col) return // unknown class — never interpolate an unvetted string into SQL
+  must()
+    .prepare(`UPDATE category SET ${col}=? WHERE id=?`)
+    .run(value === null ? null : value ? 1 : 0, id)
 }
 
 // ---------- Arbiter (optional control agent) ----------
@@ -512,6 +547,11 @@ export function createCategory(name: string, color?: string): Category {
     label: null,
     emoji: null,
     arbiter_context: 0, // new categories never send substance until told to
+    // null = inherit the global notification switches, so a new category needs no
+    // configuration to behave sensibly.
+    notify_permission: null,
+    notify_question: null,
+    notify_done: null,
   }
 }
 
@@ -650,13 +690,37 @@ function logEvent(
 // Without this, an app restart (where every session starts dormant) resolved the
 // entire ledger within one debounce — silently discarding every unhandled
 // needs-you moment the user had not yet dealt with.
+// A gate that transitioned into the open state on THIS tick — either brand new or
+// a previously-resolved one recurring. This is the edge the OS notifier fires on:
+// the fp identity means one live dialog notifies once, no matter how many scans
+// it spans or how much its display text repaints.
+export interface OpenedGate {
+  fp: string
+  sessionId: string
+  categoryId: number | null
+  kind: string
+  payload: string
+  autoSeen: boolean // you were attached to this session, so it was seen on arrival
+}
+
 export function syncGates(
   gates: OpenGate[],
   attachedSid: string | null,
   now: number,
   liveSessionIds?: Set<string>,
-): void {
+): OpenedGate[] {
   const d = must()
+  const opened: OpenedGate[] = []
+  const noteOpened = (g: OpenGate, fp: string, seenNow: number | null): void => {
+    opened.push({
+      fp,
+      sessionId: g.sessionId,
+      categoryId: g.categoryId,
+      kind: g.kind,
+      payload: g.payload,
+      autoSeen: seenNow != null,
+    })
+  }
   d.transaction(() => {
     for (const g of gates) {
       const fp = gateFp(g)
@@ -669,6 +733,7 @@ export function syncGates(
           'INSERT INTO gate (fp, session_id, category_id, kind, payload, first_seen, last_seen, seen_at) VALUES (?,?,?,?,?,?,?,?)',
         ).run(fp, g.sessionId, g.categoryId, g.kind, g.payload, now, now, seenNow)
         logEvent(d, g, fp, 'gate_open', now)
+        noteOpened(g, fp, seenNow)
         if (seenNow) logEvent(d, g, fp, 'gate_seen', now)
       } else if (row.resolved_at != null) {
         // A previously-resolved gate is open again — a fresh occurrence.
@@ -676,6 +741,7 @@ export function syncGates(
           'UPDATE gate SET category_id=?, payload=?, first_seen=?, last_seen=?, seen_at=?, resolved_at=NULL, resolution=NULL WHERE fp=?',
         ).run(g.categoryId, g.payload, now, now, seenNow, fp)
         logEvent(d, g, fp, 'gate_open', now)
+        noteOpened(g, fp, seenNow)
         if (seenNow) logEvent(d, g, fp, 'gate_seen', now)
       } else {
         const newlySeen = row.seen_at == null && seenNow != null
@@ -713,6 +779,7 @@ export function syncGates(
       pruneLedger(d, now)
     }
   })()
+  return opened
 }
 
 function pruneLedger(d: Database.Database, now: number): void {
