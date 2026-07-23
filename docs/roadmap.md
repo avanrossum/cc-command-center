@@ -286,6 +286,12 @@ For **stuck / needs permission**, lift the whole permission query into the body 
 - **Stale actions.** A user may answer a notification minutes later, after the session moved on. Validate the gate is still open before injecting the answer, and drop it (with a visible note) if not.
 - Respect Focus / Do Not Disturb rather than fighting it.
 
+## Empty category clears the terminal pane (user, 2026-07-23)
+
+**Bug / UX.** `selectedCat` (which category the rail shows) and `selected` (which terminal is mounted) are independent state. Switching to a category that HAS a live session swaps the terminal to it (the rail-cell handler calls `openSession` on the category's last-opened live session). But switching to a category with NO live session leaves the *previous* terminal mounted — so a terminal from category A keeps showing while you're viewing category B, which reads as "this session belongs here" when it doesn't.
+
+**Fix.** When the selected category has no live/mounted session, clear the terminal pane and show an empty state scoped to that category: "No running sessions in this category — resume one or start a new one." (Model it on the existing placeholder / recovery-card styling.) Watch the interaction with restore-on-launch and the deferred-resume affordance so they don't fight; the clear should apply to a deliberate category switch, not stomp a session the user is actively in. Small, self-contained.
+
 ---
 
 ## v0 task breakdown (Phase 0 + first usable milestone)
