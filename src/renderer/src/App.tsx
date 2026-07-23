@@ -884,6 +884,16 @@ export function App() {
   }, [selectedCat])
 
   const openSession = (s: Session) => {
+    // Switch the rail to this session's category FIRST, so the row you just opened
+    // is actually visible and highlighted instead of the terminal changing under a
+    // rail that stayed put. Every cross-category surface — the needs-you why-cards,
+    // the Strip lanes, the activity owner/rollup chips — routes through here, so
+    // this is the one place it has to be right. Guarded against a category that
+    // vanished in this snapshot window, which would otherwise leave selectedCat
+    // pointing at nothing and no rail cell active.
+    if (s.categoryId === null || groups.some((g) => g.id === s.categoryId)) {
+      setSelectedCat(s.categoryId)
+    }
     lastByCat.current.set(s.categoryId, s.sessionId) // remember per category for rail jump-back
     openOrder.current.set(s.sessionId, ++openSeq.current) // remember open recency for the sidebar sort
     window.cc.stateSet('activeSessionId', s.sessionId) // remember for restore-on-launch
