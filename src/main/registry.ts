@@ -38,6 +38,11 @@ export interface NodeRow {
   // and the scan runs every ~1.5s); fetch it on demand with getScrollback.
   scrollback?: string | null
   scrollback_at?: number | null
+  // Remembered launch parameters (JSON) and whether to apply them without asking.
+  // Unlike scrollback these ARE loaded by the scan — two short columns, and the
+  // renderer needs them to know whether resuming should raise the params modal.
+  resume_flags: string | null
+  resume_flags_sticky: number | null
 }
 
 // Distinct 10-hue category palette (Claude Design kit) — deliberately spread so
@@ -251,6 +256,38 @@ export function initRegistry(dbPath: string): void {
     `)
     db.pragma('user_version = 13')
   }
+  if (v < 14) {
+    // Per-session launch parameters, so model/effort/context/permission-mode
+    // survive a resume — `claude --resume` does not carry them forward. JSON of
+    // four validated fields (see engine/resumeFlags.ts), never the freeform flags
+    // string. sticky=1 means "apply silently"; anything else gates behind the
+    // parameters modal, which is the default for adopted and pre-existing rows.
+    db.exec(`
+      ALTER TABLE node ADD COLUMN resume_flags TEXT;
+      ALTER TABLE node ADD COLUMN resume_flags_sticky INTEGER;
+    `)
+    db.pragma('user_version = 14')
+  }
+}
+
+// Remembered launch parameters for a session. `sticky` true → applied silently on
+// resume; false/absent → the UI asks before resuming. Mirrors setNodeApiKey, the
+// existing "per-session property re-applied at resume" precedent.
+export function setNodeResumeFlags(
+  sessionId: string,
+  flagsJson: string | null,
+  sticky: boolean,
+): void {
+  must()
+    .prepare('UPDATE node SET resume_flags=?, resume_flags_sticky=? WHERE session_id=?')
+    .run(flagsJson, sticky ? 1 : 0, sessionId)
+}
+
+export function getNodeResumeFlags(sessionId: string): { flags: string | null; sticky: boolean } {
+  const r = must()
+    .prepare('SELECT resume_flags AS f, resume_flags_sticky AS s FROM node WHERE session_id=?')
+    .get(sessionId) as { f: string | null; s: number | null } | undefined
+  return { flags: r?.f ?? null, sticky: r?.s === 1 }
 }
 
 export function setNodeApiKey(sessionId: string, apiKeyId: number | null): void {
@@ -612,7 +649,9 @@ export function getNodeMap(): Map<string, NodeRow> {
   // Deliberately excludes the scrollback blob — this runs every scan.
   const rows = must()
     .prepare(
-      'SELECT session_id, cwd, name, category_id, origin, first_seen, last_seen, theme FROM node',
+      `SELECT session_id, cwd, name, category_id, origin, first_seen, last_seen, theme,
+              resume_flags, resume_flags_sticky
+       FROM node`,
     )
     .all() as NodeRow[]
   const m = new Map<string, NodeRow>()

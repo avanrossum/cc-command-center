@@ -84,6 +84,8 @@ import {
   getNodeApiKey,
   syncGates,
   setCategoryNotify,
+  setNodeResumeFlags,
+  getNodeResumeFlags,
   type OpenedGate,
   type NotifyClass,
   getUnhandledSessions,
@@ -106,6 +108,12 @@ import {
   type WorkflowInfo,
 } from './engine/subtasks'
 import { scanArtifacts, artifactKindOf, type ArtifactInfo } from './engine/artifacts'
+import {
+  buildResumeArgs,
+  parseResumeFlags,
+  sanitizeResumeFlags,
+  type ResumeFlags,
+} from './engine/resumeFlags'
 import {
   notifyOpenedGates,
   notifyDone,
@@ -149,6 +157,10 @@ type EnrichedSession = LiveSession & {
   theme: string | null
   dormant?: boolean // registry node with no live process — resumable, survives restart
   managed?: boolean // the app owns this session's PTY, so it can receive injected prompts
+  // Remembered launch parameters, and whether they apply without asking. The
+  // renderer uses these to decide whether resuming should raise the params modal.
+  resumeFlags?: ResumeFlags
+  resumeSticky?: boolean
   attention?: AttentionKind // parked on a dialog waiting for the human (high-signal)
   // The substance behind a "needs you" moment — the answer to "why is this
   // waiting on me". 'permission' → the gated command (verbatim from the PTY
@@ -202,6 +214,7 @@ interface AppSettings {
   lastEffort: string // remembered reasoning effort ('' = default)
   lastContext: string // remembered context window ('' = default, '1m' = [1m] suffix)
   lastMode: string // remembered permission mode ('' = emit no flag)
+  lastResumeSticky: boolean // remembered state of the "always use these on resume" box
   statusHooksInstalled: boolean // hook-driven status wired into ~/.claude/settings.json
   spawnAutoMode: boolean // last "start child in auto mode" choice (default ON)
   terminalFont: string // xterm fontFamily override ('' = built-in default stack)
@@ -235,6 +248,7 @@ function getSettings(): AppSettings {
     lastEffort: getAppState('lastEffort') || '',
     lastContext: getAppState('lastContext') || '',
     lastMode: getAppState('lastMode') || '',
+    lastResumeSticky: getAppState('lastResumeSticky') === 'true', // default OFF
     statusHooksInstalled: getAppState('statusHooksInstalled') === 'true',
     spawnAutoMode: getAppState('spawnAutoMode') !== 'false', // default ON
     terminalFont: getAppState('terminalFont') || '',
@@ -758,6 +772,8 @@ function snapshot(): Snapshot {
       categoryId: categoryOf(sid),
       theme: node.theme ?? null,
       dormant: true,
+      resumeFlags: parseResumeFlags(node.resume_flags) ?? undefined,
+      resumeSticky: node.resume_flags_sticky === 1,
     })
   }
 
@@ -1148,6 +1164,10 @@ interface OpenOpts {
   // Used by family resume, where the point is to restore the OTHER members of a
   // task tree so messaging works again — not to yank the user somewhere else.
   background?: boolean
+  // One-shot launch parameters from the resume modal, for a session whose flags
+  // aren't stored yet. Passed inline because the node row may not exist yet, so
+  // main must not have to read the DB to learn what the user just picked.
+  resumeFlags?: ResumeFlags
 }
 
 function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: string }): Term {
@@ -1246,6 +1266,11 @@ function openTerminal(key: string, opts: OpenOpts): void {
     // Re-apply the session's persisted API key on resume, so a key-session keeps
     // its metered billing instead of silently reverting to the subscription.
     const apiKeyId = opts.sessionId ? (getNodeApiKey(opts.sessionId) ?? undefined) : undefined
+    // Same idea for the launch parameters: `claude --resume` does not carry the
+    // model/effort/permission-mode forward, so re-supply them. A one-shot from the
+    // resume modal wins; otherwise use whatever the session remembered.
+    const storedFlags = opts.sessionId ? parseResumeFlags(getNodeResumeFlags(opts.sessionId).flags) : null
+    const flagArgs = opts.resume ? buildResumeArgs(opts.resumeFlags ?? storedFlags ?? { model: '', context: '', effort: '', mode: '' }) : []
     const kc = keySpawnConfig(apiKeyId)
     // A RESUMED session needs an outbox exactly as much as a fresh one. Without
     // it the session cannot write to the awareness bus, and — the bug this
@@ -1260,7 +1285,7 @@ function openTerminal(key: string, opts: OpenOpts): void {
     const ob = priorToken
       ? { token: priorToken, path: join(MAIL_DIR, `${priorToken}.msg`) }
       : mintOutbox()
-    const p = pty.spawn(cmd, [...kc.args, ...resumeArgs], {
+    const p = pty.spawn(cmd, [...kc.args, ...resumeArgs, ...flagArgs], {
       name: 'xterm-256color',
       cols: opts.cols || 120,
       rows: opts.rows || 30,
@@ -1717,6 +1742,8 @@ interface PendingChild {
   note?: string
   name?: string // user-set name applied on adoption; stable @-handle for the bus
   apiKeyId?: number // persisted on the node at adoption so resume re-applies it
+  resumeFlags?: ResumeFlags // ditto: re-applied on resume
+  resumeSticky?: boolean
   at: number
 }
 // Keyed by the child's pid. Entries expire so a child that dies before adoption
@@ -1731,6 +1758,8 @@ interface PendingNew {
   name?: string
   instructions?: string
   apiKeyId?: number // persisted on the node at adoption so resume re-applies it
+  resumeFlags?: ResumeFlags // ditto: re-applied on resume
+  resumeSticky?: boolean
   at: number
 }
 const pendingNew = new Map<number, PendingNew>()
@@ -1766,6 +1795,12 @@ function spawnChild(
     note: userNote ? `${preamble}\n\n— — —\n\n${userNote}` : preamble,
     name: name?.trim() || undefined,
     apiKeyId,
+    // Sticky, always: a resumed child must keep --permission-mode auto or its
+    // mailbox-write gate reappears and parent↔child messaging stalls unattended —
+    // exactly what auto mode exists to prevent. A background child also has no UI
+    // to raise a params modal from, so it must never be gated.
+    resumeFlags: { model: '', context: '', effort: '', mode: effAuto ? 'auto' : '' },
+    resumeSticky: true,
     at: Date.now(),
   })
   return pid
@@ -1875,6 +1910,8 @@ function reconcilePendingChildren(sessions: LiveSession[]): void {
     try {
       ensureNode(s.sessionId, { cwd: s.cwd, name: s.name, skipAutoCategory: true })
       if (pend.apiKeyId != null) setNodeApiKey(s.sessionId, pend.apiKeyId) // resume re-applies it
+      if (pend.resumeFlags)
+        setNodeResumeFlags(s.sessionId, JSON.stringify(sanitizeResumeFlags(pend.resumeFlags)), !!pend.resumeSticky)
       setParent(s.sessionId, pend.parentSessionId, pend.type)
       // Guarantee the child's category is edge-determined: null here means a
       // tangential child shows in Uncategorized and a blocking child inherits
@@ -1916,6 +1953,8 @@ function reconcilePendingNew(sessions: LiveSession[]): void {
     try {
       ensureNode(s.sessionId, { cwd: s.cwd, name: s.name })
       if (p.apiKeyId != null) setNodeApiKey(s.sessionId, p.apiKeyId) // resume re-applies it
+      if (p.resumeFlags)
+        setNodeResumeFlags(s.sessionId, JSON.stringify(sanitizeResumeFlags(p.resumeFlags)), !!p.resumeSticky)
       if (p.categoryId != null) assignCategory(s.sessionId, p.categoryId)
       if (p.name) setSessionName(s.sessionId, p.name)
     } catch (e) {
@@ -2453,6 +2492,22 @@ ipcMain.handle('cat:setNotify', (_e, id: number, cls: NotifyClass, on: boolean |
   pushSessions()
   return true
 })
+// Remember (or clear) a session's launch parameters. `sticky` false still records
+// the flags — so the modal prefills with what you last chose — it just keeps
+// gating. Tolerates a node row that doesn't exist yet.
+ipcMain.handle(
+  'resume-flags:set',
+  (_e, sessionId: string, flags: unknown, sticky: boolean) => {
+    if (!sessionId) return false
+    try {
+      setNodeResumeFlags(sessionId, JSON.stringify(sanitizeResumeFlags(flags)), !!sticky)
+      pushSessions()
+      return true
+    } catch {
+      return false // no node row yet; the one-shot on term:open still applies them
+    }
+  },
+)
 ipcMain.handle('cat:assign', (_e, sessionId: string, categoryId: number | null) => {
   assignCategory(sessionId, categoryId)
   pushSessions()
@@ -3122,6 +3177,8 @@ ipcMain.handle(
       name?: string
       instructions?: string
       apiKeyId?: number
+      resumeFlags?: ResumeFlags
+      resumeSticky?: boolean
     },
   ) => {
     if (!opts?.cwd) return null
@@ -3131,6 +3188,10 @@ ipcMain.handle(
       name: opts.name?.trim() || undefined,
       instructions: opts.instructions?.trim() || undefined,
       apiKeyId: opts.apiKeyId,
+      // Only the four structured fields are remembered — never opts.flags, which
+      // is arbitrary user text and could re-inject -p / --continue / --session-id.
+      resumeFlags: opts.resumeFlags ? sanitizeResumeFlags(opts.resumeFlags) : undefined,
+      resumeSticky: !!opts.resumeSticky,
       at: Date.now(),
     })
     return { pid, cwd: opts.cwd }
