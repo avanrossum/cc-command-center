@@ -3386,3 +3386,154 @@ select.cat-in {
 .nsremember {
   margin-top: 12px;
 }
+
+/* ---------- Fleet overview ("50k-foot" grid) ---------- */
+/* The overlay covers the rails + terminal but not the companion. It's a child of
+   .body at a z-index BELOW the companion/spine, which are raised so they punch
+   through on top — no measured width offset needed. */
+.body {
+  position: relative;
+}
+.companion,
+.comp-spine {
+  position: relative;
+  z-index: 45;
+}
+.ov {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: var(--cc-bg);
+  animation: ov-in 140ms ease-out;
+}
+@keyframes ov-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.ov-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.ov-title {
+  font: 600 13px var(--cc-font-ui);
+  letter-spacing: 0.4px;
+  color: var(--cc-text);
+}
+.ov-count {
+  font: 11px var(--cc-font-mono);
+  color: var(--cc-dim);
+}
+.ov-close {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--cc-border);
+  color: var(--cc-dim);
+  border-radius: var(--cc-r-sm);
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ov-close:hover {
+  color: var(--cc-text);
+  border-color: var(--cc-dim2);
+}
+.ov-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--cc-dim);
+  font-size: 13px;
+}
+.ov-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  padding: 14px 16px;
+  align-content: start;
+}
+/* Tile: a card outlined in its state color, header + terminal thumbnail. */
+.ov-tile {
+  --tile-color: var(--cc-dim);
+  display: flex;
+  flex-direction: column;
+  height: 200px;
+  padding: 0;
+  background: var(--term-bg);
+  border: 1px solid var(--cc-border);
+  border-left: 3px solid var(--tile-color);
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+  box-shadow: 0 0 0 0 transparent;
+  transition:
+    box-shadow 140ms ease,
+    border-color 140ms ease;
+}
+.ov-tile:hover {
+  border-color: var(--tile-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tile-color) 45%, transparent);
+}
+.ov-tile-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--cc-border);
+  background: var(--cc-accordion-bg);
+}
+.ov-tile-cat {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+}
+.ov-tile-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 600 12px var(--cc-font-ui);
+  color: var(--cc-text);
+}
+.ov-tile-state {
+  flex: none;
+  font: 9px var(--cc-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.ov-tile-term {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 4px 6px;
+}
+.ov-tile-term .xterm {
+  height: 100%;
+}
+.ovbtn.on {
+  color: var(--cc-text);
+  border-color: var(--cc-working);
+  background: color-mix(in srgb, var(--cc-working) 16%, transparent);
+}

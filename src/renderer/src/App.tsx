@@ -15,6 +15,7 @@ import { listMonospaceFonts, fontFamilyCss, DEFAULT_TERMINAL_FONT_SIZE } from '.
 import { highlightCode } from './highlight'
 import { renderMarkdown } from './markdown'
 import { rtfToHtml } from './rtf'
+import { OverviewGrid, type OverviewSession } from './Overview'
 
 type CoarseState = 'working' | 'waiting' | 'idle' | 'unknown'
 // 'blocked' and 'permission' are DERIVED display states, not coarse engine states.
@@ -382,6 +383,9 @@ export function App() {
   const [catRestoreLoaded, setCatRestoreLoaded] = useState(false)
   // Drag-to-reorder categories in the rail (Uncategorized isn't draggable).
   // A session waiting on the "set the starting parameters" modal before it resumes.
+  // The "50k-foot" overview grid — a fleet-wide view of every active session.
+  // Toggled by ⌘E / the beacon button; Esc closes; clicking a tile dives in.
+  const [overviewOpen, setOverviewOpen] = useState(false)
   // A session waiting on the launch-parameters modal. `edit` true = opened from the
   // context menu to change stored flags (save & close); false = the gate before a
   // non-sticky resume (save optional, then open).
@@ -765,6 +769,29 @@ export function App() {
         .slice(0, 24),
     [live, companionScope, selectedCat], // eslint-disable-line react-hooks/exhaustive-deps
   )
+  // The overview ("50k-foot") grid: every ACTIVE session across the whole fleet,
+  // most-critical first. Active = live and either doing something or needing you —
+  // working / waiting / permission / blocked, plus done-but-unseen (main only
+  // reports dstate 'done' for a session that finished after your watermark and
+  // that you aren't viewing, so seen/idle/dormant never appear here). Fleet-wide,
+  // so it ignores the selected category. Capped, with the remainder shown as a
+  // count so a busy fleet can't flood the grid.
+  const OVERVIEW_CAP = 24
+  const OVERVIEW_STATES = new Set<DisplayState>(['permission', 'working', 'waiting', 'blocked', 'done'])
+  const overviewAll = useMemo(
+    () =>
+      live
+        .filter((s) => !s.dormant && OVERVIEW_STATES.has(dstate(s)))
+        .sort(
+          (a, b) =>
+            STATE[dstate(a)].order - STATE[dstate(b)].order ||
+            (a.name ?? '').localeCompare(b.name ?? ''),
+        ),
+    [live], // eslint-disable-line react-hooks/exhaustive-deps
+  )
+  const overviewTiles = overviewAll.slice(0, OVERVIEW_CAP)
+  const overviewOverflow = overviewAll.length - overviewTiles.length
+
   // Right-aligned segments (now at the right edge); widths are fractions of the
   // window, so a short history leaves the left end empty rather than stretching.
   const stripSegs = (sid: string, now: number): { w: number; s: DisplayState }[] => {
@@ -983,6 +1010,22 @@ export function App() {
     reallyOpen(s)
     setPendingFocus(null)
   }, [pendingFocus, snap.sessions]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ⌘E toggles the fleet overview; Esc closes it. A window-level listener works
+  // even while the terminal has focus: xterm returns false for any Cmd combo, so
+  // ⌘E is never consumed as PTY input and bubbles here.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'e' && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault()
+        setOverviewOpen((v) => !v)
+      } else if (e.key === 'Escape' && overviewOpen) {
+        setOverviewOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [overviewOpen])
 
   // Reconcile an in-app launched session (key new:<pid>) to its adopted session
   // id once the scan surfaces it: the row highlights, the theme picker persists,
@@ -1220,6 +1263,13 @@ export function App() {
           </button>
         )}
         <UsageMeter usage={snap.usage} now={snap.scannedAt || Date.now()} />
+        <button
+          className={`gearbtn ovbtn${overviewOpen ? ' on' : ''}`}
+          onClick={() => setOverviewOpen((v) => !v)}
+          title="Fleet overview — every active session at once (⌘E)"
+        >
+          ▦
+        </button>
         <button className="gearbtn" onClick={() => setSettingsOpen(true)} title="Settings">
           ⚙
         </button>
@@ -1785,6 +1835,34 @@ export function App() {
             </button>
           )}
         </main>
+        {overviewOpen && (
+          <OverviewGrid
+            sessions={overviewTiles.map((s): OverviewSession => {
+              const d = dstate(s)
+              const cat = s.categoryId != null ? catById.get(s.categoryId) : undefined
+              return {
+                sessionId: s.sessionId,
+                name: nameOf(s),
+                dstate: d,
+                stateLabel: STATE[d].label,
+                stateColor: STATE[d].color,
+                categoryColor: cat?.color,
+                categoryEmoji: cat?.emoji ?? null,
+                categoryLabel: cat?.label ?? cat?.name,
+              }
+            })}
+            overflow={overviewOverflow}
+            themeName={selThemeName}
+            fontFamily={fontFamilyCss(snap.settings?.terminalFont)}
+            fontSize={snap.settings?.terminalFontSize || DEFAULT_TERMINAL_FONT_SIZE}
+            onPick={(sid) => {
+              const s = live.find((x) => x.sessionId === sid)
+              setOverviewOpen(false)
+              if (s) openSession(s)
+            }}
+            onClose={() => setOverviewOpen(false)}
+          />
+        )}
       </div>
 
       {menu && (
