@@ -363,6 +363,14 @@ const PROMPT_SIGNATURES: RegExp[] = [
   /Do you trust the files in this folder\?/i, // folder-trust dialog
   /Would you like to proceed\?/i, // plan approval (ExitPlanMode)
   /No, keep planning/i, // plan approval menu
+  // Footer of the tool/Bash permission prompt. This is the ROBUST anchor: the
+  // header phrases above sit at the TOP of the dialog and scroll out of the
+  // scanned tail on a content-heavy gate (long command + a wordy "don't ask again"
+  // option), which showed a live gate as plain "working". The footer is always the
+  // last thing painted for a LIVE prompt and disappears the moment it's answered,
+  // so matching it is both reliable and self-clearing.
+  /\bTab to amend\b/i,
+  /(?:ctrl\+|⌃)\s?e to explain\b/i,
 ]
 // How much of the rendered tail to consider "on screen right now". The live
 // dialog is always the most-recent paint, so an already-answered dialog still

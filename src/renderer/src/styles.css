@@ -3557,6 +3557,10 @@ select.cat-in {
   font: 11px var(--cc-font-ui);
   cursor: pointer;
   white-space: nowrap;
+  align-self: center;
+  /* The beacon is a window-drag region; interactive leaves must opt out or the
+     drag behavior eats their clicks. */
+  -webkit-app-region: no-drag;
 }
 .showallbtn:hover {
   color: var(--cc-text);
