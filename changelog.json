@@ -1,6 +1,20 @@
 {
   "versions": [
     {
+      "version": "0.20.0",
+      "date": "2026-07-23",
+      "critical": false,
+      "features": [
+        "Fleet overview — press ⌘⇧E or click \"Show all\" to zoom out to a grid of every active session at once, each a live thumbnail outlined in its state color and sorted most-urgent-first. Click a tile to dive into that session; toggle \"show idle\" to include idle ones.",
+        "macOS notifications (optional, off by default) — get a system notification when a session needs permission or it's your turn, with a master switch plus per-category overrides. Never fires while the app is focused, and clicking a notification opens that session.",
+        "New session: an \"ultracode\" effort level (on models that support it) and a permission Mode picker (Plan / Accept edits / Auto / …), in a more compact two-column layout.",
+        "Launch settings now survive a resume — a session's model, effort, context, and permission mode no longer reset when you reopen it. Tick \"always use these flags\" when creating it, set them in the resume prompt, or change them later from a session's right-click → Launch settings.",
+        "Steadier status: the working / your-turn / needs-approval indicators no longer flicker, permission gates are detected more reliably (including long ones), and a resumed session no longer shows a stale permission gate it can't actually restore.",
+        "Opening a session from the needs-you board, a notification, or the activity view now switches to its category and highlights its row instead of just swapping the terminal. The overview also distinguishes a direct question from a soft \"your turn\".",
+        "Switching to a category with no running sessions now clears the terminal pane and says so, instead of leaving a session from another category on screen."
+      ]
+    },
+    {
       "version": "0.19.0",
       "date": "2026-07-22",
       "critical": false,
