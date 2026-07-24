@@ -35,15 +35,6 @@ import {
 import { readLastAssistantText } from './engine/transcript'
 import { parseDialogCommand, questionFromText } from './engine/dialog'
 import type { LiveSession, CoarseState } from './engine/types'
-import {
-  DEMO_ON,
-  demoFleet,
-  demoCategories,
-  demoEdges,
-  demoUsage,
-  demoPeek,
-  demoTerminal,
-} from './demo'
 import { installAppMenu, setAboutPanel } from './about'
 import {
   initUpdater,
@@ -225,7 +216,6 @@ type EnrichedSession = LiveSession & {
   contextPct?: number | null // context window used %, from the session's statusLine payload
 }
 interface Snapshot {
-  demo?: boolean // demo/fixture mode — the renderer enables its keyboard controls
   home: string
   scannedAt: number
   sessions: EnrichedSession[]
@@ -592,85 +582,7 @@ function storeApiKey(name: string, raw: string): { ok: true; key: ApiKeyRow } | 
   }
 }
 
-// ---------- demo / fixture mode (CCC_DEMO=1) ----------
-// A curated fake fleet for marketing screenshots and short videos, so nothing real
-// is ever shown. The clock can be paused (freeze a still) or let run (the fleet
-// animates on a loop). Controlled from the renderer via the 'demo:ctl' IPC.
-let demoStart = Date.now()
-let demoPaused = false
-let demoPausedElapsed = 0
-function demoElapsed(): number {
-  return demoPaused ? demoPausedElapsed : Date.now() - demoStart
-}
-function demoControl(cmd: string): void {
-  if (cmd === 'toggle') {
-    if (demoPaused) {
-      demoStart = Date.now() - demoPausedElapsed
-      demoPaused = false
-    } else {
-      demoPausedElapsed = Date.now() - demoStart
-      demoPaused = true
-    }
-  } else if (cmd === 'restart') {
-    demoStart = Date.now()
-    demoPausedElapsed = 0
-    demoPaused = false
-  } else if (cmd === 'step') {
-    demoPausedElapsed = (demoPaused ? demoPausedElapsed : Date.now() - demoStart) + 3000
-    demoPaused = true
-  }
-}
-function demoSnapshot(): Snapshot {
-  const now = Date.now()
-  const el = demoElapsed()
-  const categories: Category[] = demoCategories().map((c) => ({
-    ...c,
-    arbiter_context: 0,
-    notify_permission: null,
-    notify_question: null,
-    notify_done: null,
-  }))
-  const edges: Edge[] = demoEdges().map((e) => ({ ...e, source: 'demo', trusted: 1 }))
-  const sessions: EnrichedSession[] = demoFleet(el).map((d) => ({
-    pid: 4242,
-    sessionId: d.sessionId,
-    cwd: d.cwd,
-    name: d.name,
-    alive: true,
-    isSpare: false,
-    state: d.state,
-    stateReason: 'demo',
-    transcriptMtimeMs: now - 4000,
-    categoryId: d.categoryId,
-    theme: null,
-    managed: true,
-    dormant: false,
-    attention: d.attention,
-    whyKind: d.whyKind,
-    why: d.why,
-    whyCoarse: false,
-    contextPct: d.contextPct,
-    unhandled: d.attention === 'permission' || d.whyKind === 'question',
-  }))
-  return {
-    demo: true,
-    home: os.homedir(),
-    scannedAt: now,
-    sessions,
-    categories,
-    edges,
-    messages: [],
-    awarenessPaused: false,
-    settings: getSettings(),
-    recentFolders: getRecentFolders(),
-    apiKeys: listApiKeys(),
-    arbiter: { status: 'off', spend: getArbiterSpend(), log: [] },
-    usage: demoUsage(el, now),
-  }
-}
-
 function snapshot(): Snapshot {
-  if (DEMO_ON) return demoSnapshot()
   let sessions: LiveSession[] = []
   try {
     sessions = scanLiveSessions()
@@ -2140,33 +2052,7 @@ function reconcilePendingNew(sessions: LiveSession[]): void {
   }
 }
 
-// Demo mode: painting a canned transcript into a tile's terminal, in chunks, for a
-// typewriter feel on video. No PTY is spawned. A quick screenshot settles to the
-// full frame within a second.
-const demoStreamTimers = new Map<string, ReturnType<typeof setInterval>>()
-function streamDemoTerminal(key: string, sessionId?: string): void {
-  const prev = demoStreamTimers.get(key)
-  if (prev) clearInterval(prev)
-  const full = demoTerminal(sessionId ?? key)
-  sendToWin('term:data', { key, data: '\x1b[2J\x1b[H' }) // clear + home
-  let i = 0
-  const iv = setInterval(() => {
-    if (i >= full.length) {
-      clearInterval(iv)
-      demoStreamTimers.delete(key)
-      return
-    }
-    sendToWin('term:data', { key, data: full.slice(i, i + 24) })
-    i += 24
-  }, 24)
-  demoStreamTimers.set(key, iv)
-}
-
 ipcMain.handle('term:open', (_e, key: string, opts: OpenOpts) => {
-  if (DEMO_ON) {
-    streamDemoTerminal(key, opts.sessionId)
-    return true
-  }
   openTerminal(key, opts)
   // Bring the rest of the task tree up alongside it. A tree is only useful when
   // its members are live — a dormant parent can't be messaged and a dormant
@@ -2192,18 +2078,10 @@ ipcMain.on('term:attach', (_e, key: string) => {
 const PEEK_TAIL = 8 * 1024
 ipcMain.handle('term:peek', (_e, sessionIds: string[]) => {
   if (!Array.isArray(sessionIds)) return []
-  if (DEMO_ON) return demoPeek(sessionIds, demoElapsed())
   return sessionIds.map((id) => {
     const t = findManagedTerm(id)
     return { sessionId: id, tail: t && !t.exited ? t.buffer.slice(-PEEK_TAIL) : '' }
   })
-})
-// Demo-mode clock controls (renderer keyboard shortcuts). No-op outside demo.
-ipcMain.handle('demo:ctl', (_e, cmd: string) => {
-  if (!DEMO_ON) return false
-  demoControl(cmd)
-  pushSessions() // reflect the pause/restart immediately
-  return true
 })
 ipcMain.on('term:input', (_e, key: string, data: string) => {
   terminals.get(key)?.pty.write(data)
@@ -3559,11 +3437,6 @@ ipcMain.on('state:set', (_e, key: string, value: string) => setAppState(key, val
 // name, so this one line separates their registries. (MAIL_DIR is split the same
 // way above, so two running instances never consume each other's messages.)
 app.setName(app.isPackaged ? 'CC Command Center' : 'CC Command Center Dev')
-// Demo/fixture mode runs in a throwaway profile so the real registry is never
-// touched. An explicit CCC_USERDATA wins (useful on its own); otherwise CCC_DEMO
-// defaults to a temp profile. Must run before userData is first read.
-if (process.env.CCC_USERDATA) app.setPath('userData', process.env.CCC_USERDATA)
-else if (DEMO_ON) app.setPath('userData', join(os.tmpdir(), 'cccc-demo-profile'))
 
 // Single instance per identity (the lock keys on userData, which differs for dev
 // vs packaged, so they still coexist). Prevents a double-launch from running a
@@ -3610,8 +3483,7 @@ function setDockIcon(): void {
 }
 
 app.whenReady().then(() => {
-  // Never migrate real data into a demo/override profile.
-  if (!DEMO_ON && !process.env.CCC_USERDATA) migrateUserData('Claude Command Center')
+  migrateUserData('Claude Command Center')
   try {
     mkdirSync(MAIL_DIR, { recursive: true })
   } catch {
@@ -3633,7 +3505,7 @@ app.whenReady().then(() => {
   maybeSeed()
   createWindow()
   initUpdater(() => win) // auto-update: first check ~8s after launch, then daily
-  pollTimer = setInterval(pushSessions, DEMO_ON ? 450 : 1500) // faster push in demo for smoother motion
+  pollTimer = setInterval(pushSessions, 1500)
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

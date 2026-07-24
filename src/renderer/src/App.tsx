@@ -155,7 +155,6 @@ interface AppSettings {
   notifyDone: boolean
 }
 interface Snapshot {
-  demo?: boolean // demo/fixture mode is active — enable the demo keyboard controls
   home: string
   scannedAt: number
   sessions: Session[]
@@ -1050,38 +1049,6 @@ export function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [overviewOpen])
-
-  // Demo/fixture controls (only when the snapshot says demo mode is on). Invisible
-  // in screenshots — driven by keyboard: ⌃⌥P pause/play, ⌃⌥R restart, ⌃⌥. step,
-  // ⌃⌥H hide the little indicator so it's out of the shot.
-  const [demoPaused, setDemoPaused] = useState(false)
-  const [demoHideBadge, setDemoHideBadge] = useState(false)
-  const demoOn = snap.demo === true
-  useEffect(() => {
-    if (!demoOn) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (!e.ctrlKey || !e.altKey || e.metaKey) return
-      const k = e.key.toLowerCase()
-      if (k === 'p') {
-        e.preventDefault()
-        window.cc.demoCtl('toggle')
-        setDemoPaused((v) => !v)
-      } else if (k === 'r') {
-        e.preventDefault()
-        window.cc.demoCtl('restart')
-        setDemoPaused(false)
-      } else if (k === '.' || k === 's') {
-        e.preventDefault()
-        window.cc.demoCtl('step')
-        setDemoPaused(true)
-      } else if (k === 'h') {
-        e.preventDefault()
-        setDemoHideBadge((v) => !v)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [demoOn])
 
   // Reconcile an in-app launched session (key new:<pid>) to its adopted session
   // id once the scan surfaces it: the row highlights, the theme picker persists,
@@ -2090,11 +2057,6 @@ export function App() {
         />
       )}
       {catEdit && <CategoryEditor edit={catEdit} setEdit={setCatEdit} onCreated={(id) => setSelectedCat(id)} />}
-      {demoOn && !demoHideBadge && (
-        <div className="demobadge" title="Demo mode · ⌃⌥P play/pause · ⌃⌥R restart · ⌃⌥. step · ⌃⌥H hide">
-          {demoPaused ? '❚❚' : '▶'} DEMO
-        </div>
-      )}
       {logOpen && (
         <MessageLog
           messages={snap.messages ?? []}

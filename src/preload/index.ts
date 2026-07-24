@@ -156,8 +156,6 @@ contextBridge.exposeInMainWorld('cc', {
   // Never attaches, so it can't disturb the live terminal underneath.
   termPeek: (sessionIds: string[]) =>
     ipcRenderer.invoke('term:peek', sessionIds) as Promise<{ sessionId: string; tail: string }[]>,
-  // Demo/fixture mode clock controls (only meaningful when CCC_DEMO is set).
-  demoCtl: (cmd: 'toggle' | 'restart' | 'step') => ipcRenderer.invoke('demo:ctl', cmd),
   termInput: (key: string, data: string) => ipcRenderer.send('term:input', key, data),
   termOpenPath: (key: string, path: string) => ipcRenderer.invoke('term:openPath', key, path),
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
