@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CC Command Center — one window for many Claude Code sessions</title>
+<meta name="description" content="A single macOS window that hosts and orchestrates many concurrent Claude Code sessions, keeps a live picture of what each is doing, and tells you which ones are waiting on you.">
+<style>
+  :root {
+    --bg:            #14120f;
+    --bg-2:          #1b1813;
+    --bg-3:          #221e18;
+    --panel:         #1e1a14;
+    --border:        #35302711;
+    --line:          #3a342b;
+    --line-soft:     #2b261f;
+    --text:          #ece5d8;
+    --text-2:        #b6ad9c;
+    --text-3:        #8b8272;
+    --accent:        #7fd88a;
+    --accent-dim:    #5aa666;
+    --accent-ink:    #0f1a11;
+    --amber:         #e0b26a;
+    --pink:          #e08ba0;
+    --radius:        12px;
+    --maxw:          1120px;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, "Cascadia Code", Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  h1, h2, h3 { line-height: 1.15; letter-spacing: -0.02em; margin: 0; }
+  p { margin: 0; }
+
+  .wrap {
+    width: 100%;
+    max-width: var(--maxw);
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  /* ---------- Header ---------- */
+  header.site {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(20, 18, 15, 0.82);
+    backdrop-filter: saturate(1.4) blur(12px);
+    -webkit-backdrop-filter: saturate(1.4) blur(12px);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  header.site .wrap {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 60px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    color: var(--text);
+    font-size: 16px;
+  }
+  .brand:hover { text-decoration: none; }
+  .brand .dot {
+    width: 11px; height: 11px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px rgba(127, 216, 138, 0.16);
+    flex: none;
+  }
+  .brand .muted { color: var(--text-3); font-weight: 500; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font: inherit;
+    font-weight: 600;
+    font-size: 15px;
+    padding: 9px 18px;
+    border-radius: 9px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, transform 0.05s ease;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn-primary {
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
+  .btn-primary:hover { background: #93e59c; text-decoration: none; }
+  .btn-ghost {
+    background: transparent;
+    color: var(--text);
+    border-color: var(--line);
+  }
+  .btn-ghost:hover { border-color: var(--text-3); background: var(--bg-2); text-decoration: none; }
+  .btn-lg { font-size: 16px; padding: 13px 24px; }
+
+  /* ---------- Hero ---------- */
+  .hero {
+    padding: 88px 0 56px;
+    border-bottom: 1px solid var(--line-soft);
+    background:
+      radial-gradient(900px 400px at 78% -8%, rgba(127, 216, 138, 0.10), transparent 60%),
+      radial-gradient(700px 500px at 0% 0%, rgba(224, 178, 106, 0.05), transparent 55%);
+  }
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--accent);
+    background: rgba(127, 216, 138, 0.08);
+    border: 1px solid rgba(127, 216, 138, 0.22);
+    padding: 5px 12px;
+    border-radius: 999px;
+    margin-bottom: 22px;
+  }
+  .hero h1 {
+    font-size: clamp(34px, 5.4vw, 56px);
+    max-width: 16ch;
+    margin-bottom: 20px;
+  }
+  .hero .sub {
+    font-size: clamp(17px, 2vw, 20px);
+    color: var(--text-2);
+    max-width: 60ch;
+    margin-bottom: 30px;
+  }
+  .hero .cta-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 12px;
+  }
+  .hero .cta-note {
+    font-size: 14px;
+    color: var(--text-3);
+  }
+
+  /* ---------- Placeholder boxes ---------- */
+  .ph {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 8px;
+    border: 1px dashed var(--line);
+    border-radius: var(--radius);
+    background:
+      repeating-linear-gradient(135deg, transparent, transparent 11px, rgba(255,255,255,0.014) 11px, rgba(255,255,255,0.014) 22px),
+      var(--bg-2);
+    color: var(--text-3);
+    padding: 28px 24px;
+  }
+  .ph .ph-kind {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent-dim);
+  }
+  .ph .ph-desc {
+    font-size: 14px;
+    color: var(--text-2);
+    max-width: 46ch;
+    line-height: 1.5;
+  }
+  .ph-hero { min-height: 380px; }
+  .ph-feature { min-height: 300px; }
+  .ph-gallery { min-height: 150px; }
+
+  /* ---------- Generic section ---------- */
+  section { padding: 72px 0; }
+  .section-head { max-width: 62ch; margin-bottom: 44px; }
+  .section-head .kicker {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent-dim);
+    margin-bottom: 14px;
+  }
+  .section-head h2 {
+    font-size: clamp(26px, 3.4vw, 36px);
+    margin-bottom: 16px;
+  }
+  .section-head p { color: var(--text-2); font-size: 18px; }
+
+  /* ---------- What it is band ---------- */
+  .band {
+    background: var(--bg-2);
+    border-top: 1px solid var(--line-soft);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .whatgrid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    margin-top: 8px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius);
+    padding: 24px;
+  }
+  .card h3 { font-size: 18px; margin-bottom: 8px; }
+  .card p { color: var(--text-2); font-size: 15.5px; }
+
+  /* ---------- Feature rows ---------- */
+  .feature {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 56px;
+    align-items: center;
+    padding: 56px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .feature:last-of-type { border-bottom: none; }
+  .feature.flip .f-text { order: 2; }
+  .feature.flip .f-visual { order: 1; }
+  .f-text .tag {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent-dim);
+    margin-bottom: 12px;
+  }
+  .f-text h3 {
+    font-size: clamp(22px, 2.8vw, 29px);
+    margin-bottom: 14px;
+  }
+  .f-text > p {
+    color: var(--text-2);
+    font-size: 17px;
+    margin-bottom: 18px;
+  }
+  .f-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .f-list li {
+    position: relative;
+    padding-left: 26px;
+    color: var(--text-2);
+    font-size: 15.5px;
+    line-height: 1.5;
+  }
+  .f-list li::before {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 9px;
+    width: 7px; height: 7px;
+    border-radius: 2px;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px rgba(127, 216, 138, 0.14);
+  }
+  .f-list li b { color: var(--text); font-weight: 600; }
+
+  /* ---------- How it works ---------- */
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+  }
+  .step {
+    background: var(--panel);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--radius);
+    padding: 28px 24px;
+  }
+  .step .num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px; height: 34px;
+    border-radius: 9px;
+    background: rgba(127, 216, 138, 0.12);
+    border: 1px solid rgba(127, 216, 138, 0.28);
+    color: var(--accent);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 16px;
+    font-size: 16px;
+  }
+  .step h3 { font-size: 19px; margin-bottom: 8px; }
+  .step p { color: var(--text-2); font-size: 15.5px; }
+
+  /* ---------- Gallery ---------- */
+  .gallery {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+  }
+  .gallery .ph { min-height: 170px; }
+  .gallery-cap {
+    font-size: 14px;
+    color: var(--text-3);
+    margin-top: 16px;
+  }
+
+  /* ---------- Status band ---------- */
+  .status {
+    background:
+      radial-gradient(700px 320px at 90% 0%, rgba(224, 178, 106, 0.07), transparent 60%),
+      var(--bg-2);
+    border-top: 1px solid var(--line-soft);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .status-grid {
+    display: grid;
+    grid-template-columns: 0.9fr 1.1fr;
+    gap: 48px;
+    align-items: start;
+  }
+  .status h2 { font-size: clamp(24px, 3vw, 32px); margin-bottom: 16px; }
+  .status .lede { color: var(--text-2); font-size: 17px; }
+  .facts {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .facts li {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 16px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line-soft);
+    font-size: 15.5px;
+  }
+  .facts li:last-child { border-bottom: none; }
+  .facts .k {
+    color: var(--text-3);
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding-top: 2px;
+  }
+  .facts .v { color: var(--text-2); }
+  .facts .v b { color: var(--text); font-weight: 600; }
+  .badge {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--amber);
+    background: rgba(224, 178, 106, 0.10);
+    border: 1px solid rgba(224, 178, 106, 0.28);
+    padding: 2px 9px;
+    border-radius: 6px;
+  }
+
+  /* ---------- Roadmap mini ---------- */
+  .roadmap {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+    margin-top: 8px;
+  }
+  .roadmap .card h3::before {
+    content: "Planned";
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 1px 7px;
+    margin-right: 10px;
+    vertical-align: middle;
+  }
+
+  /* ---------- Final CTA ---------- */
+  .final {
+    text-align: center;
+    padding: 84px 0;
+  }
+  .final h2 { font-size: clamp(28px, 4vw, 40px); margin-bottom: 16px; }
+  .final p { color: var(--text-2); font-size: 18px; max-width: 54ch; margin: 0 auto 28px; }
+  .final .cta-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+
+  /* ---------- Footer ---------- */
+  footer.site {
+    border-top: 1px solid var(--line-soft);
+    background: var(--bg-2);
+    padding: 40px 0 48px;
+    color: var(--text-3);
+    font-size: 14px;
+  }
+  footer.site .wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 24px 40px;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+  footer .disclaimer { max-width: 62ch; line-height: 1.6; }
+  footer .foot-brand { font-weight: 600; color: var(--text-2); margin-bottom: 8px; }
+  footer nav { display: flex; gap: 22px; flex-wrap: wrap; }
+  footer nav a { color: var(--text-2); }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 860px) {
+    .whatgrid, .steps, .gallery, .roadmap { grid-template-columns: 1fr; }
+    .feature { grid-template-columns: 1fr; gap: 28px; padding: 44px 0; }
+    .feature.flip .f-text { order: 1; }
+    .feature.flip .f-visual { order: 2; }
+    .status-grid { grid-template-columns: 1fr; gap: 32px; }
+    .hero { padding: 60px 0 44px; }
+    section { padding: 56px 0; }
+  }
+  @media (max-width: 520px) {
+    body { font-size: 16px; }
+    header.site .brand .muted { display: none; }
+    .facts li { grid-template-columns: 1fr; gap: 4px; }
+    .facts .k { padding-top: 0; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ================= HEADER ================= -->
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <span class="dot" aria-hidden="true"></span>
+      CC Command Center
+      <span class="muted">for Claude Code</span>
+    </a>
+    <a class="btn btn-primary" href="#download">Download</a>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ================= HERO ================= -->
+  <section class="hero">
+    <div class="wrap">
+      <span class="eyebrow"><span class="brand-dot" aria-hidden="true">●</span> macOS · Apple Silicon · Beta v0.20.0</span>
+      <h1>One window for every Claude Code session you have running.</h1>
+      <p class="sub">
+        CC Command Center hosts many concurrent Claude Code sessions in real terminals inside a
+        single macOS window. It tracks what each session is doing, how they relate, and which ones
+        are waiting on you — and it holds that state across restarts.
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary btn-lg" href="#download">Download for macOS</a>
+        <a class="btn btn-ghost btn-lg" href="#features">See what it does</a>
+      </div>
+      <p class="cta-note">Requires the Claude Code CLI and a Claude subscription and/or Anthropic API key.</p>
+
+      <!-- IMAGE: Full app screenshot — the main window with the category rail on the left, the beacon
+           status bar across the top counting sessions by state, an open terminal session in the center,
+           and the needs-you companion board on the right. This is the primary product shot. -->
+      <div class="ph ph-hero" role="img" aria-label="Placeholder for the main application screenshot" style="margin-top:40px;">
+        <span class="ph-kind">Image · Hero</span>
+        <span class="ph-desc">Full app window: category rail, beacon status bar with per-state tallies, an active terminal session, and the needs-you board.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= WHAT IT IS ================= -->
+  <section class="band">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="kicker">What it is</div>
+        <h2>An operations surface for a fleet of agents.</h2>
+        <p>
+          Built for a single technical operator running roughly 5 to 25 Claude Code sessions at
+          once across personal projects, their own business, and multiple clients. It replaces a
+          screen full of scattered terminal windows with one place where the whole fleet is visible.
+        </p>
+      </div>
+      <div class="whatgrid">
+        <div class="card">
+          <h3>The problem</h3>
+          <p>Running many agent sessions makes you lose track: which one is waiting on you, what it wanted, whether you already handled it, and what you left running last night.</p>
+        </div>
+        <div class="card">
+          <h3>What it does</h3>
+          <p>It externalizes that state and survives restarts. The core job is answering "which sessions are waiting on me right now, and where?" in under a second.</p>
+        </div>
+        <div class="card">
+          <h3>How it fits in</h3>
+          <p>No daemon, and nothing installed inside a session. It reads Claude Code's own transcripts, session registry, and hooks, and renders real terminals.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= FEATURES ================= -->
+  <div id="features"></div>
+
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <div class="kicker">Features</div>
+        <h2>Know the state of every session at a glance.</h2>
+        <p>The app fuses several signals into one honest status per session, and keeps the "did I handle that?" memory you would otherwise lose.</p>
+      </div>
+
+      <!-- Feature 1 -->
+      <article class="feature">
+        <div class="f-text">
+          <div class="tag">Awareness &amp; status</div>
+          <h3>One honest status per session</h3>
+          <p>
+            Each session gets a single coarse state — working, your-turn, needs-approval, blocked,
+            done, or idle — fused every 1.5 seconds from the transcript, the Claude Code status hook,
+            a live scan of the terminal buffer, and the parent/child graph.
+          </p>
+          <ul class="f-list">
+            <li><b>Why lines.</b> A needs-you row shows the verbatim gated command, the sentence the assistant ended on, or the name of the child a parent is blocked on.</li>
+            <li><b>Gate ledger.</b> A SQLite-backed record of every approval and question, so nothing you haven't looked at silently disappears — and it's still there, dimmed, after you quit and relaunch.</li>
+            <li><b>Permission-gate detection.</b> A frozen approval dialog surfaces amber instead of masquerading as busy, and clears the instant you answer.</li>
+            <li><b>Anti-flicker.</b> Release-hysteresis holds a state steady instead of strobing, while a genuine change still snaps through immediately.</li>
+          </ul>
+        </div>
+        <div class="f-visual">
+          <!-- IMAGE: The beacon status bar and a session list, showing per-state tallies at the top and
+               several session rows each with a colored state chip and a one-line "why" reason
+               (e.g. "wants to run: rm -rf build/", "asked: which database should I target?"). -->
+          <div class="ph ph-feature" role="img" aria-label="Placeholder: beacon status bar and session rows with why lines">
+            <span class="ph-kind">Image · Status</span>
+            <span class="ph-desc">Beacon bar with state tallies above a session list; each waiting row shows its colored state chip and a verbatim "why" line.</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- Feature 2 -->
+      <article class="feature flip">
+        <div class="f-text">
+          <div class="tag">The fleet views</div>
+          <h3>A 50,000-foot view of everything running</h3>
+          <p>
+            Press Cmd+Shift+E for a full-screen grid of every active session as a live-ish terminal
+            thumbnail outlined in its state color. The outline color and tile position are genuinely
+            real-time; only the picture is a periodic snapshot.
+          </p>
+          <ul class="f-list">
+            <li><b>Critical-order sort.</b> Tiles sort by urgency and animate to their new spot, so the sessions that most need you land top-left.</li>
+            <li><b>Click to dive in.</b> Clicking a tile opens that live session, switches to its category, and highlights its row.</li>
+            <li><b>Overflow cap.</b> The grid caps at 24 tiles and shows the rest as "+N more," so it stays legible no matter how busy the fleet is.</li>
+            <li><b>Show-idle toggle.</b> Off by default; flip it on to see the whole live fleet instead of only what's in motion.</li>
+          </ul>
+        </div>
+        <div class="f-visual">
+          <!-- VIDEO: Screen recording of the overview grid — a wall of terminal thumbnails, each with a
+               colored outline, re-sorting and animating into new positions as sessions change state, then
+               a click on one tile diving into that live session. -->
+          <div class="ph ph-feature" role="img" aria-label="Placeholder: video of the overview grid re-sorting by urgency">
+            <span class="ph-kind">Video · Overview grid</span>
+            <span class="ph-desc">Grid of state-outlined terminal thumbnails re-sorting by urgency as sessions change, then a click diving into one live session.</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- Feature 3 -->
+      <article class="feature">
+        <div class="f-text">
+          <div class="tag">Session management</div>
+          <h3>Launch, adopt, and remember every session</h3>
+          <p>
+            The app scans for running <code style="font-family:var(--mono);font-size:0.9em;color:var(--text)">claude</code>
+            processes and adopts them without a relaunch, and can spawn its own managed sessions that
+            accept injected prompts and cross-session messages.
+          </p>
+          <ul class="f-list">
+            <li><b>New Session composer.</b> One dialog sets name, category, folder, model, effort, permission mode, an optional API key, and initial instructions.</li>
+            <li><b>Flags that survive a resume.</b> Model, effort, context, and permission mode are stored per session and rebuilt after <code style="font-family:var(--mono);font-size:0.9em;color:var(--text)">--resume</code>, which the CLI drops on its own.</li>
+            <li><b>Parent/child trees.</b> Spawn a child with a typed edge — blocking (the parent shows blocked until it finishes) or tangential (spun off with context).</li>
+            <li><b>Scrollback snapshot.</b> A resumed session repaints its prior conversation instantly instead of showing an empty terminal.</li>
+          </ul>
+        </div>
+        <div class="f-visual">
+          <!-- IMAGE: The New Session composer — a two-column modal showing name/category/folder fields on
+               the left and model picker, effort level (low through ultracode), permission mode, context
+               toggle, and an initial-instructions box on the right. -->
+          <div class="ph ph-feature" role="img" aria-label="Placeholder: the New Session composer modal">
+            <span class="ph-kind">Image · New Session</span>
+            <span class="ph-desc">Two-column launch modal: name, category, folder on the left; model, effort, permission mode, context toggle, and initial instructions on the right.</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- Feature 4 -->
+      <article class="feature flip">
+        <div class="f-text">
+          <div class="tag">Communication &amp; automation</div>
+          <h3>Sessions coordinate through a message bus</h3>
+          <p>
+            Every app-spawned session gets a filesystem outbox and a one-time preamble teaching it to
+            write there. The app drains each outbox and routes messages up to the parent or down to a
+            named child, injecting them as fresh turns using only the session's native tools.
+          </p>
+          <ul class="f-list">
+            <li><b>State-aware delivery.</b> A message lands only when the target is idle or waiting, never mid-work, and is buffered until then.</li>
+            <li><b>Trust gate and global pause.</b> No link routes messages until you trust it, and one switch freezes all routing without losing anything.</li>
+            <li><b>Message log.</b> A header badge opens a record of every routed hop — from, to, text, and status — so autonomous coordination stays auditable.</li>
+            <li><b>Manual send / broadcast.</b> Push a prompt into one managed session or many at once without switching to each terminal.</li>
+          </ul>
+        </div>
+        <div class="f-visual">
+          <!-- VIDEO: A parent session spawning a child, the child writing to its outbox, and the message
+               appearing as a new turn in the parent's terminal, with the cross-session message log open
+               in the corner showing the routed hop and its "delivered" status. -->
+          <div class="ph ph-feature" role="img" aria-label="Placeholder: video of parent and child sessions exchanging routed messages">
+            <span class="ph-kind">Video · Message bus</span>
+            <span class="ph-desc">A parent and child session exchanging routed messages as fresh turns, with the cross-session message log showing each hop and its status.</span>
+          </div>
+        </div>
+      </article>
+
+      <!-- Feature 5 -->
+      <article class="feature">
+        <div class="f-text">
+          <div class="tag">Categories &amp; artifacts</div>
+          <h3>Keep client, business, and personal work apart</h3>
+          <p>
+            Sessions live in hard-separated categories, each with its own color, optional emoji, and
+            rail label. Client work never bleeds into personal, and each collection reads at a glance.
+            An artifact drawer renders what a session produced without leaving the app.
+          </p>
+          <ul class="f-list">
+            <li><b>Per-category notifications.</b> Any class — needs-permission, question, done — can be loud for clients and quiet for personal.</li>
+            <li><b>Artifact preview.</b> Images, SVG, audio, syntax-highlighted code, Markdown, and RTF render in a drawer over the terminal, each with its own error boundary.</li>
+            <li><b>Session-scoped detection.</b> The drawer shows only what this session produced, staying accurate even in a shared project directory.</li>
+            <li><b>Reveal in Finder.</b> The artifact list is sortable and timestamped, with per-item Open and Reveal in Finder.</li>
+          </ul>
+        </div>
+        <div class="f-visual">
+          <!-- IMAGE: The category rail on the left (personal / business / two or three clients, each with an
+               emoji and color) beside the artifact preview drawer folded down over a terminal, showing a
+               rendered chart on the left and a sortable file list with kind badges on the right. -->
+          <div class="ph ph-feature" role="img" aria-label="Placeholder: category rail and artifact preview drawer">
+            <span class="ph-kind">Image · Categories &amp; artifacts</span>
+            <span class="ph-desc">Color-coded category rail beside the artifact drawer: a rendered preview on the left and a sortable, timestamped file list on the right.</span>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ================= HOW IT WORKS ================= -->
+  <section class="band">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="kicker">How it works</div>
+        <h2>Three steps to a managed fleet.</h2>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <div class="num">1</div>
+          <h3>Install and open</h3>
+          <p>Download the macOS build and launch it alongside your existing Claude Code setup. No daemon runs, and nothing is installed inside your sessions.</p>
+        </div>
+        <div class="step">
+          <div class="num">2</div>
+          <h3>Adopt and launch</h3>
+          <p>Sessions you already started in any terminal appear automatically. Start new managed sessions from the composer, sorted into categories.</p>
+        </div>
+        <div class="step">
+          <div class="num">3</div>
+          <h3>Watch and triage</h3>
+          <p>The beacon bar and overview grid show what needs you. Jump to any waiting session in a click, and the state you'd forget is held across restarts.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= GALLERY ================= -->
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <div class="kicker">Screenshots</div>
+        <h2>A closer look.</h2>
+      </div>
+      <div class="gallery">
+        <!-- IMAGE: The timeline/strip swimlanes — per-session horizontal lanes showing coarse-state
+             change-points over an adjustable 5/10/25-minute window. -->
+        <div class="ph ph-gallery" role="img" aria-label="Placeholder: timeline swimlanes">
+          <span class="ph-kind">Image</span>
+          <span class="ph-desc">Timeline swimlanes: per-session state change-points over a 5, 10, or 25-minute window.</span>
+        </div>
+        <!-- IMAGE: The fleet activity view — subagents, workflow runs with progress like 8/19, and
+             background shell tasks, grouped by owning session with status. -->
+        <div class="ph ph-gallery" role="img" aria-label="Placeholder: fleet activity view">
+          <span class="ph-kind">Image</span>
+          <span class="ph-desc">Fleet activity: subagents, workflow runs (e.g. 8/19), and background tasks grouped by owning session.</span>
+        </div>
+        <!-- IMAGE: The account-wide 5h / 7d usage meter — a dual-bar readout with a live reset countdown,
+             plus a per-session context-window percentage. -->
+        <div class="ph ph-gallery" role="img" aria-label="Placeholder: usage and context meters">
+          <span class="ph-kind">Image</span>
+          <span class="ph-desc">Account 5h / 7d usage meter with reset countdown, plus per-session context-window readout.</span>
+        </div>
+        <!-- IMAGE: The needs-you companion board (why-board) — the full needs-you set as cards scoped to a
+             category or the whole fleet, each cross-category card tagged by color with a context-usage bar. -->
+        <div class="ph ph-gallery" role="img" aria-label="Placeholder: needs-you companion board">
+          <span class="ph-kind">Image</span>
+          <span class="ph-desc">Needs-you companion board: waiting sessions as cards, each cross-category card tagged by color.</span>
+        </div>
+        <!-- IMAGE: The Arbiter bar — the optional metered control agent's one-line glosses on waiting rows,
+             with the running spend and daily cap shown on the bar. -->
+        <div class="ph ph-gallery" role="img" aria-label="Placeholder: the Arbiter control agent bar">
+          <span class="ph-kind">Image</span>
+          <span class="ph-desc">The Arbiter: one-line plain-English glosses on waiting rows, with live spend and daily cap on the bar.</span>
+        </div>
+        <!-- IMAGE: Settings — the tabbed modal (General, Terminal, Notifications, Arbiter, Keys) showing
+             terminal color themes and font pickers. -->
+        <div class="ph ph-gallery" role="img" aria-label="Placeholder: tabbed settings">
+          <span class="ph-kind">Image</span>
+          <span class="ph-desc">Tabbed settings: General, Terminal, Notifications, Arbiter, and Keys, with color themes and font pickers.</span>
+        </div>
+      </div>
+      <p class="gallery-cap">All images above are placeholders pending final captures.</p>
+    </div>
+  </section>
+
+  <!-- ================= STATUS / BETA ================= -->
+  <section class="status" id="status">
+    <div class="wrap">
+      <div class="status-grid">
+        <div>
+          <div class="kicker" style="font-size:13px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:var(--accent-dim);margin-bottom:14px;">Honest status</div>
+          <h2>A solo project in active beta.</h2>
+          <p class="lede">
+            This is an independent tool built by one person. It works and it's in daily use, but it
+            leans on parts of Claude Code that aren't a public API. Read the details before you rely
+            on it.
+          </p>
+        </div>
+        <ul class="facts">
+          <li>
+            <span class="k">Version</span>
+            <span class="v"><span class="badge">v0.20.0</span> &nbsp;A solo project in active beta.</span>
+          </li>
+          <li>
+            <span class="k">Platform</span>
+            <span class="v"><b>macOS on Apple Silicon only.</b> No Intel or other-OS build.</span>
+          </li>
+          <li>
+            <span class="k">Requires</span>
+            <span class="v">The Claude Code CLI already installed, plus a Claude subscription and/or an Anthropic API key.</span>
+          </li>
+          <li>
+            <span class="k">Coupling</span>
+            <span class="v">It integrates with the Claude Code transcript format, session registry, hook payloads, and terminal rendering, none of which are a public API. <b>Breakage after an upstream Claude Code release is expected,</b> with no support SLA.</span>
+          </li>
+          <li>
+            <span class="k">Affiliation</span>
+            <span class="v">Not an official Anthropic product. Independent, and not affiliated with or endorsed by Anthropic.</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ROADMAP ================= -->
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <div class="kicker">On the roadmap</div>
+        <h2>What's coming next.</h2>
+      </div>
+      <div class="roadmap">
+        <div class="card">
+          <h3>Rich, interactive notifications</h3>
+          <p>Lift the verbatim permission query or question into the notification body, with its options as action buttons and an inline reply field, routing your answer back into the session. The substance and the return path already exist; this adds the interactive layer over today's text-only banners.</p>
+        </div>
+        <div class="card">
+          <h3>Deeper question re-tiering</h3>
+          <p>Promote a direct question to its own rung just below permission across the beacon tally, sidebar order, overview sort, and notification class, unifying a distinction that today lives only in the sidebar and grid.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= FINAL CTA ================= -->
+  <section class="final" id="download">
+    <div class="wrap">
+      <h2>Put the whole fleet in one window.</h2>
+      <p>Download the current beta build for macOS on Apple Silicon. New builds and readable release notes arrive through the in-app updater.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary btn-lg" href="#download">Download for macOS</a>
+        <a class="btn btn-ghost btn-lg" href="#status">Read the beta status</a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ================= FOOTER ================= -->
+<footer class="site">
+  <div class="wrap">
+    <div>
+      <div class="foot-brand">CC Command Center</div>
+      <p class="disclaimer">
+        An independent tool for operators running many Claude Code sessions. Not an official Anthropic
+        product, and not affiliated with or endorsed by Anthropic. "Claude" and "Claude Code" are
+        products of Anthropic. macOS on Apple Silicon, beta v0.20.0.
+      </p>
+    </div>
+    <nav aria-label="Footer">
+      <a href="#features">Features</a>
+      <a href="#status">Status</a>
+      <a href="#download">Download</a>
+    </nav>
+  </div>
+</footer>
+
+</body>
+</html>
