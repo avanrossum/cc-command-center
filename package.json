@@ -18,7 +18,8 @@
     "pretypecheck": "node scripts/gen-version.mjs",
     "typecheck": "tsc --noEmit",
     "bump": "node scripts/bump.mjs",
-    "release": "node scripts/publish.mjs"
+    "release": "node scripts/publish.mjs",
+    "demo": "CCC_DEMO=1 electron-vite dev"
   },
   "devDependencies": {
     "@electron/rebuild": "4.1.0",

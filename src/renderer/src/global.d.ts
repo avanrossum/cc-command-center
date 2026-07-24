@@ -135,6 +135,7 @@ declare global {
       termOpen: (key: string, opts: OpenOpts) => Promise<boolean>
       termAttach: (key: string) => void
       termPeek: (sessionIds: string[]) => Promise<{ sessionId: string; tail: string }[]>
+      demoCtl: (cmd: 'toggle' | 'restart' | 'step') => Promise<boolean>
       termInput: (key: string, data: string) => void
       termOpenPath: (key: string, path: string) => Promise<{ ok: boolean }>
       openExternal: (url: string) => Promise<{ ok: boolean }>
