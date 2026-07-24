@@ -2,19 +2,12 @@
 
 ## ⏭ NEXT — observations & fixes (queued 2026-07-22)
 
-1. **Category color doesn't update (BUG — STILL OPEN).** Pick a new color in the
-   category-edit modal → it doesn't take. **Traced the ENTIRE path and it's correct
-   by inspection + empirically:** the modal's color state (setColor on swatch
-   click) → save's `catSetColor(id, color)` when changed → `cat:setColor` IPC →
-   `setCategoryColor` (verified persists, even alongside label/emoji writes) →
-   snapshot re-reads categories fresh each scan (index.ts:819) → groups memo uses
-   `snap.categories[].color` with correct deps → rail cell renders it. Palettes
-   (renderer CAT_PALETTE / registry PALETTE) match exactly. No re-mount, no form
-   submit. **Can't reproduce headlessly.** Next step: one live datum — when you
-   click a new color swatch in the modal, does the selected-ring HIGHLIGHT move to
-   it? If YES → state updates, bug is downstream (very strange given the above); if
-   NO → setColor isn't updating state in the running build. Or pair: add a temp
-   log in `save()`/`catSetColor` and reproduce.
+1. ✅ **Category color doesn't update — RESOLVED (auto-save-on-change, 2026-07-23).**
+   Root cause was UX, not a data bug: the tester expected the color to apply the
+   instant a swatch is clicked, not after a Save press. The category editor now
+   auto-saves every field (color/emoji/name) on change, so the color takes
+   immediately. (The whole persistence path was correct all along, which is why it
+   never reproduced headlessly.)
 
 2. ✅ **Reorder categories — DONE v0.18.0** (drag-and-drop in the rail;
    reorderCategories + cat:reorder).

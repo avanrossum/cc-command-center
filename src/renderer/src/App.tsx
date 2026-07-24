@@ -1341,7 +1341,20 @@ export function App() {
                   // switch would land you somewhere other than the cell you clicked.
                   const lastId = lastByCat.current.get(g.id)
                   const target = lastId ? live.find((s) => s.sessionId === lastId) : undefined
-                  if (target && target.categoryId === g.id) openSession(target)
+                  if (target && target.categoryId === g.id) {
+                    openSession(target)
+                  } else if (
+                    selected &&
+                    !live.some(
+                      (s) => s.sessionId === selected.sessionId && (s.categoryId ?? null) === g.id,
+                    )
+                  ) {
+                    // Nothing to reopen here, and the mounted terminal belongs to a
+                    // DIFFERENT category — detach it (the PTY keeps running) so the pane
+                    // doesn't imply a foreign session lives in this category. Only on a
+                    // deliberate rail click, so it never stomps a session you're in.
+                    setSelected(null)
+                  }
                 }}
                 onContextMenu={(e) => {
                   e.preventDefault()
@@ -1707,6 +1720,18 @@ export function App() {
                   </button>
                 </div>
               </div>
+            </div>
+          ) : selectedGroup.rows.every((r) => r.s.dormant) ? (
+            // The selected category has no RUNNING session (all dormant, or empty).
+            // Scope the empty state to it so a just-cleared pane doesn't read like a
+            // generic "pick something" — it's specifically "nothing live here yet".
+            <div className="placeholder">
+              <p>No running sessions in {selectedGroup.name}.</p>
+              <p className="sub">
+                {selectedGroup.rows.length > 0
+                  ? 'Resume one from the list on the left, or start a new session.'
+                  : 'Start a new session to get going here.'}
+              </p>
             </div>
           ) : (
             <div className="placeholder">
@@ -2865,10 +2890,10 @@ function SpawnComposer({
           onChange={(id) => setSpawn({ ...spawn, apiKeyId: id })}
         />
         <div className="spawnhint">
-          Parent–child messaging writes to a small mailbox file, and each session’s first write
-          crosses a permission gate. Auto mode clears it on its own; without auto mode you’ll
-          approve one prompt in each session before messages flow. Pre-authorizing the mailbox in
-          Settings removes the gate entirely.
+          Parent–child messaging writes to a small mailbox file. Keep <b>both</b> sessions in auto
+          mode for a smooth back-and-forth: each session’s first write crosses a permission gate,
+          and a parent that isn’t in auto also pauses for approval before acting on a child’s reply.
+          Pre-authorizing the mailbox in Settings removes the write gate entirely.
         </div>
         <div className="spawnactions">
           <button className="rbtn" onClick={() => setSpawn(null)}>
