@@ -582,6 +582,12 @@ function storeApiKey(name: string, raw: string): { ok: true; key: ApiKeyRow } | 
   }
 }
 
+// Fresh-space scan scope (pairs with CCC_USERDATA). A folder path (~ expanded);
+// when set, only live sessions whose cwd is under it are adopted.
+const SCAN_ONLY = process.env.CCC_SCAN_ONLY
+  ? process.env.CCC_SCAN_ONLY.replace(/^~(?=$|\/)/, os.homedir())
+  : null
+
 function snapshot(): Snapshot {
   let sessions: LiveSession[] = []
   try {
@@ -591,6 +597,10 @@ function snapshot(): Snapshot {
   }
   const removed = getRemovedSet()
   sessions = sessions.filter((s) => !removed.has(s.sessionId))
+  // Fresh-space scope: only adopt live sessions whose folder is under CCC_SCAN_ONLY.
+  // Lets a screenshot/demo run show just the sessions you launch under one folder,
+  // ignoring any real client sessions running elsewhere on the machine.
+  if (SCAN_ONLY) sessions = sessions.filter((s) => s.cwd && s.cwd.startsWith(SCAN_ONLY))
   for (const s of sessions) {
     // Skip --bg-spare processes: they're not real interactive sessions, and a
     // node for one would resurface as a bogus dormant "resume" row once it dies.
@@ -3437,6 +3447,12 @@ ipcMain.on('state:set', (_e, key: string, value: string) => setAppState(key, val
 // name, so this one line separates their registries. (MAIL_DIR is split the same
 // way above, so two running instances never consume each other's messages.)
 app.setName(app.isPackaged ? 'CC Command Center' : 'CC Command Center Dev')
+// A "fresh space" for screenshots/demos: point at a throwaway userData profile so
+// none of your real dev/client registry (categories, remembered sessions, keys) is
+// loaded. Nothing else needed — the profile just starts empty. Must run before
+// userData is first read. (See CCC_SCAN_ONLY too, to also scope which live
+// sessions are adopted.)
+if (process.env.CCC_USERDATA) app.setPath('userData', process.env.CCC_USERDATA)
 
 // Single instance per identity (the lock keys on userData, which differs for dev
 // vs packaged, so they still coexist). Prevents a double-launch from running a
@@ -3483,7 +3499,8 @@ function setDockIcon(): void {
 }
 
 app.whenReady().then(() => {
-  migrateUserData('Claude Command Center')
+  // Never migrate the real registry into a throwaway "fresh space" profile.
+  if (!process.env.CCC_USERDATA) migrateUserData('Claude Command Center')
   try {
     mkdirSync(MAIL_DIR, { recursive: true })
   } catch {
