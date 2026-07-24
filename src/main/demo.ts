@@ -208,12 +208,9 @@ export function demoUsage(
   now: number,
 ): { fiveHour: { pct: number; resetsAt: number }; sevenDay: { pct: number; resetsAt: number } } {
   const frac = (elapsedMs % LOOP_MS) / LOOP_MS
-  // resetsAt is unix SECONDS (matches the real statusLine payload) — the renderer
-  // does resetsAt * 1000 - now, so seconds here, not milliseconds.
-  const inSec = (hours: number): number => Math.floor((now + hours * 3600_000) / 1000)
   return {
-    fiveHour: { pct: Math.round(24 + frac * 14), resetsAt: inSec(2.5) },
-    sevenDay: { pct: Math.round(51 + frac * 4), resetsAt: inSec(40) },
+    fiveHour: { pct: Math.round(24 + frac * 14), resetsAt: now + 2.5 * 3600_000 },
+    sevenDay: { pct: Math.round(51 + frac * 4), resetsAt: now + 40 * 3600_000 },
   }
 }
 
