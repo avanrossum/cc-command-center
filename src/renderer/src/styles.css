@@ -3038,9 +3038,12 @@ select.cat-in {
 /* The floating card. */
 .floatcard {
   position: fixed;
-  /* Above the terminal and companion, but BELOW modal scrims (40-46) and toasts
-     (60) so a floated panel never covers an open dialog. */
-  z-index: 30;
+  /* Above the terminal and the companion panel (44), but BELOW modal scrims (46)
+     and toasts (60) so a floated panel never covers an open dialog. This has to
+     out-rank the companion BY NUMBER: the companion is explicitly positioned (so
+     it can layer against the overview overlay), so a floatcard can no longer rely
+     on the companion being unpositioned the way it did originally. */
+  z-index: 45;
   width: 360px;
   max-height: 70vh;
   display: flex;
