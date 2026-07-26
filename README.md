@@ -4,8 +4,7 @@
 
 A macOS app that hosts every Claude Code CLI session in one place, each in a real terminal, and keeps a live picture of what they are all doing, how they relate, and which are waiting on you. Built for the person running five, ten, twenty sessions at once who keeps losing the thread of which one they were in the middle of.
 
-> **📸 [hero placeholder]** — a wide screenshot of the full app: beacon bar across the top, category rail on the left, an active terminal, the companion pane on the right. This is the one-image "what is this" shot.
-<!-- ![CC Command Center](docs/media/hero.png) -->
+![The full app: beacon bar across the top, category rail and session list on the left, an active terminal, and the needs-you board on the right](screenshots/hero-full-app.png)
 
 > **Not an official Anthropic product.** This is an independent, third-party tool. It is not affiliated with, endorsed by, or supported by Anthropic. "Claude" and "Claude Code" are Anthropic's. This app orchestrates the Claude Code CLI you already run; the optional Arbiter feature makes metered calls to the Anthropic API under your own key, billed to you at API rates.
 
@@ -23,13 +22,18 @@ Most of this app is one answer to that question — externalize the state your w
 
 The **beacon bar** across the top is a live status board: which sessions need you, and why. A session surfaces when it is parked on a permission dialog, when it asked you a question, or when it is blocked on an unfinished child. Sessions that are just working stay quiet.
 
-> **📸 [placeholder]** — a 10-second capture of the beacon bar: a session flips from "working" to "needs approval" and appears in the needs-you list with its reason.
-<!-- ![Status board](docs/media/beacon.png) -->
+![The needs-you board listing four sessions, each with the reason it is waiting](screenshots/needs-you-four-states.png)
+
+A single row carries the substance of the ask — here, the exact command a session is waiting to run:
+
+![A needs-you row for a session parked on a permission prompt, showing its command](screenshots/needs-you-permission-gate.png)
+
+**Zoom out to the whole fleet.** `⌘⇧E` opens the overview: every active session as a tile outlined in its state color, sorted so the ones that need you land first. Click a tile to drop into that session.
+
+![The overview grid: four sessions as tiles, each outlined in its state color](screenshots/overview-grid.png)
 
 **It survives a restart.** Close the app mid-flow, reopen it, and the sessions that were waiting on you are *still there* in the needs-you list — dimmed, tagged "resume," ready to pick back up. You don't have to remember what you were in the middle of; the app remembers for you.
 
-> **📸 [placeholder]** — quit the app with a session waiting, reopen, show the same session still in the needs-you list marked "resume."
-<!-- ![Survives restart](docs/media/restart.png) -->
 
 ---
 
@@ -37,8 +41,7 @@ The **beacon bar** across the top is a live status board: which sessions need yo
 
 Sessions live in **hard-separated categories** — personal, business, per-client, however you define them — with a rail to switch between them and set each one's color, emoji, and short label. A blocking child inherits its parent's category, so a subtree of work can't accidentally drift across the boundary between, say, two different clients.
 
-> **📸 [placeholder]** — the category rail with a few categories, switching between them, and the category editor open showing color / emoji / label.
-<!-- ![Categories](docs/media/categories.png) -->
+![The category editor: color, emoji, short label, and per-category notification overrides](screenshots/category-editor.png)
 
 ---
 
@@ -48,8 +51,7 @@ Spawn a **child session** to go work on one thing without staining the context y
 
 Resume one member of a task tree after a restart and the **whole family comes back up** — parent, children, and siblings — so the sessions that talk to each other are all live again, not stranded half-dormant.
 
-> **📹 [placeholder]** — spawn a blocking child from a parent with a handoff note, show the typed edge in the tree, then restart and show the family resuming together.
-<!-- ![Session tree](docs/media/tree.png) -->
+![Spawning a blocking child session, with a handoff note to start from](screenshots/spawn-blocking-child.png)
 
 ---
 
@@ -59,8 +61,17 @@ Sessions can message each other through the app over a filesystem mailbox — a 
 
 This is the "Human In The Middle" idea (see below) made concrete: you sit at a node in the mesh, able to read, hold, or inject every message.
 
-> **📹 [placeholder]** — a parent messaging a child ("@child do X"), the child replying, and the message log showing both hops as delivered.
-<!-- ![Awareness bus](docs/media/bus.png) -->
+A handoff, start to finish. The parent sends the work down:
+
+![A parent session sending a request to its child](screenshots/parent-requests-child.png)
+
+The child receives it on its own next turn and starts:
+
+![The child session receiving the request and beginning work](screenshots/child-received-request.png)
+
+And the exchange in full:
+
+![The full transcript of the exchange between parent and child](screenshots/parent-child-transcript.png)
 
 ---
 
@@ -70,13 +81,23 @@ This is the "Human In The Middle" idea (see below) made concrete: you sit at a n
 
 **Fleet activity.** Every subagent your sessions spawn, what it's working on, and whether it's running, done, or stalled — grouped by the session that owns it. A quiet collapsed line ("3 running") that expands into the full picture.
 
-> **📸 [placeholder]** — the fleet-activity panel expanded, showing a couple of sessions with their subagents, some running (pulsing), some done.
-<!-- ![Fleet activity](docs/media/fleet.png) -->
+![The activity panel listing a session's subagents](screenshots/activity-subagents.png)
 
 **The activity strip.** A per-session timeline of the last few minutes, at adjustable granularity (5m / 10m / 25m) — a glanceable heartbeat of the whole fleet.
 
-> **📸 [placeholder]** — the activity strip with several sessions' swimlanes, and the granularity selector switching between 5m / 10m / 25m.
-<!-- ![Activity strip](docs/media/strip.png) -->
+![Timeline swimlanes, popped out into a floating card](screenshots/timeline-popout.png)
+
+---
+
+## See what a session produced
+
+A drawer above the terminal collects the files the open session created. Images, SVG, audio, syntax-highlighted code, Markdown, and RTF render in place; PDFs, Office documents, and HTML open in your default app. The list is sortable by name or recency and every entry can be revealed in Finder.
+
+![The artifact drawer rendering Markdown a session produced](screenshots/artifacts-markdown.png)
+
+Code and data files render with syntax highlighting, and anything the app can't display in place offers to open externally instead.
+
+![The artifact drawer showing a file it will open in an external application](screenshots/artifacts-open-externally.png)
 
 ---
 
@@ -84,8 +105,9 @@ This is the "Human In The Middle" idea (see below) made concrete: you sit at a n
 
 Launch a session against a specific named **Anthropic API key** so its usage bills to that key instead of your subscription, and pick its **model and context window** (including 1M-context variants) right from the spawn dialog. Keys are stored encrypted in the macOS Keychain and never shown again after entry.
 
-> **📸 [placeholder]** — the new-session dialog showing model, effort, and context-window selectors; and the API-keys section of settings.
-<!-- ![Per-session billing](docs/media/keys.png) -->
+![The New Session composer: name, category and folder on the left; model, effort, context and permission mode on the right](screenshots/new-session-modal.png)
+
+![Settings, showing named API key entry](screenshots/settings-api-keys.png)
 
 ---
 
@@ -99,8 +121,7 @@ An optional control agent that writes a plain-English line explaining *why* each
 - **Pausable.** Stop it from its own window without tearing down the setup.
 - **Read-only.** It explains; it takes no action on any session.
 
-> **📸 [placeholder]** — the Arbiter console expanded: a session's why-line inline, the spend readout ($x.xx / cap), and the pause / read-now controls.
-<!-- ![The Arbiter](docs/media/arbiter.png) -->
+![The Arbiter panel: running spend against its daily cap, and a log of each run](screenshots/arbiter-log.png)
 
 ---
 
