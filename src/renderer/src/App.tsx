@@ -3607,10 +3607,16 @@ const CONTEXT_OPTS = [
 ]
 // Claude Code selects the 1M-context variant of a model with a `[1m]` suffix on
 // the model string (`--model opus[1m]`). It only attaches to a model that has a
-// 1M variant — Haiku doesn't, and "Default" gives us no model string to suffix.
+// 1M variant, and "Default" gives us no model string to suffix.
+// NOT_1M is the exclusion list: Haiku has never had a 1M variant, and Sonnet no
+// longer does (observed 2026-07-24). Note the CLI does NOT error on a suffix the
+// model can't honor — `--model sonnet[1m]` runs clean and the transcript still
+// records plain claude-sonnet-5 — so an unsupported entry here would silently do
+// nothing, which is exactly the dead-control we hide rather than offer.
+const NOT_1M = new Set(['haiku', 'sonnet'])
 function supports1m(model: string, customModel: string): boolean {
   if (model === '__custom__') return customModel.trim() !== ''
-  return model !== '' && model !== 'haiku'
+  return model !== '' && !NOT_1M.has(model)
 }
 function withContext(model: string, ctx: string): string {
   if (!model || ctx !== '1m') return model
