@@ -376,17 +376,43 @@ const PROMPT_SIGNATURES: RegExp[] = [
 // dialog is always the most-recent paint, so an already-answered dialog still
 // sitting in scrollback is pushed past this window by the output that follows it.
 const PROMPT_TAIL_CHARS = 1800
+// How much RAW buffer to render before taking the tail. Repaints are differential,
+// so the most recent frame can be a few hundred bytes that touch only the changed
+// cells — the legible copy of a line may be one or two frames back. Measured final
+// frames run ~2.4-3KB, so this is roughly ten frames of headroom.
+const RAW_TAIL_BYTES = 32000
 
-// Strip CSI/OSC escapes and stray C0 control bytes, keeping \n and \t so the
-// tail's line structure survives. Signature phrases are single-line prose Claude
-// renders in one color, so no escape ever lands mid-phrase to break a match.
-function stripAnsi(s: string): string {
+// Flatten a raw PTY tail into the text a human would SEE, then match against that.
+//
+// This must honour cursor motion, not delete it. Claude Code repaints its dialogs
+// as DIFFERENTIAL cell updates: it skips over unchanged cells with an absolute
+// column jump (CSI…G / CSI…C) rather than emitting spaces, and moves between rows
+// with cursor-down (CSI…A/B/E/F/d/H) rather than a newline. A stripper that drops
+// every CSI therefore fuses words and destroys line breaks —
+//   "Tab\x1b[22Gto amend"  ->  "Tabto amend"
+//   "Do\x1b[5Gyou\x1b[9Gwant" -> "Doyouwant"
+// — so signature phrases stop matching text that is plainly on screen. It shows up
+// intermittently, because whether a given space survives depends on what the
+// previous frame had in those cells, and it correlates with tall churning frames
+// (a long diff), which produce far more skip-jumps. That was the real cause of
+// permission gates vanishing from the needs-you bar while still on screen.
+//
+// So: column motion becomes a SPACE, row motion becomes a NEWLINE, everything else
+// non-printing is dropped. Order matters — the motion rules must run before the
+// generic CSI rule that would otherwise eat them.
+function renderTail(s: string): string {
   return s
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '') // OSC … BEL/ST
-    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '') // CSI … final byte
+    .replace(/\x1b\[[0-9;]*[GC]/g, ' ') // CHA / CUF — skipped cells are whitespace
+    .replace(/\x1b\[[0-9;]*[ABEFdH]/g, '\n') // row motion — a line break
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '') // any other CSI
     .replace(/\x1b[()][0-9A-Za-z]/g, '') // charset select
     .replace(/\x1b[@-Z\\-_]/g, '') // 2-char C1
+    .replace(/\r/g, '\n')
     .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '') // other C0 (keeps \t=09, \n=0a)
+    .replace(/[ \t]+/g, ' ') // collapse the runs the jumps produced
+    .replace(/ *\n[ \t]*/g, '\n')
+    .replace(/\n{3,}/g, '\n\n') // keep ONE blank line — dialog.ts uses it as a delimiter
 }
 
 // True if the managed terminal is currently showing an interactive dialog. Slice
@@ -398,7 +424,7 @@ function stripAnsi(s: string): string {
 // Degrades safely to undefined if Claude changes the wording (coarse state wins).
 function detectInteractivePrompt(buffer: string): AttentionKind | undefined {
   if (!buffer) return undefined
-  const tail = stripAnsi(buffer.slice(-16000)).slice(-PROMPT_TAIL_CHARS)
+  const tail = renderTail(buffer.slice(-RAW_TAIL_BYTES)).slice(-PROMPT_TAIL_CHARS)
   if (PROMPT_SIGNATURES.some((re) => re.test(tail))) return 'permission'
   if (/Enter to select/i.test(tail) && /to navigate/i.test(tail)) return 'question'
   return undefined
@@ -409,7 +435,7 @@ function detectInteractivePrompt(buffer: string): AttentionKind | undefined {
 // nothing clean is isolated, so the caller falls back to a coarse label.
 function extractDialogCommand(buffer: string): string | undefined {
   if (!buffer) return undefined
-  return parseDialogCommand(stripAnsi(buffer.slice(-16000)).slice(-PROMPT_TAIL_CHARS))
+  return parseDialogCommand(renderTail(buffer.slice(-RAW_TAIL_BYTES)).slice(-PROMPT_TAIL_CHARS))
 }
 
 // The question a turn-ended session is waiting on, or undefined when its last
