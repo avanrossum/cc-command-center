@@ -3394,10 +3394,13 @@ select.cat-in {
 .body {
   position: relative;
 }
+/* Above .ov (40) so the companion stays visible beside the overview, but BELOW
+   .floatcard (45) — a popped-out card is a floating window and must not slide
+   under the panel. Modal scrims (46) still cover everything. */
 .companion,
 .comp-spine {
   position: relative;
-  z-index: 45;
+  z-index: 44;
 }
 .ov {
   position: absolute;
