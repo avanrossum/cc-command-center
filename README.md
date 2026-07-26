@@ -20,7 +20,7 @@ Most of this app is one answer to that question — externalize the state your w
 
 ## See the whole fleet at a glance
 
-The **beacon bar** across the top is a live status board: which sessions need you, and why. A session surfaces when it is parked on a permission dialog, when it asked you a question, or when it is blocked on an unfinished child. Sessions that are just working stay quiet.
+The **beacon bar** across the top is a live status board: which sessions need you, and why. A session surfaces when it is parked on a permission dialog, when it asked you a question, or when it is blocked on an unfinished child. Sessions that are just working stay quiet. The tally counts the whole fleet no matter which category you happen to be looking at.
 
 ![The needs-you board listing four sessions, each with the reason it is waiting](screenshots/needs-you-four-states.png)
 
@@ -28,26 +28,67 @@ A single row carries the substance of the ask — here, the exact command a sess
 
 ![A needs-you row for a session parked on a permission prompt, showing its command](screenshots/needs-you-permission-gate.png)
 
-**Zoom out to the whole fleet.** `⌘⇧E` opens the overview: every active session as a tile outlined in its state color, sorted so the ones that need you land first. Click a tile to drop into that session.
+**A board for when several things need you at once.** The needs-you set also opens as a docked pane of cards, scoped to the category you're in or to the whole fleet. Cross-category cards carry their category's color so you can tell client work from personal at a glance, and each one shows how much of its context window the session has burned.
+
+**Nothing you haven't looked at disappears.** Every needs-you moment is written to a ledger, keyed by a fingerprint stable enough that a dialog repainting itself stays one gate rather than becoming five. It marks itself seen when you focus the session, resolves itself once you've handled it, and survives a restart in between.
+
+**Zoom out to the whole fleet.** `⌘⇧E` opens the overview: every active session as a tile outlined in its state color, sorted by urgency so permission gates and questions land top-left and tiles animate to their new slots as state changes. The outline color and the sort ride the live 1.5-second snapshot, so the color is trustworthy even though the thumbnail picture underneath it is only periodic. Click a tile to close the grid, drop into that session, and land in its category with its row highlighted.
 
 ![The overview grid: four sessions as tiles, each outlined in its state color](screenshots/overview-grid.png)
 
-**It survives a restart.** Close the app mid-flow, reopen it, and the sessions that were waiting on you are *still there* in the needs-you list — dimmed, tagged "resume," ready to pick back up. You don't have to remember what you were in the middle of; the app remembers for you.
+The grid shows what's in motion. Idle sessions are off by default behind a toggle that remembers your choice, and a busy fleet caps at 24 tiles with a "+N more" count rather than shrinking into illegibility.
 
+**It survives a restart.** Close the app mid-flow, reopen it, and the sessions that were waiting on you are *still there* in the needs-you list — dimmed, tagged "resume," ready to pick back up. The app reopens the category and session you were last in, too. You don't have to remember what you were in the middle of; the app remembers for you.
+
+**Tell me when I'm looking elsewhere.** Optional macOS notifications cover three classes — needs permission, your turn or a question, finished — with a global switch and per-category overrides, off until you turn them on. They never fire while the app is focused, fire once per event, and hold a per-session cooldown, so a session on another monitor can reach you without a wall of banners. Clicking one activates the app, opens that exact session, switches to its category, and highlights the row.
 
 ---
 
 ## Keep separate work separate
 
-Sessions live in **hard-separated categories** — personal, business, per-client, however you define them — with a rail to switch between them and set each one's color, emoji, and short label. A blocking child inherits its parent's category, so a subtree of work can't accidentally drift across the boundary between, say, two different clients.
+Sessions live in **hard-separated categories** — personal, business, per-client, however you define them — with a rail to switch between them and set each one's color, emoji, and short label. Drag a cell to reorder the rail into whatever shape your week actually has. A blocking child inherits its parent's category, so a subtree of work can't accidentally drift across the boundary between, say, two different clients.
+
+Notifications are per category as well: any class can be overridden where it matters and inherit the global setting everywhere else, so personal work stays quiet while a client category is loud.
 
 ![The category editor: color, emoji, short label, and per-category notification overrides](screenshots/category-editor.png)
 
 ---
 
+## Start sessions the way you want them
+
+**Sessions you already have show up on their own.** The app scans the Claude Code session registry a few times a second and verifies each PID is a genuinely live `claude` process — the command and its start time both have to match, so a recycled PID can't impersonate a session that died. Anything you started in any terminal appears here and becomes manageable without relaunching it.
+
+**Sessions you start here get a real terminal the app owns.** A managed launch spawns `claude` under a PTY reconciled to a stable session id, which is what makes injected prompts, cross-session messages, and remembered launch flags possible. Adopted sessions are visible and watchable; app-launched ones are also addressable.
+
+**One dialog instead of a hand-typed command.** The composer sets name, category, and folder — with a recent-folders list — on one side, and how the session runs on the other:
+
+- **Model and effort.** A model dropdown with a Custom-id field, effort from low to max, and "ultracode," which maps to the top effort tier and seeds a standing workflow-orchestration instruction. Levels that would do nothing on the model you picked are hidden, so the UI never offers you a dead setting.
+- **Permission mode.** Start in the posture you want — Default, Plan, Accept edits, Auto, Don't ask, Manual, or Bypass all. Bypass is never remembered as a sticky flag, so it can't quietly disable your checks on some later resume.
+- **Context window.** The 1M variants are one picker away, enabled only for models that have one, so you opt in without knowing or misapplying the model-suffix trick.
+- **Initial instructions.** A first message delivered once the session's input is actually up, so it starts on your task instead of sitting at an empty prompt.
+- **Extra CLI flags.** A free-text field appended after the structured arguments, so what you type wins — `--add-dir` and friends. It is never remembered, so it can't re-inject something like `--continue` on a resume.
+
+![The New Session composer: name, category and folder on the left; model, effort, context and permission mode on the right](screenshots/new-session-modal.png)
+
+**Bill it your way.** Launch a session against a specific named **Anthropic API key** so its usage bills to that key instead of your subscription. The key is fetched at runtime from an owner-only local daemon and re-applied on resume, so client work or unattended automation can run metered while everything else stays on subscription. Keys are stored encrypted in the macOS Keychain and never shown again after entry.
+
+![Settings, showing named API key entry](screenshots/settings-api-keys.png)
+
+**The settings you launched with come back.** `claude --resume` drops model, effort, context, and permission mode, so the app stores those four per session and rebuilds them into the command line. Tick "always use these flags" and resumes are silent; otherwise a small gate shows you what it's about to re-apply, and per-session Launch settings let you edit or clear them.
+
+**A resumed session isn't a blank screen.** About a thousand lines of scrollback are kept per session and repainted the moment you open it, so the prior conversation is there while `--resume` spins up. If the underlying transcript is gone, you get a recovery card offering to start fresh in the same place or drop the session from the list, instead of a resume that fails in a confusing way.
+
+**Removing a session actually removes it.** Terminating one kills the PTY, purges the dead session files, cascades the registry node, edges, gates, and event log, and deny-lists the id so a ghost row can't re-adopt itself. Remove a subtree and the confirmation names the children it will take with it, so nothing is left running unattached.
+
+![The session context menu: move to another category, rename, launch settings, spawn a child, re-parent, and remove from list](screenshots/session-context-menu.png)
+
+---
+
 ## Structure work as a tree
 
-Spawn a **child session** to go work on one thing without staining the context you're in — seeded with a handoff note carrying just enough to pick up the idea. Links are typed: a **blocking** child means the parent isn't done until the child is; a **tangential** child is a decoupled side-exploration that never blocks the parent.
+Spawn a **child session** to go work on one thing without staining the context you're in — seeded with a handoff note carrying just enough to pick up the idea. `⌘K` spawns one straight from whatever you have selected in the terminal. Links are typed: a **blocking** child means the parent isn't done until the child is; a **tangential** child is a decoupled side-exploration that never blocks the parent.
+
+The session list renders the tree, indented, with a solid line for a blocking edge and a dotted one for a tangential offshoot, so you can see which session spawned which and tell a hard dependency from an independent spin-off. A parent whose blocking child is unfinished computes as blocked and names the child it's waiting on, rather than sitting there reading as idle.
 
 Resume one member of a task tree after a restart and the **whole family comes back up** — parent, children, and siblings — so the sessions that talk to each other are all live again, not stranded half-dormant.
 
@@ -57,7 +98,11 @@ Resume one member of a task tree after a restart and the **whole family comes ba
 
 ## Sessions that talk to each other
 
-Sessions can message each other through the app over a filesystem mailbox — a parent hands its child a task, the child reports back when done. Delivery is **trust-gated per link**: you bless a link once, and after that messages flow without approving each one, but every hop is written to a message log with its outcome, and a global kill switch stops all of it instantly.
+Sessions can message each other through the app over a filesystem mailbox — a parent hands its child a task, the child reports back when done. Every app-spawned session gets an outbox and a one-time preamble teaching it to write there; the app drains outboxes on each scan and routes each message up to the parent or down to a named child along the edge graph. Nothing is installed inside either session to make that work: no skill, no MCP server, no channel daemon, just the tools Claude Code already has.
+
+Delivery is **trust-gated per link**: you bless a link once, and after that messages flow without approving each one, but trust is re-checked at the moment of delivery, so untrusting a link drops what's already in flight. Every hop is written to a message log with its outcome — delivered, held, dropped, expired, self-exit — and a global kill switch stops all of it instantly without losing anything.
+
+A message is injected only when the target session is affirmatively free, and buffered until it is, so it arrives as a clean new turn instead of landing in the middle of typed input.
 
 This is the "Human In The Middle" idea (see below) made concrete: you sit at a node in the mesh, able to read, hold, or inject every message.
 
@@ -73,25 +118,49 @@ And the exchange in full:
 
 ![The full transcript of the exchange between parent and child](screenshots/parent-child-transcript.png)
 
+**Addressing, exits, and guards.** `@"Child Name"` routes to that child; plain text routes up to the parent. A session can end its own terminal with an exact exit sentinel when its work is done. Per-link rate caps and a hop cap bound how far a ping-pong between two sessions can run before the app stops it.
+
+**Unattended work without a dialog on every hop.** A composer checkbox launches a child in auto permission mode — sticky across resume — so the routine gates like writing to its own outbox self-approve, and a chain of sessions can run overnight without parking on a prompt you aren't there to clear.
+
+**You can send, too.** Type a prompt into one managed session from outside it, or broadcast the same prompt to many at once over the same transport, without switching to each terminal in turn.
+
+![The send-a-prompt dialog, with two of four sessions checked as broadcast targets](screenshots/broadcast-modal.png)
+
 ---
 
 ## Know what's actually happening
 
-**Hook-driven status.** Sessions report their own state through Claude Code hooks, which the app fuses with a transcript reader and a terminal-buffer scan into one honest signal: working / your turn / needs approval / idle. Stale signals age out, so nothing gets pinned in the wrong state.
+**Hook-driven status.** Sessions report their own state through Claude Code hooks, which the app fuses with a transcript reader, a live scan of the terminal buffer, and the edge graph into one honest signal per session: working / your turn / needs approval / blocked / done / idle. Most-urgent-wins, stale signals age out, and nothing is installed inside the session to produce any of it.
 
-**Fleet activity.** Every subagent your sessions spawn, what it's working on, and whether it's running, done, or stalled — grouped by the session that owns it. A quiet collapsed line ("3 running") that expands into the full picture.
+**Permission dialogs don't read as work.** In the transcript a session parked on an approval looks busy, so the app also reads the tail of the raw terminal buffer for the footer lines a permission prompt ends on. A frozen session surfaces amber instead of busy-green, and clears the instant you answer.
+
+**No strobing.** A higher-urgency state is held for a few seconds of consecutive calmer readings before it releases, so the display stays steady — but a genuine transition, like a newer hook event arriving after you approve something, releases immediately.
+
+**"Done — your move."** A session is marked done only when its turn ends on a statement, it finished after the last time you looked at it, and you aren't looking at it now. Sessions you set running unattended tell you they finished; sessions you're sitting in don't nag you about turns you just watched happen. A genuine question is separated from a soft turn-end, gets its own badge and "Asked you" label, and sorts above the softer stuff.
+
+![Two needs-you cards: one session that asked a question, and one tagged "done — your move"](screenshots/needs-you-done-and-turn.png)
+
+**Fleet activity.** Every subagent your sessions spawn, every workflow run with its progress through the steps, every background shell task — what it's working on, and whether it's running, done, or stalled — grouped by the session that owns it, so a session running a twenty-minute build doesn't read as idle. A quiet collapsed line ("3 running") that expands into the full picture. The session you're viewing gets its full ledger at the top; every other session collapses to a one-line rollup chip you can click to switch to it.
 
 ![The activity panel listing a session's subagents](screenshots/activity-subagents.png)
 
-**The activity strip.** A per-session timeline of the last few minutes, at adjustable granularity (5m / 10m / 25m) — a glanceable heartbeat of the whole fleet.
+**The activity strip.** A per-session timeline of the last few minutes, at adjustable granularity (5m / 10m / 25m) — a glanceable heartbeat of the whole fleet, showing how long something has been working and when it flipped to your turn. Timeline and Activity each pop out into a draggable floating card that stays put when the sidebar is hidden, and the layout is remembered.
 
 ![Timeline swimlanes, popped out into a floating card](screenshots/timeline-popout.png)
 
 ---
 
+## Know how much room is left
+
+Each session row and terminal show how much of the model's context window is used, parsed from the session's own status-line payload, with a warning as it approaches auto-compact — so you can see which sessions are about to compact before one does it mid-task. This reads from the status line the app installs, so sessions it adopted from another terminal show unknown until they're relaunched here.
+
+Alongside it, a dual-bar readout of your account's 5-hour and 7-day rate-limit usage with a live countdown to the next reset. It's the number you want before you fan out six sessions at once.
+
+---
+
 ## See what a session produced
 
-A drawer above the terminal collects the files the open session created. Images, SVG, audio, syntax-highlighted code, Markdown, and RTF render in place; PDFs, Office documents, and HTML open in your default app. The list is sortable by name or recency and every entry can be revealed in Finder.
+A drawer above the terminal collects the files the open session created. Images, SVG, audio, syntax-highlighted code, Markdown, and RTF render in place, each behind its own error boundary so one bad file can't take the drawer down; PDFs, Office documents, and HTML open in your default app on purpose. The list is sortable by name or recency with the choice remembered, shows a kind badge and a relative modified time per entry, and every entry can be opened or revealed in Finder.
 
 ![The artifact drawer rendering Markdown a session produced](screenshots/artifacts-markdown.png)
 
@@ -99,29 +168,37 @@ Code and data files render with syntax highlighting, and anything the app can't 
 
 ![The artifact drawer showing a file it will open in an external application](screenshots/artifacts-open-externally.png)
 
+Detection is passive and scoped to the session: file paths from that session's own transcript, plus a shallow scan of its working directory for recent binary files a Bash step wrote without ever naming. Two sessions working in the same project directory still each show their own output.
+
 ---
 
-## Bill it your way
+## Make the terminal yours
 
-Launch a session against a specific named **Anthropic API key** so its usage bills to that key instead of your subscription, and pick its **model and context window** (including 1M-context variants) right from the spawn dialog. Keys are stored encrypted in the macOS Keychain and never shown again after entry.
+- **Per-terminal color themes.** Nine iTerm-style schemes, each with an accent that doubles as the session's identity swatch, set per session and kept across resume — color-code your sessions and a glance tells you which one you're in.
+- **Terminal font and size.** A settings tab for family and size, with the family list filtered to genuinely monospaced faces so a proportional font can't wreck the TUI's alignment.
+- **Drag a file in.** Drop files or folders from Finder onto a terminal to insert their full paths at the cursor.
+- **`⌘`-click a path to open it.** Paths in terminal output are recognized — including macOS paths with spaces, resolved mid-sentence to the longest prefix that actually exists — and open in whatever the OS thinks should handle them.
+- **A prompt composer.** An optional multi-line box under the terminal where Enter makes a newline and `⌘Return` sends, with the draft cleared on session switch so one session's half-written prompt can't be sent to another.
+- **Hide unmanaged sessions.** A toggle drops live Claude Code sessions running in terminals the app doesn't manage, so the fleet view reflects only what you're driving from here.
+- **The window reopens where you left it.** Position, size, and maximized state persist, and are only restored if the saved bounds land on a display that's currently connected.
 
-![The New Session composer: name, category and folder on the left; model, effort, context and permission mode on the right](screenshots/new-session-modal.png)
-
-![Settings, showing named API key entry](screenshots/settings-api-keys.png)
+Settings are tabbed — General, Terminal, Notifications, Arbiter, Keys — and every build carries a `MAJOR.MINOR.PATCH-shorthash` identity, shown in the top bar and the About window, so a bug report maps to an exact commit.
 
 ---
 
 ## The Arbiter (optional)
 
-An optional control agent that writes a plain-English line explaining *why* each session is waiting on you — turning "needs approval" into "wants to delete the migrations folder." It runs on **metered API billing**, not your subscription, and it is built to never surprise you:
+An optional control agent that writes a plain-English line explaining *why* each session is waiting on you — turning "needs approval" into "wants to delete the migrations folder." The line renders inline on the row. It runs on **metered API billing**, not your subscription, and it is built to never surprise you:
 
 - **Off by default.** Nothing runs until you enable it and point it at a key.
-- **Opt-in privacy, per category.** It reads only categories you explicitly tick. Everything else sends state alone — no session content leaves your machine.
-- **A hard spend cap.** You set a daily ceiling; it *stops* at the cap, it doesn't just warn. Spend is tracked and always visible as it accrues.
+- **Opt-in privacy, per category.** It reads only categories you explicitly tick. Everything else sends state and shape alone, with the session's name replaced by a stable handle — no session content leaves your machine.
+- **A hard spend cap.** You set a daily ceiling; it *stops* at the cap, it doesn't just warn. Every billable call records its usage as cost at standard pricing, and spend is always visible as it accrues.
 - **Pausable.** Stop it from its own window without tearing down the setup.
 - **Read-only.** It explains; it takes no action on any session.
 
 ![The Arbiter panel: running spend against its daily cap, and a log of each run](screenshots/arbiter-log.png)
+
+It has shipped but has not yet been run against a real API key end to end. Treat the first run as the test it is.
 
 ---
 
@@ -146,7 +223,7 @@ This is a single-user desktop app; the security boundary is your user account. I
 - **API keys are encrypted at rest** with Electron `safeStorage` (macOS Keychain). If secure storage is unavailable, the app refuses to store the key rather than falling back to plaintext. A key is never shown again after entry and never sent to the renderer process.
 - **Per-session key access goes through a local, owner-only (`0600`) socket** using a per-session capability token that's revoked when the session exits — the session gets a token, not the key.
 - **Edits to `~/.claude/settings.json` are conservative**: backed up first (a hard precondition), atomic, malformed input refused rather than repaired, unrelated keys preserved, and the auto-granted permission rule scoped to the mailbox trees only.
-- **No telemetry.** The app phones home to nothing. The awareness bus is local files; the message log is local. The only outbound network call is the optional Arbiter, to the Anthropic API, under your own key.
+- **No telemetry.** The app phones home to nothing. The awareness bus is local files; the message log is local. The only outbound network calls are the optional Arbiter, to the Anthropic API under your own key, and the update check against the public releases repo.
 - **Known residual risk, stated plainly:** a session running on a metered API key can read that key — and so can any code that session runs, including a shell command from prompt injection. This is inherent to giving a session a credential, not a bug a patch removes. Use narrowly-scoped keys with a Console spend limit for anything untrusted, and rotate promptly. Full discussion in [`SECURITY.md`](SECURITY.md).
 
 **Reporting a vulnerability:** open a private GitHub Security Advisory (Security → Advisories → Report a vulnerability). Don't open a public issue for a vulnerability.
@@ -161,7 +238,9 @@ This is a single-user desktop app; the security boundary is your user account. I
 
 ## Install
 
-Download the signed and notarized `.dmg` from the [Releases](../../releases) page — the recommended path. Or build from source below.
+Download the signed and notarized `.dmg` from the [Releases](https://github.com/avanrossum/claude-command-center-releases/releases) page — the recommended path. Drag CC Command Center to Applications and launch it; it finds and adopts whatever Claude Code sessions you already have running.
+
+Updates come from that same public releases repo, so the app carries no token. It checks after launch and once a day, shows the release notes for each version, and downloads nothing until you say so.
 
 ## Build from source
 
@@ -178,7 +257,7 @@ npm run dist     # build and package a signed .dmg / .zip into release/
 
 ## Expectations
 
-This is a solo project. It integrates with parts of Claude Code that are not a public API — the transcript format, the session registry files, hook payload shapes, terminal rendering. Those change between Claude Code releases without notice, and breakage after an upstream release is expected and normal, not a sign the project is abandoned.
+This is a solo project, in beta and under active development. It integrates with parts of Claude Code that are not a public API — the transcript format, the session registry files, hook payload shapes, terminal rendering. Those change between Claude Code releases without notice, and breakage after an upstream release is expected and normal, not a sign the project is abandoned.
 
 Pull requests are welcome, especially compatibility fixes for new Claude Code versions. There is no support SLA; issues may sit.
 
