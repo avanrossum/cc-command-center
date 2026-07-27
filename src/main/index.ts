@@ -1105,6 +1105,14 @@ function pushSessions(): void {
 // flag (a slow call cannot stack). Nothing here can block the scan — the run is
 // fire-and-forget and only touches the cache when it lands.
 const arbiterGloss = new Map<string, string>()
+// sessionId -> the per-session input key its CURRENT gloss was paid for. The batch
+// fingerprint below only answers "is this exact question already answered"; it says
+// nothing about the individual sessions in it, so any change to the needs-you SET
+// used to re-send every member, re-glossing sessions whose own input hadn't moved.
+// This map makes the skip per session: unchanged session, no second charge.
+const arbiterGlossKey = new Map<string, string>()
+const arbiterSessionKey = (i: ArbiterSessionInput): string =>
+  `${i.sessionId}|${i.state}|${i.kind ?? ''}|${i.detail ?? ''}`
 let arbiterLastInputs: ArbiterSessionInput[] = []
 // Two fingerprints, doing two different jobs. Conflating them caused both of the
 // scheduler's original bugs: `answered` is what we have already PAID for, while
@@ -1137,14 +1145,22 @@ function scheduleArbiter(inputs: ArbiterSessionInput[]): void {
     arbiterStatus = 'paused'
     return
   }
-  const fp = arbiterInputFingerprint(inputs)
+  // Ask only about sessions whose own input has changed since their last gloss.
+  // A session joining or leaving the needs-you list must not re-charge for the
+  // others, which is what a whole-batch comparison did.
+  const fresh = inputs.filter((i) => arbiterGlossKey.get(i.sessionId) !== arbiterSessionKey(i))
+  if (fresh.length === 0) {
+    arbiterStatus = 'idle'
+    return // everything on screen is already glossed
+  }
+  const fp = arbiterInputFingerprint(fresh)
   if (fp === arbiterFp) return // already paid for this exact question
   if (fp === arbiterPendingFp) return // already scheduled or in flight — do NOT re-arm
   arbiterPendingFp = fp
   if (arbiterTimer) clearTimeout(arbiterTimer)
   arbiterTimer = setTimeout(() => {
     arbiterTimer = null
-    void runArbiterNow(inputs, fp)
+    void runArbiterNow(fresh, fp)
   }, ARBITER_DEBOUNCE_MS)
 }
 
@@ -1179,9 +1195,14 @@ async function runArbiterNow(inputs: ArbiterSessionInput[], fp: string): Promise
     if (res.billed) arbiterFp = fp
 
     if (res.ok && !res.skipped) {
-      for (const [id, g] of Object.entries(res.glosses)) arbiterGloss.set(id, g)
+      for (const [id, g] of Object.entries(res.glosses)) {
+        arbiterGloss.set(id, g)
+        const inp = inputs.find((i) => i.sessionId === id)
+        if (inp) arbiterGlossKey.set(id, arbiterSessionKey(inp)) // don't pay for this one again
+      }
       const live = new Set(inputs.map((i) => i.sessionId))
       for (const id of [...arbiterGloss.keys()]) if (!live.has(id)) arbiterGloss.delete(id)
+      for (const id of [...arbiterGlossKey.keys()]) if (!live.has(id)) arbiterGlossKey.delete(id)
       const missing = inputs.length - Object.keys(res.glosses).length
       if (missing > 0) appendArbiterLog('run', `${missing} not answered — left unglossed`)
     }
@@ -2529,6 +2550,7 @@ ipcMain.handle('arbiter:setEnabled', (_e, on: boolean) => {
     // Turning it off clears the cached glosses immediately — a stale line
     // attributed to an agent you just disabled is worse than none.
     arbiterGloss.clear()
+  arbiterGlossKey.clear()
     arbiterFp = ''
     arbiterStatus = 'off'
   }
@@ -2599,6 +2621,7 @@ ipcMain.handle('cat:setArbiterContext', (_e, id: number, on: boolean) => {
   // command the user has just withdrawn permission to send must not keep
   // rendering — clearing all of them is cheap and cannot under-clear.
   if (!on) arbiterGloss.clear()
+  arbiterGlossKey.clear()
   appendArbiterLog('config', `category context ${on ? 'granted' : 'revoked'}`)
   pushSessions()
   return true
@@ -3233,6 +3256,7 @@ ipcMain.handle('apikeys:remove', (_e, id: number) => {
     setAppState('arbiterKeyId', '')
     setAppState('arbiterEnabled', 'false')
     arbiterGloss.clear()
+  arbiterGlossKey.clear()
     arbiterFp = ''
     arbiterPendingFp = ''
     arbiterGeneration++
