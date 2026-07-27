@@ -1,6 +1,18 @@
 {
   "versions": [
     {
+      "version": "0.20.1",
+      "date": "2026-07-26",
+      "critical": false,
+      "features": [
+        "The Arbiter no longer re-reads sessions it has already explained. It was re-sending every waiting session whenever any one of them appeared or resolved, so the same explanations were paid for repeatedly. Each session is now read once per distinct thing it's waiting on.",
+        "Permission gates stay in the needs-you bar until you actually handle them. A gate could vanish about half a minute after it appeared while the prompt was still on screen — most often when a session wanted to edit a file.",
+        "The needs-you row shows the real command or filename again instead of the generic \"wants approval\".",
+        "Popped-out panels no longer slide behind the right-hand panel.",
+        "The 1M context option is hidden for models that don't support it."
+      ]
+    },
+    {
       "version": "0.20.0",
       "date": "2026-07-23",
       "critical": false,
