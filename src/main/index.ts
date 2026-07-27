@@ -614,6 +614,42 @@ const SCAN_ONLY = process.env.CCC_SCAN_ONLY
   ? process.env.CCC_SCAN_ONLY.replace(/^~(?=$|\/)/, os.homedir())
   : null
 
+// The window title doubles as a machine-readable status line for time trackers.
+// Rize (and anything else that samples the frontmost window title) can only see
+// the app name and this string, so a static "CC Command Center" told it nothing
+// about which client or task the time belonged to. Carrying the CATEGORY is the
+// load-bearing part — that is the client/project a tracker bills against.
+//   CC Command Center — [Acme] acme-api-migration · needs approval
+// Only written when it actually changes, so a 1.5s scan doesn't churn the title.
+let lastWindowTitle = ''
+function updateWindowTitle(enriched: EnrichedSession[], cats: Category[]): void {
+  if (!win || win.isDestroyed()) return
+  const BASE = 'CC Command Center'
+  const sid = attachedKey ? terminals.get(attachedKey)?.sessionId : undefined
+  const s = sid ? enriched.find((e) => e.sessionId === sid && !e.dormant) : undefined
+  let title = BASE
+  if (s) {
+    const cat = s.categoryId !== null ? cats.find((c) => c.id === s.categoryId) : undefined
+    const catTag = cat ? `[${cat.label?.trim() || cat.name}] ` : ''
+    const state =
+      s.attention === 'permission'
+        ? 'needs approval'
+        : s.attention === 'question'
+          ? 'your turn'
+          : s.whyKind === 'done'
+            ? 'done'
+            : s.state === 'working'
+              ? 'working'
+              : s.state === 'waiting'
+                ? 'your turn'
+                : s.state
+    title = `${BASE} — ${catTag}${s.name || sid?.slice(0, 8)} · ${state}`
+  }
+  if (title === lastWindowTitle) return
+  lastWindowTitle = title
+  win.setTitle(title)
+}
+
 function snapshot(): Snapshot {
   let sessions: LiveSession[] = []
   try {
@@ -981,6 +1017,7 @@ function snapshot(): Snapshot {
   }
 
   const cats = listCategories()
+  updateWindowTitle(enriched, cats)
 
   // Feed the Arbiter exactly the set the UI calls "needs you". Wrapped because a
   // scheduling fault must never take down the scan that drives the whole app.

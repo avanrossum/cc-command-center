@@ -6,7 +6,7 @@ const COMPANY = 'MipYip, LLC'
 const COMPANY_URL = 'https://mipyip.com'
 // Source repository. Update this if the repo moves or is renamed. The link
 // opens in the user's default browser.
-const REPO_URL = 'https://github.com/avanrossum/claude-command-center'
+const REPO_URL = 'https://github.com/avanrossum/cc-command-center'
 
 let aboutWin: BrowserWindow | null = null
 // Set by installAppMenu; the About window's "Check for updates" link calls it.
