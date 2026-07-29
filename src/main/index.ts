@@ -1563,10 +1563,24 @@ function launchSession(
 // the link is trusted — injects it into the parent as a new turn when the parent
 // is free. Every hop is logged; a rate/hop guard stops runaway loops.
 const MAIL_DIR = join(os.homedir(), '.claude', 'ccc', app.isPackaged ? 'mail' : 'mail-dev')
+// Claimed-but-not-yet-delivered payloads. A message is moved here BY RENAME before
+// any routing is attempted, so there is never an instant where an in-flight message
+// has no on-disk copy. Deliberately a subdirectory of MAIL_DIR: MAIL_RULES already
+// grants `Edit(~/.claude/ccc/mail/**)`, so this needs no new permission from anyone.
+const SPOOL_DIR = join(MAIL_DIR, 'spool')
+const SPOOL_TTL_MS = 7 * 24 * 60 * 60_000 // hand-recoverable for a week, then pruned
+// Past this a spooled payload is left on disk for a human but not re-injected on
+// launch — its target has long since moved on, and re-holding it every restart
+// would replay stale mail forever.
+const SPOOL_RECLAIM_AGE_MS = 60 * 60_000
+const SPOOL_RECLAIM_MAX = 100
 const HOP_MAX = 6
 const RATE_WINDOW_MS = 60_000
 const RATE_MAX = 6
 const HELD_TTL_MS = 30 * 60_000 // a message that never becomes routable expires
+const DELIVER_TTL_MS = 30 * 60_000 // a queued message whose target never frees up
+const DELIVERY_QUEUE_MAX = 200 // back-pressure ceiling; over it, segments stay held
+const MSG_MAX_CHARS = 4000 // in-memory bound; the spool file always holds the full text
 // A session ends its OWN process by writing exactly this to its outbox — the app
 // sees it on drain and kills that PTY. (Conversationally asking a child to "exit"
 // only makes it idle; it can't terminate its own process. This gives it a lever.)
