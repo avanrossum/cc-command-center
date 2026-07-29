@@ -14,6 +14,7 @@ import {
   parseQuery,
   mayMessage,
   aliasCandidate,
+  parseAck,
 } from '../src/main/engine/mailbox'
 import type { LiveSession } from '../src/main/engine/types'
 import { buildResumeArgs, EMPTY_RESUME_FLAGS } from '../src/main/engine/resumeFlags'
@@ -178,15 +179,23 @@ check('an unknown verb is not a query', parseQuery('?WHATEVER'), undefined)
 // --- read receipts / control-sequence hygiene ---
 // The receipt lane is matched on the whole file, like the exit sentinel, so a peer
 // cannot forge a receipt (or a kill) by writing one into a message body.
-const ACK_RE = /^ACK\s+(m-\d+-\d+)$/i
 const CONTROL_RE = /\bACK\s+m-\d+-\d+\b|\[\[CCC:EXIT\]\]/gi
-const ackOf = (s: string) => ACK_RE.exec(s)?.[1]
 
-check('a bare ACK is a receipt', ackOf('ACK m-1785-7'), 'm-1785-7')
-check('case does not matter', ackOf('ack m-1785-7'), 'm-1785-7')
-check('an ACK inside prose is NOT a receipt', ackOf('please ACK m-1785-7 when done'), undefined)
-check('a trailing sentence is NOT a receipt', ackOf('ACK m-1785-7 and also hello'), undefined)
-check('a malformed id is not a receipt', ackOf('ACK nonsense'), undefined)
+check('a bare ACK is a receipt', parseAck('ACK m-1785-7')?.id, 'm-1785-7')
+check('case does not matter', parseAck('ack m-1785-7')?.id, 'm-1785-7')
+check('leading whitespace is fine', parseAck('\n  ACK m-1785-7')?.id, 'm-1785-7')
+// What sessions ACTUALLY did in the wild: acknowledged and replied in one write. The
+// first version demanded the ACK be the whole file, so none of this matched and the
+// parent got a message with "ACK m-…" stapled to the front.
+const combined = parseAck('ACK m-1785-7\n\nSession: Test 1 — status: idle')
+check('an ACK followed by a reply is a receipt', combined?.id, 'm-1785-7')
+check('...and the reply survives to be routed', combined?.rest, 'Session: Test 1 — status: idle')
+check('an ACK alone leaves no reply', parseAck('ACK m-1785-7')?.rest, '')
+check('CRLF line endings work', parseAck('ACK m-1785-7\r\nhello')?.rest, 'hello')
+// Still not a receipt: the id must lead a line of its own.
+check('an ACK inside prose is NOT a receipt', parseAck('please ACK m-1785-7 when done'), undefined)
+check('a trailing sentence on the SAME line is NOT a receipt', parseAck('ACK m-1785-7 and also hello'), undefined)
+check('a malformed id is not a receipt', parseAck('ACK nonsense'), undefined)
 // A body is sanitised on the way IN to a session, so forwarding it cannot smuggle
 // a control verb into the recipient's own outbox.
 const scrub = (s: string) => s.replace(CONTROL_RE, '[redacted]')

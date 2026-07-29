@@ -237,3 +237,20 @@ export function aliasCandidate(seed: string | null, sessionId: string): string {
   const tail = sessionId.replace(/[^a-z0-9]/gi, '').slice(0, 3).toLowerCase() || '000'
   return `${base}-${tail}`
 }
+
+// A receipt, and possibly a reply written in the same breath.
+//
+// The first version demanded that an ACK be the WHOLE file. In real use sessions did
+// the sensible thing instead — acknowledged and answered in one write — so nothing
+// matched, no receipt was recorded, and the parent received a message with a stray
+// "ACK m-…" line stapled to the front of it. The ACK is now a leading line: consumed
+// as a receipt, with whatever follows routed as an ordinary message.
+//
+// Anchored to the START of a line and alone on it, so an id merely MENTIONED inside a
+// message is still not a receipt. Delivered bodies are separately scrubbed of ACK
+// tokens, so a peer cannot plant one in text that gets forwarded.
+export function parseAck(content: string): { id: string; rest: string } | undefined {
+  const m = /^ACK[ \t]+(m-\d+-\d+)[ \t]*(?:\r?\n|$)/i.exec(content.trimStart())
+  if (!m) return undefined
+  return { id: m[1], rest: content.trimStart().slice(m[0].length).trim() }
+}

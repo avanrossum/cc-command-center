@@ -1189,13 +1189,16 @@ export function listMessages(limit = 100, previewChars = 400): MessageBrief[] {
 // Corroborate that a delivered message actually became a turn. `how` distinguishes
 // an acknowledgement the recipient wrote from one inferred out of session activity —
 // they are NOT equal evidence and the panel says which.
-export function markRead(id: string, how: string, at: number): void {
+// `by` scopes the acknowledgement to the session the message was actually sent to, so
+// one session cannot mark another's mail as read by quoting an id it happened to see.
+export function markRead(id: string, how: string, at: number, by?: string): void {
   must()
     .prepare(
       `UPDATE message SET state='read', reason=?, read_at=COALESCE(read_at, ?)
-       WHERE id=? AND read_at IS NULL AND state IN ('delivered','read')`,
+       WHERE id=? AND read_at IS NULL AND state IN ('delivered','read')
+         AND (? IS NULL OR to_session_id = ?)`,
     )
-    .run(how, at, id)
+    .run(how, at, id, by ?? null, by ?? null)
 }
 
 // Delivered but not yet corroborated. Bounded and recent-only: an old delivery whose
