@@ -722,3 +722,67 @@ On quit, persist which nodes had an open terminal + a scrollback snapshot (`@xte
 - **Terminal tabs / multiple visible** — currently one terminal visible at a time (backgrounded ptys keep running + buffer).
 - **"Blocked" status** — a parent with an unfinished blocking child should render "blocked, waiting on → child" (compute from edges + child state).
 - **Precise waiting-vs-permission** (Phase 7) — `reg:waiting` sessions currently read idle; needs a PTY/screen read.
+
+## 5. Session identity can fork underneath us (confirmed 2026-07-29)
+
+**Claude Code can change its own session id mid-life, and the app does not notice.**
+Confirmed from live data, not inferred:
+
+- The row named "RRG Deployment" is node `6b4c7512`. Its terminal is open and the
+  session is plainly alive on screen.
+- No live process carries `6b4c7512`. The process actually in that terminal registered
+  as `764c1bce`, and `764c1bce` owns the 307 KB transcript. `6b4c7512` has **no
+  transcript at all** — it never became a conversation.
+- Both nodes carry the same auto-title, in two different categories.
+
+The trigger observed was `/resume` typed inside a session and then cancelled — the
+transcript shows `Resume cancelled` and the session carried on under a new id. `/clear`
+is a likely second trigger; neither has been isolated.
+
+Three user-visible symptoms, one cause:
+
+1. **A live session shows "not running — click to resume".** Nothing live carries the
+   id the row is keyed to, so it derives as dormant while its own terminal is open.
+2. **A duplicate row appears** for the forked id, auto-named and auto-categorised, so
+   the user's name, category and edges stay stranded on the abandoned id.
+3. **The terminal shows the startup banner** rather than resumed scrollback — the tell
+   that the resume never took. Reported as "the header is different".
+
+**Where the fix goes.** `tagAdoptedTerminals` (index.ts) only ever tags a terminal keyed
+`new:<pid>` that has *no* session id yet: `if (t && !t.exited && !t.sessionId)`. It has
+no branch for "this pid's session id CHANGED". The rehoming machinery already exists —
+`term.key` is deliberately mutable for the adoption case — so the shape is to detect a
+pid whose live session id differs from its terminal's, then re-home the terminal AND
+carry the user's intent across: name, category, edges, outbox token, grants. The
+abandoned node should be retired rather than left as a dormant twin.
+
+Care required: session id is load-bearing across the registry, the mailbox, the gate
+ledger and grants, so a re-key has to move all of them or deliberately archive them.
+
+**Possibly the same root cause as a separate report:** a session "lost" after an app
+restart, described as older than 7 days overall but used that same day. Two candidates,
+not yet separated — (a) this fork, leaving the user watching an orphan whose `last_seen`
+never advanced, or (b) the dormant recency gate at index.ts:989, which drops any node
+untouched for 7 days. Note (b) measures last time the PROCESS RAN, so a session the user
+deliberately named and categorised but has not launched in a week disappears silently.
+That gate exists to bound incidental sessions; it should probably exempt deliberate ones
+(user-named, categorised, or in an edge) or use a much longer window for them.
+
+## 6. Built-in digest producers (brainstorm, not scoped)
+
+Ship a small library of producers with the app — "add an API key, enable" — that read the
+user's own sessions and call Haiku/Sonnet on a **tick while the app is open**, rather than
+via launchd like the reference LinkedIn producer.
+
+Open questions to settle before scoping:
+
+- **Each built-in needs its own cost tracker, surfaced.** The Arbiter already does
+  per-agent spend with a hard cap, a visible today/cap readout, and fail-closed
+  behaviour — extend that rather than reinvent it. Per-producer cap plus an aggregate
+  ceiling, so six cheap producers cannot quietly add up to one expensive one.
+- **Tick-while-open inverts the pattern's main promise.** A launchd producer notices
+  things while you are not there; one that only runs with the window open leaves a hole
+  in the feed over a closed weekend, and nothing distinguishes a quiet week from a shut
+  laptop. Consider emitting a "last ran" marker so the gap is visible rather than silent.
+- Whether a built-in writes to the same public `feeds/` tree (it should) and keeps its
+  private state in `~/.claude/digests/<source>/` like any other producer.
