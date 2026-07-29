@@ -228,11 +228,11 @@ Actions on an item are hints, not commands. The app reveals a path in Finder and
 anything it doesn't recognize as inert — these files are written by unattended jobs, and
 nothing in one is ever executed.
 
-**This one costs you an afternoon before it does anything.** The app ships no producers,
-because the whole point is that it doesn't need to know what your signal means. What it
-gives you back is a place for all of it that you didn't have to build a UI for.
-[How to write one](docs/digests.md) — the contract is a JSON file in a directory, in
-whatever language you like.
+**The panel is empty until something is writing to that directory.** It can't invent a
+source for you — not knowing what your signal means is the whole reason it works for any
+signal at all. What it gives you back is a place for all of it that you didn't have to
+build a UI for. [How to write a producer](docs/digests.md) — the contract is a JSON file
+in a directory, in whatever language you like.
 
 ---
 

@@ -49,7 +49,7 @@ declare global {
       updateJustUpdated: () => Promise<UpdatePayload | null>
       onUpdateAvailable: (cb: (p: UpdatePayload) => void) => () => void
       onUpdateNone: (cb: () => void) => () => void
-      onUpdateDownloading: (cb: () => void) => () => void
+      onUpdateDownloading: (cb: (p: { mode: 'now' | 'quit' }) => void) => () => void
       onUpdateProgress: (cb: (p: { percent: number }) => void) => () => void
       onUpdateStaged: (cb: () => void) => () => void
       onUpdateError: (cb: (p: { message: string }) => void) => () => void

@@ -553,6 +553,9 @@ export function App() {
   const [postUpdate, setPostUpdate] = useState<UpdatePayload | null>(null)
   const [updateDl, setUpdateDl] = useState<{
     state: 'downloading' | 'staged' | 'error'
+    // Which button started this. Downloading looks identical either way, so without
+    // it "Install on quit" reads as though the app is about to restart.
+    mode?: 'now' | 'quit'
     percent?: number
     message?: string
   } | null>(null)
@@ -623,13 +626,15 @@ export function App() {
       setUpdateAvail(p as UpdatePayload)
     })
     const offNone = window.cc.onUpdateNone(() => showFlash('You are at the latest release.'))
-    const offDownloading = window.cc.onUpdateDownloading(() =>
-      setUpdateDl({ state: 'downloading', percent: 0 }),
+    const offDownloading = window.cc.onUpdateDownloading((p) =>
+      setUpdateDl({ state: 'downloading', percent: 0, mode: p?.mode ?? 'now' }),
     )
     const offProgress = window.cc.onUpdateProgress((p) =>
-      setUpdateDl({ state: 'downloading', percent: p.percent }),
+      setUpdateDl((cur) => ({ state: 'downloading', percent: p.percent, mode: cur?.mode })),
     )
-    const offStaged = window.cc.onUpdateStaged(() => setUpdateDl({ state: 'staged' }))
+    const offStaged = window.cc.onUpdateStaged(() =>
+      setUpdateDl((cur) => ({ state: 'staged', mode: cur?.mode })),
+    )
     const offError = window.cc.onUpdateError((p) =>
       setUpdateDl({ state: 'error', message: p.message }),
     )
@@ -5308,7 +5313,7 @@ function UpdateAvailableModal({
   onRemindLater,
 }: {
   payload: UpdatePayload
-  dl: { state: 'downloading' | 'staged' | 'error'; percent?: number; message?: string } | null
+  dl: { state: 'downloading' | 'staged' | 'error'; percent?: number; message?: string; mode?: 'now' | 'quit' } | null
   onInstall: () => void
   onInstallOnQuit: () => void
   onSkip: () => void
@@ -5330,11 +5335,22 @@ function UpdateAvailableModal({
             <div className="upbar">
               <div className="upbar-fill" style={{ width: `${dl.percent ?? 0}%` }} />
             </div>
-            <div className="upprogress-l">Downloading… {dl.percent ?? 0}%</div>
+            {/* Both choices have to download first — only what happens AFTERWARDS
+                differs. Saying so is the difference between "installing on quit" and
+                what it used to look like, which was the app about to restart. */}
+            <div className="upprogress-l">
+              Downloading… {dl.percent ?? 0}%
+              {dl.mode === 'quit'
+                ? ' — the app stays open; it installs when you quit.'
+                : ' — the app will restart when this finishes.'}
+            </div>
           </div>
         )}
         {dl?.state === 'staged' && (
-          <div className="upstaged">Update downloaded — it will install when you quit the app.</div>
+          <div className="upstaged">
+            Downloaded and ready. It installs when you quit — closing this window won’t change
+            that.
+          </div>
         )}
         {dl?.state === 'error' && (
           <div className="uperror">Update failed: {dl.message}</div>
@@ -5346,16 +5362,33 @@ function UpdateAvailableModal({
             </button>
           )}
           <div className="grow" />
-          <button className="rbtn ghost" onClick={onRemindLater}>
-            Remind me later
+          {/* Once the bytes are down this dismisses a window, it does NOT call the
+              update off — so it must not keep saying "remind me later". */}
+          <button
+            className="rbtn ghost"
+            onClick={onRemindLater}
+            title={
+              dl && dl.state !== 'error'
+                ? 'Closes this window. The update carries on in the background.'
+                : undefined
+            }
+          >
+            {dl?.state === 'staged' ? 'Close' : dl?.state === 'downloading' ? 'Hide' : 'Remind me later'}
           </button>
-          <button className="rbtn" onClick={onInstallOnQuit} disabled={!!dl && dl.state !== 'error'}>
-            Install on quit
+          <button
+            className="rbtn"
+            onClick={onInstallOnQuit}
+            disabled={!!dl && dl.state !== 'error'}
+          >
+            {dl?.state === 'staged' ? 'Will install on quit ✓' : 'Install on quit'}
           </button>
+          {/* Enabled once staged: the download is already local, so this is just a
+              quit-and-relaunch. Disabling it stranded you with no way to say "actually,
+              do it now" without quitting the app by hand. */}
           <button
             className="rbtn primary"
             onClick={onInstall}
-            disabled={!!dl && dl.state !== 'error'}
+            disabled={!!dl && dl.state === 'downloading'}
           >
             Install now
           </button>

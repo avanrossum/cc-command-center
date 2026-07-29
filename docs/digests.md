@@ -5,10 +5,11 @@ them. It does not fetch anything, schedule anything, or know what any of your si
 mean. Something else decides what deserves your attention and writes it to disk; this
 reads that directory.
 
-The app ships no producers. That is the honest cost of the design: the panel is empty
-until you write something to fill it. What you get in exchange is that a producer you
-write in an afternoon, in any language, appears in the panel with no change to the app
-— including one written long after this was.
+The panel is empty until something is writing to that directory. That is the honest cost
+of the design: it can't invent a source, because not knowing what your signal means is
+exactly what lets it work for any signal at all. What you get in exchange is that a
+producer you write in an afternoon, in any language, appears in the panel with no change
+to the app — including one written long after this was.
 
 ---
 

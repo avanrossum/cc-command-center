@@ -36,7 +36,7 @@ contextBridge.exposeInMainWorld('cc', {
   updateJustUpdated: () => ipcRenderer.invoke('update:justUpdated'),
   onUpdateAvailable: (cb: (p: unknown) => void) => sub('update:available', cb),
   onUpdateNone: (cb: () => void) => sub('update:none', cb),
-  onUpdateDownloading: (cb: () => void) => sub('update:downloading', cb),
+  onUpdateDownloading: (cb: (p: { mode: 'now' | 'quit' }) => void) => sub('update:downloading', cb),
   onUpdateProgress: (cb: (p: { percent: number }) => void) => sub('update:progress', cb),
   onUpdateStaged: (cb: () => void) => sub('update:staged', cb),
   onUpdateError: (cb: (p: { message: string }) => void) => sub('update:error', cb),

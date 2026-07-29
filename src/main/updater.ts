@@ -151,7 +151,7 @@ export function downloadAndInstall(mode: 'now' | 'quit'): void {
   if (!app.isPackaged) return
   pendingInstall = mode
   autoUpdater.autoInstallOnAppQuit = mode === 'quit'
-  send('update:downloading')
+  send('update:downloading', { mode }) // the UI must distinguish 'will restart' from 'will stage'
   void autoUpdater.downloadUpdate().catch((e) => {
     send('update:error', { message: (e as Error)?.message ?? 'download failed' })
   })
