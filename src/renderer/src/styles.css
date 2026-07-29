@@ -665,12 +665,16 @@ body {
 }
 
 /* tree pane — the selected category's task tree */
+/* A column, so the session list scrolls on its own and the digests panel can dock to
+   the bottom instead of riding up on however many sessions happen to be listed. */
 .treepane {
   width: 300px;
   flex: none;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border-right: 1px solid var(--cc-border);
-  padding: 10px 12px 24px;
+  padding: 10px 12px 0;
   background: var(--cc-bg);
 }
 .newsession {
@@ -739,7 +743,10 @@ body {
 .rows {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 0 24px;
+  flex: 1 1 auto;
+  min-height: 0; /* without this a flex child refuses to shrink, and never scrolls */
+  overflow-y: auto;
 }
 .emptycat {
   padding: 9px 12px;
@@ -3829,18 +3836,24 @@ select.cat-in {
   color: var(--cc-dim);
   font-size: 10px;
 }
+/* Bounded so the panel reads as a docked footer rather than something that grows to
+   fill the rail. Floor keeps a message readable without immediately scrolling; ceiling
+   keeps the session list usable on a tall display. */
 .dg-body {
+  display: flex;
   overflow: hidden; /* the slider is wider than the panel by design */
+  max-height: clamp(360px, 40vh, 500px);
 }
 .dg-slider {
   display: flex;
   width: 300%;
+  flex: 1;
+  min-height: 0;
   transition: transform 180ms ease;
 }
 .dg-view {
   width: 33.3333%;
   flex: none;
-  max-height: 260px;
   overflow-y: auto;
 }
 .dg-view[aria-hidden='true'] {
@@ -4096,6 +4109,9 @@ select.cat-in {
   color: var(--cc-edge-blocking);
   cursor: pointer;
 }
+/* Docked footer: never scrolls with the list, full-bleed to the rail edges so the
+   top border reads as a real separation. */
 .dg-dock {
-  margin-top: auto; /* pin to the bottom of the session list */
+  flex: none;
+  margin: 0 -12px;
 }

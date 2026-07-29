@@ -3178,7 +3178,10 @@ function DigestsPanel({ sources }: { sources: DigestSource[] }): React.ReactElem
               {note}
             </div>
           )}
-          <div className="dg-slider" style={{ transform: `translateX(-${depth * 100}%)` }}>
+          {/* One panel is a THIRD of the slider, because the slider is 300% wide — a
+                transform percentage resolves against the element's own width, so
+                stepping by 100% here would skip three views at once. */}
+            <div className="dg-slider" style={{ transform: `translateX(-${(depth * 100) / 3}%)` }}>
             {/* 0 — sources */}
             <div className="dg-view" aria-hidden={depth !== 0}>
               {sources.length === 0 && (
