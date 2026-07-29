@@ -123,6 +123,36 @@ interface Edge {
   source: string
   trusted?: number
 }
+interface DigestAction {
+  label: string
+  kind: string
+  value: string
+}
+interface DigestItem {
+  id: string
+  source: string
+  file: string
+  createdAt: string
+  updatedAt: string
+  occurredAt: string
+  occurredMs: number
+  state: 'unread' | 'read' | 'dismissed' | 'kept' | 'actioned'
+  title: string
+  summary: string
+  bodyMd: string
+  score: number | null
+  severity: string | null
+  tags: string[]
+  actions: DigestAction[]
+  meta: Record<string, unknown>
+}
+interface DigestSource {
+  name: string
+  dir: string
+  items: DigestItem[]
+  unread: number
+  error?: string
+}
 interface GrantRow {
   a_id: string
   b_id: string
@@ -181,6 +211,7 @@ interface Snapshot {
   edges: Edge[]
   messages?: MsgLogEntry[]
   grants?: GrantRow[]
+  digests?: DigestSource[]
   awarenessPaused?: boolean
   settings?: AppSettings
   recentFolders?: string[]
@@ -1224,6 +1255,11 @@ export function App() {
           {stripPanel}
         </FloatCard>
       )}
+      {popped.has('digests') && (
+        <FloatCard id="digests" title="Digests" onReturn={() => setPop('digests', false)}>
+          <DigestsPanel sources={snap.digests ?? []} />
+        </FloatCard>
+      )}
       {popped.has('subagents') && (
         <FloatCard id="subagents" title="Activity" onReturn={() => setPop('subagents', false)}>
           {fleetPanel}
@@ -1545,6 +1581,20 @@ export function App() {
               )
             })}
           </ul>
+          {popped.has('digests') ? (
+            <PopStub title="Digests" onReturn={() => setPop('digests', false)} />
+          ) : (
+            <div className="poppable dg-dock">
+              <button
+                className="pop-out"
+                onClick={() => setPop('digests', true)}
+                title="Pop out to a floating panel"
+              >
+                ⇱
+              </button>
+              <DigestsPanel sources={snap.digests ?? []} />
+            </div>
+          )}
         </aside>
 
         <main className="terminalarea">
@@ -3051,6 +3101,226 @@ const EFFORT_OPTS: { v: string; label: string; ultra?: boolean }[] = [
 // Fleet activity: the subagents every session in scope has spawned, and their
 // status. Arbiter-style — a quiet collapsed line ("N running" / "no subagents"),
 // click to expand into the full list grouped by the session that owns each one.
+// ---------- digests ----------
+// A mailbox for unattended producers. A producer watches something on a schedule,
+// decides what deserves attention, and writes JSON into ~/.claude/ccc/feeds/<source>/.
+// This panel is the consumer: it surfaces items and records the human's verdict, and
+// works for a producer that did not exist when it was written.
+//
+// Three depths, one at a time, each sliding over the last: sources → items → one item.
+// The stack is deliberately shallow — the panel lives at the bottom of the session
+// list, where there is no room for a tree.
+
+const DIGEST_AGE = (ms: number): string => {
+  if (!ms) return ''
+  const d = Math.floor((Date.now() - ms) / 86400000)
+  if (d > 0) return `${d}d`
+  const h = Math.floor((Date.now() - ms) / 3600000)
+  if (h > 0) return `${h}h`
+  return `${Math.max(1, Math.floor((Date.now() - ms) / 60000))}m`
+}
+
+// score is "how interesting" (0-10), severity is "how bad" (an enum). A producer sets
+// one and leaves the other null; both being present is a producer bug the main process
+// already resolves in favour of severity.
+function DigestMark({ item }: { item: DigestItem }): React.ReactElement | null {
+  if (item.severity) return <span className={`dg-sev dg-sev-${item.severity}`}>{item.severity}</span>
+  if (typeof item.score === 'number') return <span className="dg-score">{item.score}</span>
+  return null
+}
+
+function DigestsPanel({ sources }: { sources: DigestSource[] }): React.ReactElement {
+  const [open, setOpen] = useState(false)
+  const [srcName, setSrcName] = useState<string | null>(null)
+  const [itemId, setItemId] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const totalUnread = sources.reduce((n, s) => n + s.unread, 0)
+  // dismissed/actioned are finished and drop out of the panel; kept stays as a working set.
+  const openOf = (s: DigestSource) => s.items.filter((i) => i.state !== 'dismissed' && i.state !== 'actioned')
+  const src = sources.find((x) => x.name === srcName) ?? null
+  const items = src ? openOf(src) : []
+  const item = items.find((i) => i.id === itemId) ?? null
+  // A source or item that vanishes under us (dismissed elsewhere, producer removed it)
+  // must not strand the view on nothing.
+  const depth = item ? 2 : src ? 1 : 0
+
+  const setState = async (i: DigestItem, state: string) => {
+    const ok = await window.cc.digestSetState(i.file, state)
+    if (!ok) setNote('could not write that item')
+    else if (state === 'dismissed' && itemId === i.id) setItemId(null) // dismissing an open item goes back
+  }
+  // Opening an item marks it read — the panel's whole job is knowing what you have seen.
+  const openItem = (i: DigestItem) => {
+    setItemId(i.id)
+    setCopied(false)
+    if (i.state === 'unread') void window.cc.digestSetState(i.file, 'read')
+  }
+  const addDir = async () => {
+    const r = await window.cc.digestAddDir()
+    if (!r.ok && r.reason && r.reason !== 'cancelled') setNote(r.reason)
+    else if (r.ok) setNote(`added ${r.name} — ${r.count} item${r.count === 1 ? '' : 's'}`)
+  }
+
+  return (
+    <div className={`dg${open ? ' open' : ''}`}>
+      <button className="dg-head" onClick={() => setOpen(!open)} title="Digests — feeds from unattended producers">
+        <span className={`dg-dot${totalUnread > 0 ? ' on' : ''}`} />
+        <span className="dg-name">Digests</span>
+        {totalUnread > 0 && <span className="dg-badge">{totalUnread}</span>}
+        <span className="dg-chev">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className="dg-body">
+          {note && (
+            <div className="dg-note" onClick={() => setNote(null)}>
+              {note}
+            </div>
+          )}
+          <div className="dg-slider" style={{ transform: `translateX(-${depth * 100}%)` }}>
+            {/* 0 — sources */}
+            <div className="dg-view" aria-hidden={depth !== 0}>
+              {sources.length === 0 && (
+                <div className="dg-empty">
+                  No feeds yet. A producer writes items into
+                  <code>~/.claude/ccc/feeds/&lt;source&gt;/</code> and they appear here.
+                </div>
+              )}
+              {sources.map((sc) => {
+                const n = openOf(sc).length
+                return (
+                  <button key={sc.dir} className="dg-row" onClick={() => { setSrcName(sc.name); setItemId(null) }}>
+                    <span className="dg-rowname">{sc.name}</span>
+                    {sc.error ? (
+                      <span className="dg-err" title={sc.error}>unreadable</span>
+                    ) : (
+                      <>
+                        {sc.unread > 0 && <span className="dg-badge">{sc.unread}</span>}
+                        <span className="dg-count">{n}</span>
+                      </>
+                    )}
+                    <span className="dg-chev">›</span>
+                  </button>
+                )
+              })}
+              <button className="dg-add" onClick={() => void addDir()}>
+                ＋ Add a feed…
+              </button>
+            </div>
+
+            {/* 1 — items in one source */}
+            <div className="dg-view" aria-hidden={depth !== 1}>
+              <div className="dg-crumb">
+                <button className="dg-back" onClick={() => setSrcName(null)}>‹ Feeds</button>
+                <span className="dg-crumbname">{src?.name}</span>
+              </div>
+              {items.length === 0 && <div className="dg-empty">Nothing waiting here.</div>}
+              {items.map((i) => (
+                <div key={i.id} className={`dg-item${i.state === 'unread' ? ' unread' : ''}`}>
+                  <button className="dg-itemmain" onClick={() => openItem(i)}>
+                    <span className="dg-itemtitle">{i.title}</span>
+                    <span className="dg-itemmeta">
+                      <DigestMark item={i} />
+                      <span className="dg-when">{DIGEST_AGE(i.occurredMs)}</span>
+                    </span>
+                  </button>
+                  <button
+                    className="dg-dismiss"
+                    title="Dismiss — it will not come back"
+                    onClick={() => void setState(i, 'dismissed')}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {/* 2 — one item */}
+            <div className="dg-view" aria-hidden={depth !== 2}>
+              {item && (
+                <>
+                  <div className="dg-crumb">
+                    <button className="dg-back" onClick={() => setItemId(null)}>‹ {src?.name}</button>
+                    <span className="grow" />
+                    <button
+                      className="dg-dismiss"
+                      title="Dismiss — it will not come back"
+                      onClick={() => void setState(item, 'dismissed')}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="dg-full">
+                    <div className="dg-fulltitle">{item.title}</div>
+                    <div className="dg-fullmeta">
+                      <DigestMark item={item} />
+                      <span className="dg-when" title={item.occurredAt}>{DIGEST_AGE(item.occurredMs)} ago</span>
+                    </div>
+                    {item.summary && <div className="dg-summary">{item.summary}</div>}
+                    {item.tags.length > 0 && (
+                      <div className="dg-tags">
+                        {item.tags.map((t) => (
+                          <span key={t} className="dg-tag">{t}</span>
+                        ))}
+                      </div>
+                    )}
+                    {item.bodyMd && (
+                      <>
+                        <div className="dg-bodybar">
+                          <span className="dg-bodylabel">Body</span>
+                          <button
+                            className="dg-copy"
+                            onClick={() => {
+                              void navigator.clipboard.writeText(item.bodyMd)
+                              setCopied(true)
+                              setTimeout(() => setCopied(false), 1400)
+                            }}
+                          >
+                            {copied ? 'Copied' : 'Copy'}
+                          </button>
+                        </div>
+                        <pre className="dg-bodymd">{item.bodyMd}</pre>
+                      </>
+                    )}
+                    {/* Actions are HINTS from a file on disk. Only open_path is honoured,
+                        and it reveals in Finder — nothing here is ever executed. */}
+                    {item.actions.length > 0 && (
+                      <div className="dg-actions">
+                        {item.actions.map((a, n) =>
+                          a.kind === 'open_path' ? (
+                            <button
+                              key={n}
+                              className="dg-action"
+                              onClick={() => void window.cc.digestOpenPath(a.kind, a.value)}
+                              title={a.value}
+                            >
+                              {a.label}
+                            </button>
+                          ) : (
+                            <span key={n} className="dg-action inert" title={`unsupported action: ${a.kind}`}>
+                              {a.label}
+                            </span>
+                          ),
+                        )}
+                      </div>
+                    )}
+                    <div className="dg-itemactions">
+                      <button className="dg-keep" onClick={() => void setState(item, item.state === 'kept' ? 'read' : 'kept')}>
+                        {item.state === 'kept' ? '★ Kept' : '☆ Keep'}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // A floating, draggable card that holds a popped-out companion panel. Rendered
 // via a portal to <body> so it sits over the terminal area regardless of where
 // the source panel lived. NOT an OS window — deliberately in-app (the OS-window

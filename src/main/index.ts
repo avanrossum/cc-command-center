@@ -14,6 +14,7 @@ import os from 'node:os'
 import net from 'node:net'
 import { randomBytes } from 'node:crypto'
 import {
+  watch,
   existsSync,
   statSync,
   copyFileSync,
@@ -35,6 +36,15 @@ import {
 import { readLastAssistantText } from './engine/transcript'
 import { parseDialogCommand, questionFromText } from './engine/dialog'
 import { nextModes, modePrelude, NO_MODES, type VtModes } from './engine/vt'
+import {
+  readAllSources,
+  writeItemState,
+  defaultFeedsRoot,
+  isItemFile,
+  readSource,
+  type DigestSource,
+  type DigestState,
+} from './engine/digests'
 import {
   spoolName,
   tokenFromSpoolName,
@@ -268,6 +278,7 @@ interface Snapshot {
   recentFolders: string[]
   apiKeys: ApiKeyRow[]
   arbiter: ArbiterPanel
+  digests: DigestSource[] // ingestion feeds — see engine/digests.ts
   usage: UsageAccount // account-wide rate limits for the header readout
 }
 // Account-wide 5h / 7d usage, from the freshest session's statusLine payload.
@@ -1127,6 +1138,7 @@ function snapshot(): Snapshot {
     recentFolders: getRecentFolders(),
     apiKeys: listApiKeys(),
     arbiter: { status: arbiterStatus, spend: getArbiterSpend(), log: getArbiterLog(40) },
+    digests: digestCache,
     usage: { fiveHour: usage.fiveHour, sevenDay: usage.sevenDay },
   }
 }
@@ -1353,6 +1365,78 @@ function inferReadReceipts(
     }
   } catch (e) {
     console.error('[mail] receipt inference failed', e)
+  }
+}
+
+// ---------- digest feeds ----------
+// Producers write JSON items into ~/.claude/ccc/feeds/<source>/ on their own schedule;
+// this reads them. The two sides never import each other — see engine/digests.ts for
+// the contract and the rules that fail quietly when broken.
+//
+// Cached rather than read per scan: the pane repaints every 1.5s and a feed can hold
+// hundreds of items with long markdown bodies. The cache is refreshed when the
+// directory actually changes, plus a slow floor in case a watcher misses an event.
+let digestCache: DigestSource[] = []
+let digestWatchers: import('node:fs').FSWatcher[] = []
+let digestTimer: NodeJS.Timeout | null = null
+
+// Directories the user added by hand, for a producer that writes outside the standard
+// tree. Discovery still covers ~/.claude/ccc/feeds/ on its own.
+function extraFeedDirs(): string[] {
+  try {
+    const v = JSON.parse(getAppState('digestDirs') || '[]') as unknown
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function refreshDigests(push = true): void {
+  try {
+    digestCache = readAllSources(extraFeedDirs())
+  } catch (e) {
+    console.error('[digests] read failed', e)
+    return
+  }
+  if (push) pushSessions()
+}
+
+// Debounced: writes are atomic, but a batch producer run emits several files in quick
+// succession and each one fires the watcher.
+function scheduleDigestRefresh(): void {
+  if (digestTimer) clearTimeout(digestTimer)
+  digestTimer = setTimeout(() => {
+    digestTimer = null
+    refreshDigests()
+    watchDigests() // a NEW source directory needs its own watcher
+  }, 150)
+}
+
+// One watcher on the feeds root (catches a source appearing) plus one per source
+// directory (catches items inside it). Rebuilt wholesale on change — the set is small,
+// and tracking adds/removes individually is more state than it saves.
+function watchDigests(): void {
+  for (const w of digestWatchers) {
+    try {
+      w.close()
+    } catch {
+      /* already gone */
+    }
+  }
+  digestWatchers = []
+  const dirs = [defaultFeedsRoot(), ...digestCache.map((s) => s.dir)]
+  for (const dir of dirs) {
+    try {
+      digestWatchers.push(
+        watch(dir, (_ev, name) => {
+          // Skip our own atomic-write temp files and the append-only change log.
+          if (typeof name === 'string' && !isItemFile(name) && name !== '') return
+          scheduleDigestRefresh()
+        }),
+      )
+    } catch {
+      /* the feeds tree may not exist yet — the slow floor will pick it up */
+    }
   }
 }
 
@@ -4366,6 +4450,69 @@ ipcMain.handle('session:send', (_e, sessionId: string, text: string) => {
   }
 })
 
+// ---- digest feeds ----
+// The human's verdict on one item. This is the only write we make into a feed tree,
+// and engine/digests.ts does it atomically so a producer never reads a half file.
+ipcMain.handle('digest:setState', (_e, file: string, state: string) => {
+  const allowed = ['unread', 'read', 'dismissed', 'kept', 'actioned']
+  if (typeof file !== 'string' || !allowed.includes(state)) return false
+  // Only ever inside a directory we actually track — never an arbitrary path from the
+  // renderer.
+  const known = digestCache.some((src) => file.startsWith(`${src.dir}/`))
+  if (!known) return false
+  const ok = writeItemState(file, state as DigestState, new Date().toISOString())
+  if (ok) refreshDigests()
+  return ok
+})
+
+// Register a feed directory outside the standard tree. Validated by reading it: a path
+// with no parseable items is refused, so a mistyped folder fails now rather than
+// sitting in the panel looking broken.
+ipcMain.handle('digest:addDir', async () => {
+  const r = await dialog.showOpenDialog({
+    properties: ['openDirectory'],
+    message: 'Pick a feed directory (one source — the folder holding its item .json files)',
+  })
+  const dir = r.filePaths?.[0]
+  if (r.canceled || !dir) return { ok: false, reason: 'cancelled' }
+  const dirs = extraFeedDirs()
+  if (dirs.includes(dir)) return { ok: false, reason: 'already added' }
+  if (dir.startsWith(`${defaultFeedsRoot()}/`) || dir === defaultFeedsRoot()) {
+    return { ok: false, reason: 'already discovered automatically' }
+  }
+  const probe = readSource(dir, dir)
+  if (probe.error) return { ok: false, reason: 'could not read that folder' }
+  if (probe.items.length === 0) {
+    return { ok: false, reason: 'no digest items there — expected ccc.feed.item/v1 .json files' }
+  }
+  setAppState('digestDirs', JSON.stringify([...dirs, dir]))
+  refreshDigests()
+  watchDigests()
+  return { ok: true, name: probe.name, count: probe.items.length }
+})
+
+ipcMain.handle('digest:removeDir', (_e, dir: string) => {
+  const dirs = extraFeedDirs().filter((d) => d !== dir)
+  setAppState('digestDirs', JSON.stringify(dirs))
+  refreshDigests()
+  watchDigests()
+  return true
+})
+
+// An action is a HINT from a file on disk, never a command. Only `open_path` is
+// honoured, and only by handing it to the OS the same way a revealed artifact is —
+// nothing from a feed item is ever executed.
+ipcMain.handle('digest:openPath', async (_e, kind: string, value: string) => {
+  if (kind !== 'open_path' || typeof value !== 'string' || !value) return false
+  try {
+    if (!existsSync(value)) return false
+    shell.showItemInFolder(value)
+    return true
+  } catch {
+    return false
+  }
+})
+
 // Grants: who may message whom. Every one is a human act — no session can open a link
 // for itself, only use one you opened.
 ipcMain.handle('grant:set', (_e, a: string, b: string, dir: 'both' | 'to' | 'from' | 'none') => {
@@ -4672,6 +4819,11 @@ app.whenReady().then(() => {
   // AFTER initRegistry: re-hydration reads the message table, which is where the
   // record of what was in flight lives.
   restoreAwarenessPaused() // a kill switch has to survive a restart to be one
+  refreshDigests(false) // feeds are read from disk, not owned by us — see engine/digests.ts
+  watchDigests()
+  // Slow floor, in case a watcher misses an event (network volumes, editors that
+  // replace a directory). Cheap: a few readdirs.
+  setInterval(() => refreshDigests(), 60_000)
   reclaimSpool() // pick up anything a previous run left undelivered
   setInterval(() => {
     pruneSpool()

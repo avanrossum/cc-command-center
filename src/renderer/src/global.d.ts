@@ -127,6 +127,10 @@ declare global {
         flags?: ResumeFlags,
         categoryId?: number | null,
       ) => Promise<{ pid: number; cwd: string } | null>
+      digestSetState: (file: string, state: string) => Promise<boolean>
+      digestAddDir: () => Promise<{ ok: boolean; reason?: string; name?: string; count?: number }>
+      digestRemoveDir: (dir: string) => Promise<boolean>
+      digestOpenPath: (kind: string, value: string) => Promise<boolean>
       grantSet: (a: string, b: string, dir: 'both' | 'to' | 'from' | 'none') => Promise<boolean>
       grantRevoke: (a: string, b: string) => Promise<boolean>
       messageBody: (id: string) => Promise<string | null>

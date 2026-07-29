@@ -3778,3 +3778,324 @@ select.cat-in {
   flex: 0 0 110px;
   margin-left: auto;
 }
+
+/* ---- digests: a mailbox for unattended producers ----
+   Sits at the bottom of the session list, folded by default. Three depths slide
+   horizontally inside a fixed-height body — sources, items, one item — because the
+   panel has no room for a tree. */
+.dg {
+  border-top: 1px solid var(--cc-border);
+  flex: none;
+}
+.dg-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--cc-accordion-bg);
+  border: 0;
+  color: var(--cc-text);
+  font: 11px var(--cc-font-mono);
+  text-align: left;
+  cursor: pointer;
+}
+.dg-head:hover {
+  background: var(--cc-accordion-hover);
+}
+.dg-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--cc-faint);
+  flex: none;
+}
+.dg-dot.on {
+  background: var(--cc-edge-blocking);
+}
+.dg-name {
+  flex: 1;
+}
+.dg-badge {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--cc-edge-blocking);
+  color: var(--cc-bg);
+  font-size: 9.5px;
+  text-align: center;
+}
+.dg-chev {
+  color: var(--cc-dim);
+  font-size: 10px;
+}
+.dg-body {
+  overflow: hidden; /* the slider is wider than the panel by design */
+}
+.dg-slider {
+  display: flex;
+  width: 300%;
+  transition: transform 180ms ease;
+}
+.dg-view {
+  width: 33.3333%;
+  flex: none;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.dg-view[aria-hidden='true'] {
+  /* Keep it laid out (the slide needs the width) but out of the tab order. */
+  visibility: hidden;
+}
+.dg-row,
+.dg-add {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--cc-hairline);
+  color: var(--cc-text);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.dg-row:hover,
+.dg-add:hover {
+  background: var(--cc-fill-hover);
+}
+.dg-rowname {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dg-count,
+.dg-when {
+  font: 10px var(--cc-font-mono);
+  color: var(--cc-dim);
+}
+.dg-err {
+  font: 10px var(--cc-font-mono);
+  color: #f0857d;
+}
+.dg-add {
+  color: var(--cc-dim);
+  border-bottom: 0;
+}
+.dg-crumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--cc-hairline);
+  position: sticky;
+  top: 0;
+  background: var(--cc-surface);
+  z-index: 1;
+}
+.dg-back {
+  background: transparent;
+  border: 0;
+  color: var(--cc-dim);
+  font: 10.5px var(--cc-font-mono);
+  cursor: pointer;
+  padding: 0;
+}
+.dg-back:hover {
+  color: var(--cc-text);
+}
+.dg-crumbname {
+  font: 10px var(--cc-font-mono);
+  color: var(--cc-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.dg-item {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--cc-hairline);
+}
+.dg-item:hover {
+  background: var(--cc-fill-hover);
+}
+.dg-itemmain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 4px 7px 10px;
+  background: transparent;
+  border: 0;
+  color: var(--cc-dim);
+  text-align: left;
+  cursor: pointer;
+}
+.dg-item.unread .dg-itemmain {
+  color: var(--cc-text);
+}
+.dg-item.unread {
+  box-shadow: inset 2px 0 0 var(--cc-edge-blocking);
+}
+.dg-itemtitle {
+  font-size: 11.5px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.dg-itemmeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dg-dismiss {
+  flex: none;
+  padding: 0 9px;
+  background: transparent;
+  border: 0;
+  color: var(--cc-faint);
+  cursor: pointer;
+  font-size: 11px;
+}
+.dg-dismiss:hover {
+  color: #f0857d;
+}
+.dg-score {
+  font: 9.5px var(--cc-font-mono);
+  color: var(--cc-bg);
+  background: var(--cc-dim);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.dg-sev {
+  font: 9px var(--cc-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border-radius: 3px;
+  padding: 0 4px;
+  color: var(--cc-bg);
+}
+.dg-sev-info { background: var(--cc-dim); }
+.dg-sev-low { background: #9bbf4a; }
+.dg-sev-medium { background: var(--cc-edge-blocking); }
+.dg-sev-high { background: #e2724a; }
+.dg-sev-critical { background: #e0625f; }
+.dg-full {
+  padding: 8px 10px 10px;
+}
+.dg-fulltitle {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--cc-text);
+  margin-bottom: 5px;
+}
+.dg-fullmeta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 7px;
+}
+.dg-summary {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--cc-dim);
+  margin-bottom: 7px;
+}
+.dg-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 7px;
+}
+.dg-tag {
+  font: 9.5px var(--cc-font-mono);
+  color: var(--cc-meta);
+  border: 1px solid var(--cc-hairline);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.dg-bodybar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.dg-bodylabel {
+  font: 9.5px var(--cc-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--cc-faint);
+}
+.dg-copy,
+.dg-action,
+.dg-keep {
+  margin-left: auto;
+  font: 10px var(--cc-font-mono);
+  padding: 1px 7px;
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-r-sm);
+  background: transparent;
+  color: var(--cc-dim);
+  cursor: pointer;
+}
+.dg-copy:hover,
+.dg-action:hover,
+.dg-keep:hover {
+  color: var(--cc-text);
+  border-color: var(--cc-text);
+}
+.dg-bodymd {
+  font: 10.5px/1.5 var(--cc-font-mono);
+  color: var(--cc-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 150px;
+  overflow-y: auto;
+  margin: 0 0 8px;
+  padding: 7px;
+  background: var(--cc-surface-2);
+  border: 1px solid var(--cc-hairline);
+  border-radius: var(--cc-r-sm);
+}
+.dg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 7px;
+}
+.dg-actions .dg-action {
+  margin-left: 0;
+}
+/* An action whose kind we do not support is shown, but inert — it is a hint from a
+   file on disk, and nothing from a feed item is ever executed. */
+.dg-action.inert {
+  opacity: 0.45;
+  cursor: default;
+}
+.dg-itemactions {
+  display: flex;
+}
+.dg-empty,
+.dg-note {
+  padding: 10px;
+  font-size: 11px;
+  color: var(--cc-dim);
+  line-height: 1.5;
+}
+.dg-empty code {
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--cc-meta);
+}
+.dg-note {
+  color: var(--cc-edge-blocking);
+  cursor: pointer;
+}
+.dg-dock {
+  margin-top: auto; /* pin to the bottom of the session list */
+}

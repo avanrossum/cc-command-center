@@ -136,6 +136,13 @@ contextBridge.exposeInMainWorld('cc', {
       flags,
       categoryId,
     ),
+  digestSetState: (file: string, state: string) =>
+    ipcRenderer.invoke('digest:setState', file, state) as Promise<boolean>,
+  digestAddDir: () =>
+    ipcRenderer.invoke('digest:addDir') as Promise<{ ok: boolean; reason?: string; name?: string; count?: number }>,
+  digestRemoveDir: (dir: string) => ipcRenderer.invoke('digest:removeDir', dir) as Promise<boolean>,
+  digestOpenPath: (kind: string, value: string) =>
+    ipcRenderer.invoke('digest:openPath', kind, value) as Promise<boolean>,
   grantSet: (a: string, b: string, dir: 'both' | 'to' | 'from' | 'none') =>
     ipcRenderer.invoke('grant:set', a, b, dir) as Promise<boolean>,
   grantRevoke: (a: string, b: string) => ipcRenderer.invoke('grant:revoke', a, b) as Promise<boolean>,

@@ -19,6 +19,7 @@ import {
 import type { LiveSession } from '../src/main/engine/types'
 import { buildResumeArgs, EMPTY_RESUME_FLAGS } from '../src/main/engine/resumeFlags'
 import { nextModes, modePrelude, NO_MODES } from '../src/main/engine/vt'
+import { parseItem, compareItems, isItemFile, FEED_SCHEMA } from '../src/main/engine/digests'
 import { readFileSync, existsSync } from 'node:fs'
 
 
@@ -310,6 +311,59 @@ if (existsSync(CAPTURE)) {
 } else {
   console.log(`ok    (skipped: no ${CAPTURE})`)
 }
+
+// --- digest feed parsing ---
+// Every rule here fails QUIETLY when broken: a mis-sorted feed, a silently dropped
+// item, or an executed action all look like "it just does that".
+const ITEM = (over: Record<string, unknown> = {}) => ({
+  schema: FEED_SCHEMA,
+  source: 'postworthy',
+  id: 'postworthy:abc',
+  created_at: '2026-07-29T20:27:24+00:00',
+  updated_at: '2026-07-29T20:27:24+00:00',
+  occurred_at: '2026-07-23T13:40:49+00:00',
+  state: 'unread',
+  title: 'A claim, not a teaser.',
+  ...over,
+})
+const P = (over: Record<string, unknown> = {}) => parseItem(ITEM(over), '/f/x.json')
+
+check('a well-formed item parses', P()?.id, 'postworthy:abc')
+// An unknown schema must be IGNORED, not best-effort parsed — a future v2 changes
+// field meanings and guessing displays wrong information confidently.
+check('an unknown schema is refused', parseItem(ITEM({ schema: 'ccc.feed.item/v2' }), '/f/x.json'), undefined)
+check('a missing schema is refused', parseItem({ id: 'x', title: 'y' }, '/f/x.json'), undefined)
+check('an item with no title is refused', P({ title: '' }), undefined)
+check('non-object input is refused', parseItem('nope', '/f/x.json'), undefined)
+// Optional fields may all be absent; a sparse item must still render.
+const sparse = P({ summary: undefined, body_md: undefined, tags: undefined, actions: undefined, meta: undefined })
+check('a sparse item still parses', sparse?.title, 'A claim, not a teaser.')
+check('...with empty defaults', [sparse?.summary, sparse?.bodyMd, sparse?.tags, sparse?.actions], ['', '', [], []])
+// score XOR severity. Both set is a producer bug; severity wins so sorting is not a coin flip.
+check('score alone survives', P({ score: 8 })?.score, 8)
+check('severity alone survives', P({ severity: 'high' })?.severity, 'high')
+check('both set: severity wins', P({ score: 8, severity: 'high' })?.score, null)
+check('a non-numeric score is null', P({ score: 'high' })?.score, null)
+// An unrecognised state must not be trusted into the file.
+check('an unknown state falls back to unread', P({ state: 'banana' })?.state, 'unread')
+check('a known state is kept', P({ state: 'dismissed' })?.state, 'dismissed')
+// Malformed actions are dropped individually, not fatally.
+check('a malformed action is dropped, the good one kept', P({
+  actions: [{ label: 'no kind' }, { label: 'Open', kind: 'open_path', value: '/tmp/x' }],
+})?.actions.length, 1)
+
+// THE sort rule. Real data: occurred_at is six days before created_at because the
+// producer backfilled. Sorting on created_at makes a backfill look simultaneous.
+const older = P({ id: 'a', occurred_at: '2026-07-20T00:00:00+00:00', created_at: '2026-07-29T00:00:00+00:00' })!
+const newer = P({ id: 'b', occurred_at: '2026-07-28T00:00:00+00:00', created_at: '2026-07-29T00:00:00+00:00' })!
+check('sorted on occurred_at, newest first', [older, newer].sort(compareItems).map((i) => i.id), ['b', 'a'])
+check('an unparseable occurred_at sorts last, not crashes', P({ occurred_at: 'not a date', created_at: '', updated_at: '' })?.occurredMs, 0)
+
+// The change log and mid-write temp files are not items.
+check('an item file is an item file', isItemFile('abc.json'), true)
+check('index.jsonl is not an item', isItemFile('index.jsonl'), false)
+check('a temp file is not an item', isItemFile('abc.json.tmp'), false)
+check('a dotted temp file is not an item', isItemFile('abc.tmp.json'), false)
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed')
 process.exit(failed ? 1 : 0)
