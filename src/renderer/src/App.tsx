@@ -4099,8 +4099,9 @@ function MessageLog({
   paused: boolean
   close: () => void
 }) {
+  // held / deferred / reclaimed are all "still in flight", not failures.
   const cls = (status: string) =>
-    status.startsWith('delivered') ? 'ok' : status.startsWith('held') ? 'held' : 'drop'
+    status.startsWith('delivered') ? 'ok' : /^(held|deferred|reclaimed|kept)/.test(status) ? 'held' : 'drop'
   return (
     <div className="spawnscrim" onClick={close}>
       <div className="spawnmodal msglog" onClick={(e) => e.stopPropagation()}>
@@ -4108,7 +4109,8 @@ function MessageLog({
           <div>
             <div className="spawntitle">Cross-session messages</div>
             <div className="spawnsub">
-              every message the awareness bus routed — delivered, held (untrusted link), or dropped.
+              every message the awareness bus routed, with the reason it is where it is. Anything not
+              delivered keeps its payload on disk under ~/.claude/ccc/mail/spool.
             </div>
           </div>
           <button

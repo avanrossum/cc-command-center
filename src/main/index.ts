@@ -1368,6 +1368,7 @@ function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: str
     // stale, unrouted messages (and remove the file + any held segments).
     const ob = outboxByPid.get(p.pid)
     if (ob) {
+      flushOutboxOnExit(ob) // a dying session's last message should survive it
       outboxOwner.delete(ob.token)
       outboxByPid.delete(p.pid)
       heldMessages.delete(ob.token)
@@ -1562,7 +1563,12 @@ function launchSession(
 // each scan the app reads it, routes to the parent via the edge graph, and — if
 // the link is trusted — injects it into the parent as a new turn when the parent
 // is free. Every hop is logged; a rate/hop guard stops runaway loops.
-const MAIL_DIR = join(os.homedir(), '.claude', 'ccc', app.isPackaged ? 'mail' : 'mail-dev')
+// Packaged and dev split so a dev run can't consume the real app's mail. CCC_MAIL_DIR
+// overrides both — it pairs with CCC_USERDATA so a "fresh space" gets its own mail
+// tree instead of sharing one with whatever else is running on this machine.
+const MAIL_DIR = process.env.CCC_MAIL_DIR
+  ? process.env.CCC_MAIL_DIR.replace(/^~(?=$|\/)/, os.homedir())
+  : join(os.homedir(), '.claude', 'ccc', app.isPackaged ? 'mail' : 'mail-dev')
 // Claimed-but-not-yet-delivered payloads. A message is moved here BY RENAME before
 // any routing is attempted, so there is never an instant where an in-flight message
 // has no on-disk copy. Deliberately a subdirectory of MAIL_DIR: MAIL_RULES already
@@ -1610,6 +1616,8 @@ interface Delivery {
   text: string
   hops: number
   at: number
+  spool?: string // the on-disk payload; removed only once this is delivered
+  logged: boolean // one-shot latch so a long defer logs its reason once, not per scan
 }
 export interface MsgLogEntry {
   from: string
@@ -1627,7 +1635,12 @@ const linkRate = new Map<string, number[]>()
 // Per-token FIFO of pending messages. Each outbox write is its own segment —
 // never concatenated — so a directed and a plain message written back to back are
 // classified and routed independently rather than merged in one direction.
-const heldMessages = new Map<string, { text: string; at: number; logged: boolean }[]>()
+// `spool` is the on-disk copy claimed at drain time; it outlives this entry and is
+// removed only when the message is delivered (or was never a payload).
+const heldMessages = new Map<
+  string,
+  { text: string; at: number; logged: boolean; spool?: string }[]
+>()
 
 function awarenessPreamble(outbox: string): string {
   return (
@@ -1683,9 +1696,41 @@ export function setAwarenessPaused(paused: boolean): void {
   awarenessPaused = paused
 }
 
-// Drain each child outbox into the held buffer. Reading empties the file (a child
-// writes fresh each time), but the content is preserved in memory — never lost on
-// read, so an un-blessed link's message waits for the bless instead of vanishing.
+let spoolCounter = 0
+
+// Move a payload out of an outbox and into the spool under a name that ties it back
+// to its outbox token. Returns the spool path, or undefined if the claim failed — in
+// which case the original is untouched and the next scan retries it.
+function claimToSpool(fp: string, token: string): string | undefined {
+  const dest = join(SPOOL_DIR, `${token}-${Date.now()}-${spoolCounter++}.msg`)
+  try {
+    mkdirSync(SPOOL_DIR, { recursive: true })
+    renameSync(fp, dest)
+    return dest
+  } catch {
+    return undefined
+  }
+}
+
+// Drop a spool file. Called ONLY on a terminal outcome that needs no recovery: the
+// message was delivered, or the content was never a deliverable payload (empty, or
+// the exit sentinel). Every other outcome — expired, deferred out, rate-dropped,
+// untrusted — deliberately KEEPS the file so the payload stays recoverable by hand.
+function removeSpool(p: string | undefined): void {
+  if (!p) return
+  try {
+    unlinkSync(p)
+  } catch {
+    /* already gone */
+  }
+}
+
+// Drain each child outbox into the held buffer. The outbox is claimed by RENAME into
+// the spool, not blanked in place: the previous version read the file and wrote ''
+// back BEFORE routing was ever attempted, so the only copy of an unroutable message
+// lived in memory and died with the app. Rename cannot half-succeed, cannot race a
+// concurrent write (a write landing after it just recreates the outbox), and cannot
+// hand the same payload out twice.
 function drainOutboxes(): void {
   let files: string[] = []
   try {
@@ -1695,41 +1740,152 @@ function drainOutboxes(): void {
   }
   for (const f of files) {
     const fp = join(MAIL_DIR, f)
+    try {
+      if (statSync(fp).size === 0) continue // untouched since the last claim
+    } catch {
+      continue
+    }
+    const token = f.replace(/\.msg$/, '')
+    const spool = claimToSpool(fp, token)
+    if (!spool) continue
+    try {
+      writeFileSync(fp, '') // recreate the outbox so the owner's next write has a file
+    } catch {
+      /* the owner's next write recreates it anyway */
+    }
+    ingestSpooled(spool, token)
+  }
+}
+
+// Take a claimed payload into the held buffer — or act on it, if it is the exit
+// sentinel. The spool file stays on disk until the message reaches a terminal
+// outcome, so a crash anywhere after this point loses nothing.
+function ingestSpooled(spool: string, token: string): void {
+  let content = ''
+  try {
+    content = readFileSync(spool, 'utf8').trim()
+  } catch {
+    return // unreadable — leave it spooled rather than pretending it is gone
+  }
+  if (!content) {
+    removeSpool(spool)
+    return
+  }
+  // Self-termination: an exact exit sentinel kills the owning session's PTY
+  // (onExit then prunes its outbox). Exact-match so it's always deliberate.
+  if (content === EXIT_SENTINEL) {
+    const pid = outboxOwner.get(token)
+    const term = pid ? findTermByPid(pid) : undefined
+    const nm = (term?.sessionId && getSessionNames()[term.sessionId]) || `pid ${pid ?? '?'}`
+    let status = 'self-exit ignored: session not found'
+    if (term) {
+      try {
+        term.pty.kill()
+        status = 'terminated: self-exit'
+      } catch {
+        status = 'self-exit failed'
+      }
+    }
+    logMsg(nm, 'self', content, status) // log the OUTCOME, after the kill attempt
+    removeSpool(spool)
+    return
+  }
+  const text = content.length > MSG_MAX_CHARS ? content.slice(-MSG_MAX_CHARS) : content
+  if (text !== content) logMsg('?', '?', text, `truncated to last ${MSG_MAX_CHARS} chars`)
+  const arr = heldMessages.get(token) ?? []
+  arr.push({ text, at: Date.now(), logged: false, spool })
+  if (arr.length > 30) {
+    // A runaway writer still can't grow the buffer without bound, but what it pushes
+    // out is logged and its spool file kept, rather than vanishing silently.
+    for (const dropped of arr.splice(0, arr.length - 30)) {
+      logMsg('?', '?', dropped.text, 'dropped: outbox overflow')
+    }
+  }
+  heldMessages.set(token, arr)
+}
+
+// Delete spooled payloads past their retention. Runs at launch and hourly, so a
+// long-lived app doesn't accumulate a week of undelivered mail forever.
+function pruneSpool(): void {
+  let files: string[] = []
+  try {
+    files = readdirSync(SPOOL_DIR).filter((f) => f.endsWith('.msg'))
+  } catch {
+    return
+  }
+  const now = Date.now()
+  for (const f of files) {
+    const fp = join(SPOOL_DIR, f)
+    try {
+      if (now - statSync(fp).mtimeMs > SPOOL_TTL_MS) removeSpool(fp)
+    } catch {
+      /* raced with another sweep */
+    }
+  }
+}
+
+// Re-claim payloads a previous run left spooled: anything still there was never
+// delivered. Recent ones go back into the held buffer keyed by their outbox token —
+// which a resumed session reuses — so a message can still reach its target across a
+// restart. Older ones stay on disk, readable by hand, but are not replayed.
+function reclaimSpool(): void {
+  pruneSpool()
+  let files: string[] = []
+  try {
+    files = readdirSync(SPOOL_DIR).filter((f) => f.endsWith('.msg')).sort()
+  } catch {
+    return
+  }
+  const now = Date.now()
+  let reclaimed = 0
+  for (const f of files) {
+    if (reclaimed >= SPOOL_RECLAIM_MAX) break
+    const fp = join(SPOOL_DIR, f)
     let content = ''
     try {
+      if (now - statSync(fp).mtimeMs > SPOOL_RECLAIM_AGE_MS) continue
       content = readFileSync(fp, 'utf8').trim()
     } catch {
       continue
     }
-    if (!content) continue
-    try {
-      writeFileSync(fp, '')
-    } catch {
-      /* ignore */
-    }
-    const token = f.replace(/\.msg$/, '')
-    // Self-termination: an exact exit sentinel kills the owning session's PTY
-    // (onExit then prunes its outbox). Exact-match so it's always deliberate.
-    if (content === EXIT_SENTINEL) {
-      const pid = outboxOwner.get(token)
-      const term = pid ? findTermByPid(pid) : undefined
-      const nm = (term?.sessionId && getSessionNames()[term.sessionId]) || `pid ${pid ?? '?'}`
-      let status = 'self-exit ignored: session not found'
-      if (term) {
-        try {
-          term.pty.kill()
-          status = 'terminated: self-exit'
-        } catch {
-          status = 'self-exit failed'
-        }
-      }
-      logMsg(nm, 'self', content, status) // log the OUTCOME, after the kill attempt
+    if (!content || content === EXIT_SENTINEL) {
+      removeSpool(fp)
       continue
     }
+    // Trailing "-<claimedAt>-<n>" is what claimToSpool appended; the rest is the token.
+    const token = f.replace(/-\d+-\d+\.msg$/, '')
     const arr = heldMessages.get(token) ?? []
-    arr.push({ text: content.slice(-4000), at: Date.now(), logged: false })
-    if (arr.length > 30) arr.splice(0, arr.length - 30) // bound a runaway writer
+    arr.push({ text: content.slice(-MSG_MAX_CHARS), at: now, logged: false, spool: fp })
     heldMessages.set(token, arr)
+    reclaimed++
+    logMsg('?', '?', content, 'reclaimed from spool after restart')
+  }
+  if (reclaimed) console.log(`[mail] reclaimed ${reclaimed} spooled message(s)`)
+}
+
+// Flush, don't destroy. On PTY exit the outbox is unlinked and the held segments
+// dropped; a message written in the seconds before exit used to die with the
+// process. Claim it into the spool first, and make sure every still-held segment
+// has an on-disk copy, so the last thing a session said outlives it.
+function flushOutboxOnExit(ob: { token: string; path: string }): void {
+  for (const held of heldMessages.get(ob.token) ?? []) {
+    if (held.spool) continue // claimed at drain time — already on disk
+    try {
+      mkdirSync(SPOOL_DIR, { recursive: true })
+      writeFileSync(join(SPOOL_DIR, `${ob.token}-${Date.now()}-${spoolCounter++}.msg`), held.text)
+    } catch {
+      /* nothing further we can do */
+    }
+  }
+  let content = ''
+  try {
+    content = readFileSync(ob.path, 'utf8').trim()
+  } catch {
+    return
+  }
+  if (!content || content === EXIT_SENTINEL) return
+  if (claimToSpool(ob.path, ob.token)) {
+    logMsg(`pid ${outboxOwner.get(ob.token) ?? '?'}`, '?', content, 'kept: sender exited')
   }
 }
 
@@ -1794,7 +1950,7 @@ function routeHeld(sessions: LiveSession[]): void {
       const held = arr[i]
       if (now - held.at > HELD_TTL_MS) {
         logMsg('?', '?', held.text, 'expired: never routable')
-        arr.splice(i, 1)
+        arr.splice(i, 1) // spool file kept — the payload stays recoverable
         continue
       }
       if (!sender || !sender.sessionId) {
@@ -1802,6 +1958,16 @@ function routeHeld(sessions: LiveSession[]): void {
         continue
       } // sender not adopted yet — keep held
       const senderId = sender.sessionId
+      // Back-pressure rather than loss: at the ceiling the segment stays held (and
+      // its spool file on disk) until the queue drains, instead of being dropped.
+      if (deliveryQueue.length >= DELIVERY_QUEUE_MAX) {
+        if (!held.logged) {
+          logMsg(displayName(sender), '?', held.text, 'held: delivery queue full')
+          held.logged = true
+        }
+        i++
+        continue
+      }
 
       const directed = parseDirective(held.text)
       const match = directed ? matchDirectedChild(sessions, edges, senderId, directed.rest) : undefined
@@ -1816,6 +1982,7 @@ function routeHeld(sessions: LiveSession[]): void {
         }
         if (!match.body) {
           logMsg(displayName(sender), displayName(match.child), held.text, 'dropped: empty directed message')
+          removeSpool(held.spool) // an address with no body is not a payload to keep
           arr.splice(i, 1)
           continue
         }
@@ -1827,6 +1994,8 @@ function routeHeld(sessions: LiveSession[]): void {
           text: match.body,
           hops: 1,
           at: now,
+          spool: held.spool, // ownership of the on-disk copy moves to the delivery
+          logged: false,
         })
         arr.splice(i, 1)
         continue
@@ -1855,6 +2024,8 @@ function routeHeld(sessions: LiveSession[]): void {
         text: held.text,
         hops: 1,
         at: now,
+        spool: held.spool,
+        logged: false,
       })
       arr.splice(i, 1)
     }
@@ -1882,7 +2053,7 @@ function tryDeliveries(sessions: LiveSession[]): void {
       i++ // already delivered to this target this pass — next one waits a scan
       continue
     }
-    const target = sessions.find((s) => s.sessionId === d.to)
+    const target = resolveTargetSession(sessions, d.to)
     const term = findManagedTerm(d.to)
     if (!target || !term) {
       if (now - d.at > 120_000) {
@@ -1904,8 +2075,20 @@ function tryDeliveries(sessions: LiveSession[]): void {
       logMsg(d.fromName, target.name ?? d.to, d.text, 'dropped: link no longer trusted')
       continue
     }
-    // only deliver when the target is affirmatively free (fail-safe on unknown)
+    // Only deliver when the target is affirmatively free (fail-safe on unknown).
+    // This branch used to be a bare `continue`: a message to a session that stayed
+    // busy waited forever with no log line and no file, indistinguishable from never
+    // having been sent. Now it says so once, and it eventually gives up out loud.
     if (target.state !== 'idle' && target.state !== 'waiting') {
+      if (!d.logged) {
+        logMsg(d.fromName, target.name ?? d.to, d.text, `deferred: target busy (${target.state})`)
+        d.logged = true
+      }
+      if (now - d.at > DELIVER_TTL_MS) {
+        deliveryQueue.splice(i, 1)
+        logMsg(d.fromName, target.name ?? d.to, d.text, 'failed: target never free')
+        continue // spool file kept — resendable by hand from ~/.claude/ccc/mail/spool
+      }
       i++
       continue
     }
@@ -1925,8 +2108,24 @@ function tryDeliveries(sessions: LiveSession[]): void {
     linkRate.set(key, stamps)
     deliveredTo.add(d.to)
     deliveryQueue.splice(i, 1)
+    removeSpool(d.spool) // delivered is the one outcome that needs no recovery
     logMsg(d.fromName, target.name ?? d.to, d.text, 'delivered')
   }
+}
+
+// Resolve a delivery target, preferring the ALIVE row. A resumed session yields a
+// dead and a live record under one session id; a dead row's state is always
+// 'unknown', which never passes the free-target gate, so picking it stalls the
+// message permanently. The enrich dedup and the pending-new guards already prefer
+// alive — this was the one lookup in the app that didn't.
+function resolveTargetSession(sessions: LiveSession[], id: string): LiveSession | undefined {
+  let dead: LiveSession | undefined
+  for (const s of sessions) {
+    if (s.sessionId !== id) continue
+    if (s.alive) return s
+    dead ??= s
+  }
+  return dead
 }
 
 // Children spawned from an active session. The typed edge can't be set until the
@@ -2727,7 +2926,16 @@ ipcMain.handle('cat:assign', (_e, sessionId: string, categoryId: number | null) 
 })
 ipcMain.handle('edge:set', (_e, childId: string, parentId: string, type: 'blocking' | 'tangential') => {
   const ok = setParent(childId, parentId, type)
-  if (ok) pushSessions()
+  if (ok) {
+    // Same rule the spawn path applies: a link the user made by hand is one they
+    // meant to use. Without this a hand-made edge silently held every message as
+    // "link not trusted" until it expired — a mute with no visible cause.
+    if (getSettings().trustChildrenByDefault) {
+      setEdgeTrust(childId, true)
+      notifyParentOfTrustedChild(childId)
+    }
+    pushSessions()
+  }
   return ok
 })
 ipcMain.handle('edge:clear', (_e, childId: string) => {
@@ -3603,10 +3811,12 @@ app.whenReady().then(() => {
   // Never migrate the real registry into a throwaway "fresh space" profile.
   if (!process.env.CCC_USERDATA) migrateUserData('Claude Command Center')
   try {
-    mkdirSync(MAIL_DIR, { recursive: true })
+    mkdirSync(SPOOL_DIR, { recursive: true }) // creates MAIL_DIR too
   } catch {
     /* ignore */
   }
+  reclaimSpool() // pick up anything a previous run left undelivered
+  setInterval(pruneSpool, 60 * 60_000)
   ensureStatusHookScript() // keep the hook script current with this app version
   ensureUsageLineScript() // the per-session usage statusLine (context % + 5h/7d)
   ensureKeyHelperScript() // API-key helper, current with this app version
