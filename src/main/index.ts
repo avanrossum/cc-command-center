@@ -760,7 +760,7 @@ function snapshot(): Snapshot {
     return val
   }
 
-  const managedIds = managedSessionIds()
+  const managedIds = managedSessionIds(sessions)
   const names = getSessionNames()
   // Mint the permanent @-address for anything that doesn't have one yet. Once only —
   // the map is read every scan, the write happens the first time a session is seen.
@@ -987,6 +987,16 @@ function snapshot(): Snapshot {
     // Recency gate: only recently-active sessions stay resumable, so the dormant
     // list can't grow without bound as sessions accumulate in a categorized cwd.
     if (node.last_seen && now - node.last_seen > DORMANT_MAX_AGE_MS) continue
+    // A session id with no transcript was never a conversation, so there is nothing
+    // for `claude --resume` to load and it must not be offered as resumable.
+    //
+    // Claude Code registers a session id transiently in situations that never become
+    // a session — an id observed for ten seconds while a /resume picker was open,
+    // then abandoned, is the case that produced this. The scan adopted it like any
+    // other id and it became a permanent row that looked resumable forever, sitting
+    // in the list at exactly the moment a real session was being named, so it
+    // collected the name meant for something else.
+    if (!transcriptIds().has(sid)) continue
     enriched.push({
       pid: 0,
       sessionId: sid,
@@ -3014,13 +3024,51 @@ function deliverHandoffNote(childPid: number, note: string): void {
 
 // Sessions the app owns a live PTY for (keyed by session id or new:<pid>). Only
 // these can receive an injected prompt; adopted/external sessions are read-only.
-function managedSessionIds(): Set<string> {
+// Which sessions this app is hosting. Resolved through the terminal's PID as well as
+// its recorded session id: Claude Code can re-register a pid under a different id
+// while it runs, and a terminal keyed to the older one would otherwise report the
+// live session as unmanaged — which the "only show sessions managed here" filter then
+// hides completely, leaving the session you are looking at invisible in the list.
+function managedSessionIds(sessions: LiveSession[] = []): Set<string> {
+  const byPid = new Map<number, string>()
+  for (const s of sessions) if (s.sessionId && s.alive) byPid.set(s.pid, s.sessionId)
   const ids = new Set<string>()
   for (const [k, t] of terminals) {
     if (t.exited) continue
     ids.add(k)
     if (t.sessionId) ids.add(t.sessionId)
+    const now = byPid.get(t.pty.pid) // whatever this pid claims to be right now
+    if (now) ids.add(now)
   }
+  return ids
+}
+
+// Every session id that has a transcript on disk — i.e. every id that was ever really
+// a conversation. Cached: this is ~200 files and the scan runs every 1.5s, so it is
+// refreshed on a timer rather than walked per tick.
+let transcriptIdCache: { at: number; ids: Set<string> } = { at: 0, ids: new Set() }
+const TRANSCRIPT_TTL_MS = 20_000
+function transcriptIds(): Set<string> {
+  const now = Date.now()
+  if (now - transcriptIdCache.at < TRANSCRIPT_TTL_MS) return transcriptIdCache.ids
+  const ids = new Set<string>()
+  const root = join(os.homedir(), '.claude', 'projects')
+  try {
+    for (const proj of readdirSync(root)) {
+      try {
+        for (const f of readdirSync(join(root, proj))) {
+          if (f.endsWith('.jsonl')) ids.add(f.slice(0, -6))
+        }
+      } catch {
+        /* a project dir that vanished mid-walk */
+      }
+    }
+  } catch {
+    // No projects tree at all. Return the previous set rather than an empty one —
+    // an empty set would hide every dormant session at once.
+    return transcriptIdCache.ids
+  }
+  transcriptIdCache = { at: now, ids }
   return ids
 }
 
