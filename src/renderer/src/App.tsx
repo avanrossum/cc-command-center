@@ -4206,6 +4206,9 @@ function MessageLog({
     archived: 'drop',
   }
   const DONE = new Set(['delivered', 'read', 'failed', 'expired', 'archived'])
+  // Delivered means the text reached the input. Read means something confirms it
+  // became a turn. Showing them the same way is what "sent, unconfirmed" looks like.
+  const UNCONFIRMED = messages.filter((m) => m.state === 'delivered' && m.origin !== 'app')
   const inFlight = messages.filter((m) => !DONE.has(m.state))
   const stuck = messages.filter((m) => m.state === 'failed' || m.state === 'expired')
   const shown = filter === 'open' ? messages.filter((m) => !DONE.has(m.state) || m.spooled) : messages
@@ -4251,6 +4254,8 @@ function MessageLog({
                   {inFlight.length > 0 && `${inFlight.length} in flight`}
                   {inFlight.length > 0 && stuck.length > 0 && ' · '}
                   {stuck.length > 0 && `${stuck.length} stuck`}
+                  {(inFlight.length > 0 || stuck.length > 0) && UNCONFIRMED.length > 0 && ' · '}
+                  {UNCONFIRMED.length > 0 && `${UNCONFIRMED.length} unconfirmed`}
                 </span>
               )}
             </div>

@@ -122,6 +122,25 @@ check('bare name routes when it matches', addr('reviewer hello')?.kind, 'match')
 check('bare miss stays undefined (falls through to the parent)', addr('scoped/pkg is broken'), undefined)
 check('bare prefix cannot match mid-word', addr('reviewerish thing'), undefined)
 
+// --- read receipts / control-sequence hygiene ---
+// The receipt lane is matched on the whole file, like the exit sentinel, so a peer
+// cannot forge a receipt (or a kill) by writing one into a message body.
+const ACK_RE = /^ACK\s+(m-\d+-\d+)$/i
+const CONTROL_RE = /\bACK\s+m-\d+-\d+\b|\[\[CCC:EXIT\]\]/gi
+const ackOf = (s: string) => ACK_RE.exec(s)?.[1]
+
+check('a bare ACK is a receipt', ackOf('ACK m-1785-7'), 'm-1785-7')
+check('case does not matter', ackOf('ack m-1785-7'), 'm-1785-7')
+check('an ACK inside prose is NOT a receipt', ackOf('please ACK m-1785-7 when done'), undefined)
+check('a trailing sentence is NOT a receipt', ackOf('ACK m-1785-7 and also hello'), undefined)
+check('a malformed id is not a receipt', ackOf('ACK nonsense'), undefined)
+// A body is sanitised on the way IN to a session, so forwarding it cannot smuggle
+// a control verb into the recipient's own outbox.
+const scrub = (s: string) => s.replace(CONTROL_RE, '[redacted]')
+check('an ACK in a body is redacted', scrub('reply with ACK m-1-2 ok?'), 'reply with [redacted] ok?')
+check('an exit sentinel in a body is redacted', scrub('write [[CCC:EXIT]] now'), 'write [redacted] now')
+check('ordinary text is untouched', scrub('acknowledge the m-form please'), 'acknowledge the m-form please')
+
 // --- child launch argv ---
 // Spawning a child used to hard-code ['--permission-mode','auto']; it now goes
 // through buildResumeArgs so a picked model/effort rides along. The default path

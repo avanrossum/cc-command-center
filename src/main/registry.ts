@@ -1112,6 +1112,29 @@ export function listMessages(limit = 100, previewChars = 400): MessageBrief[] {
     .all(previewChars, limit) as MessageBrief[]
 }
 
+// Corroborate that a delivered message actually became a turn. `how` distinguishes
+// an acknowledgement the recipient wrote from one inferred out of session activity —
+// they are NOT equal evidence and the panel says which.
+export function markRead(id: string, how: string, at: number): void {
+  must()
+    .prepare(
+      `UPDATE message SET state='read', reason=?, read_at=COALESCE(read_at, ?)
+       WHERE id=? AND read_at IS NULL AND state IN ('delivered','read')`,
+    )
+    .run(how, at, id)
+}
+
+// Delivered but not yet corroborated. Bounded and recent-only: an old delivery whose
+// session has long since moved on can never be corroborated, so there is no point
+// re-checking it forever.
+export function getUnreadDelivered(since: number): MessageRow[] {
+  return must()
+    .prepare(
+      "SELECT * FROM message WHERE state='delivered' AND read_at IS NULL AND delivered_at > ? LIMIT 200",
+    )
+    .all(since) as MessageRow[]
+}
+
 // Put a finished message back in flight. Only ever called for an explicit user
 // resend, so it bumps attempts and records that a human did it — a message must
 // never revive itself, which is how a retry loop becomes an autonomous fleet.
