@@ -1,6 +1,12 @@
 {
   "versions": [
     {
+      "version": "0.20.3",
+      "date": "2026-07-29",
+      "critical": false,
+      "features": []
+    },
+    {
       "version": "0.20.2",
       "date": "2026-07-29",
       "critical": false,
