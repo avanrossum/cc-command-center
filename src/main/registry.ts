@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3'
-import { pairOf, type GrantRow } from './engine/mailbox'
+import { pairOf, aliasCandidate, type GrantRow } from './engine/mailbox'
 
 export { mayMessage, type GrantRow } from './engine/mailbox'
 
@@ -559,14 +559,9 @@ export function ensureAlias(sessionId: string, seed: string | null): string {
     | { alias: string | null }
     | undefined
   if (row?.alias) return row.alias
-  const base =
-    (seed ?? '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 24) || 'session'
-  const tail = sessionId.replace(/[^a-z0-9]/gi, '').slice(0, 3).toLowerCase() || '000'
-  let alias = `${base}-${tail}`
+  let alias = aliasCandidate(seed, sessionId)
+  const base = alias.slice(0, alias.lastIndexOf('-'))
+  const tail = alias.slice(alias.lastIndexOf('-') + 1)
   // The unique index is the real guarantee; this only avoids throwing on a collision.
   for (let n = 2; n < 50; n++) {
     const clash = d.prepare('SELECT 1 FROM node WHERE alias=? AND session_id<>?').get(alias, sessionId)

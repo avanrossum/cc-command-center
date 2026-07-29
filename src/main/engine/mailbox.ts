@@ -213,3 +213,20 @@ export function mayMessage(
   )
 }
 
+
+// The permanent @-address for a session, derived from whatever it is called at the
+// moment it is first seen. Minted ONCE and never regenerated: the whole value is that
+// it does not move when Claude's auto-title does.
+//
+// Trimming happens AFTER the length cut, not before — cutting first can land on a
+// separator and leave a trailing hyphen, which then reads as "name--suffix".
+export function aliasCandidate(seed: string | null, sessionId: string): string {
+  const base =
+    (seed ?? '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .slice(0, 24)
+      .replace(/^-+|-+$/g, '') || 'session'
+  const tail = sessionId.replace(/[^a-z0-9]/gi, '').slice(0, 3).toLowerCase() || '000'
+  return `${base}-${tail}`
+}

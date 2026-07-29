@@ -13,6 +13,7 @@ import {
   stripUserAddress,
   parseQuery,
   mayMessage,
+  aliasCandidate,
 } from '../src/main/engine/mailbox'
 import type { LiveSession } from '../src/main/engine/types'
 import { buildResumeArgs, EMPTY_RESUME_FLAGS } from '../src/main/engine/resumeFlags'
@@ -174,6 +175,18 @@ const scrub = (s: string) => s.replace(CONTROL_RE, '[redacted]')
 check('an ACK in a body is redacted', scrub('reply with ACK m-1-2 ok?'), 'reply with [redacted] ok?')
 check('an exit sentinel in a body is redacted', scrub('write [[CCC:EXIT]] now'), 'write [redacted] now')
 check('ordinary text is untouched', scrub('acknowledge the m-form please'), 'acknowledge the m-form please')
+
+// --- permanent addresses ---
+check('derived from the name', aliasCandidate('reviewer', 'abc12345'), 'reviewer-abc')
+check('spaces become hyphens', aliasCandidate('DB Work', 'xyz99999'), 'db-work-xyz')
+// The suffix is what keeps two sessions with the same name apart.
+check('same name, different session', aliasCandidate('reviewer', 'zzz00000'), 'reviewer-zzz')
+check('an unnamed session still gets one', aliasCandidate(null, 'abc12345'), 'session-abc')
+check('an all-punctuation name still gets one', aliasCandidate('!!!', 'abc12345'), 'session-abc')
+// Truncation must not leave a dangling separator — that reads as "name--suffix".
+check('no double hyphen when the cut lands on one', aliasCandidate('a-website-called-mipyip-d6', '7b5aaaaa'), 'a-website-called-mipyip-7b5')
+check('a long name is cut cleanly', aliasCandidate('x'.repeat(40), 'abc12345'), 'x'.repeat(24) + '-abc')
+check('a session id with dashes still yields a suffix', aliasCandidate('r', '2e-df-53', ), 'r-2ed')
 
 // --- who may message whom ---
 // Default deny is the whole safety property here, so every arm gets an assertion.
