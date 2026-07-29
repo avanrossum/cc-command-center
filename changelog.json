@@ -4,7 +4,14 @@
       "version": "0.20.2",
       "date": "2026-07-29",
       "critical": false,
-      "features": []
+      "features": [
+        "Cross-session messages are no longer lost. A message sent to a session that stayed busy waited forever with nothing to show for it — no delivery, no log entry, and an outbox file the app had already emptied. Every message is now written to disk before anything is routed, and the file is deleted only once it has actually been delivered.",
+        "Undelivered messages stay readable. Anything that failed, expired, or is still waiting keeps its full text in ~/.claude/ccc/mail/spool, so you can copy it out by hand. Recent ones are picked back up automatically when the app restarts; the rest are kept for seven days.",
+        "The Messages panel now shows why a message is where it is — deferred because the target is busy, held because the link isn't trusted, or failed after thirty minutes of a target that never freed up — instead of showing nothing at all.",
+        "Fixed messages stalling permanently when the recipient had been resumed, which left a stale duplicate record the delivery bus picked over the live one.",
+        "A session that exits now flushes its last message instead of taking it with it.",
+        "Linking two sessions by hand now trusts the link, like spawning a child does. A hand-made link used to silently hold every message until it expired."
+      ]
     },
     {
       "version": "0.20.1",
