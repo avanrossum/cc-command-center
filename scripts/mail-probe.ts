@@ -8,6 +8,9 @@ import {
   resolveTargetSession,
   nextDraft,
   matchDirectedChild,
+  isUserAddress,
+  stripUserAddress,
+  parseQuery,
 } from '../src/main/engine/mailbox'
 import type { LiveSession } from '../src/main/engine/types'
 import { buildResumeArgs, EMPTY_RESUME_FLAGS } from '../src/main/engine/resumeFlags'
@@ -96,7 +99,9 @@ check('type → submit → type', type(['a', 's', 'k', '\r', 'n', 'e', 'x', 't']
 // through to "send it to the parent instead", and the sender had no parent — so it
 // was reported as "no parent link", a complaint about a relationship nobody mentioned.
 const NAMES: Record<string, string> = { C1: 'reviewer', C2: 'db work', P: 'parent' }
-const nameOf = (x: LiveSession) => NAMES[x.sessionId] ?? ''
+const ALIAS: Record<string, string> = { C1: 'reviewer-c1', C2: 'db-work-c2' }
+// Most stable first: alias, then the drifting display name.
+const nameOf = (x: LiveSession) => [ALIAS[x.sessionId], NAMES[x.sessionId]].filter(Boolean)
 const fleet = [mk('P', 1, true, 'idle'), mk('C1', 2, true, 'idle'), mk('C2', 3, true, 'idle')]
 const kids = [
   { parent_id: 'P', child_id: 'C1', trusted: 1 },
@@ -113,14 +118,38 @@ check('trust travels with the edge', (addr('"db work" hi') as { trusted: boolean
 // The regression guard: this MUST NOT fall through to the parent.
 check('a quoted name that no longer exists FAILS', addr('"ghost" hello')?.kind, 'unknown')
 check('the failure names what was wanted', (addr('"ghost" hi') as { wanted: string }).wanted, 'ghost')
-check('the failure lists who IS reachable', (addr('"ghost" hi') as { candidates: string[] }).candidates, ['reviewer', 'db work'])
+check('the failure lists who IS reachable, by alias', (addr('"ghost" hi') as { candidates: string[] }).candidates, ['reviewer-c1', 'db-work-c2'])
+// The point of the alias: it keeps resolving after Claude's auto-title drifts.
+check('the immutable alias resolves', addr('"reviewer-c1" hi')?.kind, 'match')
+check('the display name still resolves', addr('"reviewer" hi')?.kind, 'match')
+NAMES.C1 = 'something else entirely'
+check('alias survives a title change', addr('"reviewer-c1" hi')?.kind, 'match')
+check('the OLD display name stops resolving', addr('"reviewer" hi')?.kind, 'unknown')
+NAMES.C1 = 'reviewer'
 check('with no children at all it still fails', addr('"ghost" hi', [])?.kind, 'unknown')
-check('an ended child is gone from the candidates', (addr('"ghost" hi', kids, [fleet[0], fleet[1]]) as { candidates: string[] }).candidates, ['reviewer'])
+check('an ended child is gone from the candidates', (addr('"ghost" hi', kids, [fleet[0], fleet[1]]) as { candidates: string[] }).candidates, ['reviewer-c1'])
 // A BARE @word may just be a message that starts with '@' — a miss there still goes
 // to the parent, which is what lets "@scoped/pkg …" reach a human instead of failing.
 check('bare name routes when it matches', addr('reviewer hello')?.kind, 'match')
 check('bare miss stays undefined (falls through to the parent)', addr('scoped/pkg is broken'), undefined)
 check('bare prefix cannot match mid-word', addr('reviewerish thing'), undefined)
+
+// --- reserved addresses and the directory lane ---
+check('@"user" is reserved', isUserAddress('"user" the build is green'), true)
+check('bare @user works too', isUserAddress('user hey'), true)
+check('case does not matter', isUserAddress('"USER" hey'), true)
+// Must not swallow a peer whose name merely STARTS with "user".
+check('a peer named user-docs is not @user', isUserAddress('"user-docs" hi'), false)
+check('a peer named userland is not @user', isUserAddress('userland hi'), false)
+check('the note survives address stripping', stripUserAddress('"user" the build is green'), 'the build is green')
+check('bare form strips too', stripUserAddress('user: all done'), 'all done')
+
+check('?WHO is a query', parseQuery('?WHO')?.verb, 'WHO')
+check('?whois carries its argument', parseQuery('?whois reviewer-c1'), { verb: 'WHOIS', arg: 'reviewer-c1' })
+check('?INBOX takes no argument', parseQuery('?INBOX'), { verb: 'INBOX', arg: '' })
+// A message that DISCUSSES the lane is not a query — same anchoring as ACK.
+check('a query mentioned in prose is not a query', parseQuery('you can write ?WHO to list peers'), undefined)
+check('an unknown verb is not a query', parseQuery('?WHATEVER'), undefined)
 
 // --- read receipts / control-sequence hygiene ---
 // The receipt lane is matched on the whole file, like the exit sentinel, so a peer

@@ -43,6 +43,9 @@ export interface NodeRow {
   // renderer needs them to know whether resuming should raise the params modal.
   resume_flags: string | null
   resume_flags_sticky: number | null
+  // Immutable @-address, minted at adoption. Unlike `name` this never changes, so a
+  // message addressed to it keeps resolving after Claude's auto-title drifts.
+  alias?: string | null
 }
 
 // Distinct 10-hue category palette (Claude Design kit) — deliberately spread so
@@ -309,6 +312,18 @@ export function initRegistry(dbPath: string): void {
     `)
     db.pragma('user_version = 15')
   }
+  if (v < 16) {
+    // A stable, human-typable address per session. The @-handle has been the DISPLAY
+    // name, which is Claude's auto-title when the user hasn't set one — and that
+    // drifts as the conversation moves, so an address that worked yesterday silently
+    // stops resolving. Direct precedent: outbox_token above exists for exactly this
+    // reason, "durable identity a session carries across resume".
+    db.exec(`
+      ALTER TABLE node ADD COLUMN alias TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS node_alias ON node(alias) WHERE alias IS NOT NULL;
+    `)
+    db.pragma('user_version = 16')
+  }
 }
 
 // Remembered launch parameters for a session. `sticky` true → applied silently on
@@ -509,6 +524,44 @@ export function setOutboxToken(sessionId: string, token: string): void {
   must().prepare('UPDATE node SET outbox_token=? WHERE session_id=?').run(token, sessionId)
 }
 
+// Mint the session's permanent alias, once. Never regenerated and never editable:
+// the whole value is that it does not move. Derived from the display name so it is
+// recognisable, with a short suffix from the session id so two "reviewer"s differ.
+export function ensureAlias(sessionId: string, seed: string | null): string {
+  const d = must()
+  const row = d.prepare('SELECT alias FROM node WHERE session_id=?').get(sessionId) as
+    | { alias: string | null }
+    | undefined
+  if (row?.alias) return row.alias
+  const base =
+    (seed ?? '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 24) || 'session'
+  const tail = sessionId.replace(/[^a-z0-9]/gi, '').slice(0, 3).toLowerCase() || '000'
+  let alias = `${base}-${tail}`
+  // The unique index is the real guarantee; this only avoids throwing on a collision.
+  for (let n = 2; n < 50; n++) {
+    const clash = d.prepare('SELECT 1 FROM node WHERE alias=? AND session_id<>?').get(alias, sessionId)
+    if (!clash) break
+    alias = `${base}-${tail}${n}`
+  }
+  try {
+    d.prepare('UPDATE node SET alias=? WHERE session_id=? AND alias IS NULL').run(alias, sessionId)
+  } catch {
+    return sessionId.slice(0, 8) // index rejected it — fall back rather than fail a scan
+  }
+  return alias
+}
+
+export function getAliasMap(): Map<string, string> {
+  const rows = must()
+    .prepare('SELECT session_id, alias FROM node WHERE alias IS NOT NULL')
+    .all() as { session_id: string; alias: string }[]
+  return new Map(rows.map((r) => [r.session_id, r.alias]))
+}
+
 export function getOutboxToken(sessionId: string): string | null {
   const r = must()
     .prepare('SELECT outbox_token AS t FROM node WHERE session_id=?')
@@ -691,7 +744,7 @@ export function getNodeMap(): Map<string, NodeRow> {
   const rows = must()
     .prepare(
       `SELECT session_id, cwd, name, category_id, origin, first_seen, last_seen, theme,
-              resume_flags, resume_flags_sticky
+              resume_flags, resume_flags_sticky, alias
        FROM node`,
     )
     .all() as NodeRow[]

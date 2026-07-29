@@ -91,10 +91,10 @@ export function matchDirectedChild(
   edges: RoutableEdge[],
   senderId: string,
   rest: string,
-  // How a session's @-handle is spelled. Injected rather than imported so this can
-  // be exercised without the registry — the resolution rules are where addressing
-  // silently goes wrong, so they need to be testable.
-  displayName: (s: LiveSession) => string,
+  // Every address a session answers to, most stable FIRST: its immutable alias, then
+  // its display name. Injected rather than imported so this can be exercised without
+  // the registry — resolution is where addressing goes wrong silently.
+  handlesOf: (s: LiveSession) => string[],
 ): DirectedResult {
   const kids: { child: LiveSession; trusted: boolean }[] = []
   for (const e of edges) {
@@ -107,27 +107,33 @@ export function matchDirectedChild(
   // This is the form we instruct parents to use (see parentBlessNote / preamble).
   const q = rest.match(/^"([^"]+)"[\s:,-]*/)
   if (q) {
-    const wanted = q[1].trim()
+    const wanted = q[1].trim().toLowerCase()
     for (const { child, trusted } of kids) {
-      if (displayName(child).toLowerCase() === wanted.toLowerCase()) {
+      if (handlesOf(child).some((h) => h.toLowerCase() === wanted)) {
         return { kind: 'match', child, body: rest.slice(q[0].length).trim(), trusted }
       }
     }
     // A named session that has since ended takes its edge with it (edges cascade on
     // node delete), so "the child I was talking to yesterday" lands here.
-    return { kind: 'unknown', wanted, candidates: kids.map((k) => displayName(k.child)) }
+    return {
+      kind: 'unknown',
+      wanted: q[1].trim(),
+      candidates: kids.map((k) => handlesOf(k.child)[0]).filter(Boolean),
+    }
   }
   // Bare form: longest display-name prefix, requiring a word boundary after (so
   // "@apidoc" can't match a child named "a"). Works when the name is reproduced
   // verbatim (incl. spaces); single-word names are the common case.
   let best: { kind: 'match'; child: LiveSession; body: string; trusted: boolean } | undefined
+  let bestLen = 0
   const lower = rest.toLowerCase()
   for (const { child, trusted } of kids) {
-    const nm = displayName(child)
-    if (!nm || !lower.startsWith(nm.toLowerCase())) continue
-    const after = rest.charAt(nm.length) // '' at end-of-string is fine (exact match)
-    if (after && !/[\s:,]/.test(after)) continue // reject mid-word prefix hits
-    if (!best || nm.length > displayName(best.child).length) {
+    for (const nm of handlesOf(child)) {
+      if (!nm || !lower.startsWith(nm.toLowerCase())) continue
+      const after = rest.charAt(nm.length) // '' at end-of-string is fine (exact match)
+      if (after && !/[\s:,]/.test(after)) continue // reject mid-word prefix hits
+      if (nm.length <= bestLen) continue
+      bestLen = nm.length
       best = {
         kind: 'match',
         child,
@@ -139,3 +145,30 @@ export function matchDirectedChild(
   return best
 }
 
+
+// Reserved addresses, recognised before any peer lookup so no session can ever claim
+// one by naming itself after it.
+//
+// @user reaches the HUMAN's inbox and is injected into no session at all. It gives a
+// session a way to raise something without spending a peer's turn, and because it can
+// never reach a peer it adds no fan-out — which is why it is safe to hand out before
+// per-session budgets exist.
+// Two exact forms only: the quoted "user", or bare `user` followed by end-of-string
+// or a separator that cannot be part of a name. A hyphen is NOT such a separator —
+// allowing it made a peer legitimately named "user-docs" resolve as the human, which
+// would silently swallow its mail.
+const USER_ADDR = /^(?:"user"|user(?=$|[\s:,]))/i
+export function isUserAddress(rest: string): boolean {
+  return USER_ADDR.test(rest.trim())
+}
+
+export function stripUserAddress(rest: string): string {
+  return rest.trim().replace(/^(?:"user"|user)[\s:,-]*/i, '').trim()
+}
+
+// The directory lane, on the same outbox file as everything else. Anchored to the
+// whole content so a message that merely discusses "?WHO" is not a query.
+export function parseQuery(content: string): { verb: string; arg: string } | undefined {
+  const m = /^\?(WHO|INBOX|WHOIS)\b\s*(.*)$/i.exec(content.trim())
+  return m ? { verb: m[1].toUpperCase(), arg: (m[2] ?? '').trim() } : undefined
+}
