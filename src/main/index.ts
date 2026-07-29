@@ -1266,7 +1266,14 @@ async function runArbiterNow(inputs: ArbiterSessionInput[], fp: string): Promise
         const inp = inputs.find((i) => i.sessionId === id)
         if (inp) arbiterGlossKey.set(id, arbiterSessionKey(inp)) // don't pay for this one again
       }
-      const live = new Set(inputs.map((i) => i.sessionId))
+      // Evict against the CURRENT needs-you set, never against this batch. `inputs`
+      // is the FRESH subset — only the sessions whose own input changed — so using
+      // it as the live set deleted the cached key for every session that did NOT
+      // change, making them all "fresh" again on the next scan and re-charging for
+      // them. That is a billing ping-pong: 6 glossed, then 3, then 6, forever, for a
+      // fleet that is sitting still. (Regression introduced with the per-session
+      // skip: this line still assumed `inputs` was the whole set.)
+      const live = new Set(arbiterLastInputs.map((i) => i.sessionId))
       for (const id of [...arbiterGloss.keys()]) if (!live.has(id)) arbiterGloss.delete(id)
       for (const id of [...arbiterGlossKey.keys()]) if (!live.has(id)) arbiterGlossKey.delete(id)
       const missing = inputs.length - Object.keys(res.glosses).length
