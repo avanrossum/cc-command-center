@@ -18,6 +18,8 @@ import {
 } from '../src/main/engine/mailbox'
 import type { LiveSession } from '../src/main/engine/types'
 import { buildResumeArgs, EMPTY_RESUME_FLAGS } from '../src/main/engine/resumeFlags'
+import { nextModes, modePrelude, NO_MODES } from '../src/main/engine/vt'
+import { readFileSync, existsSync } from 'node:fs'
 
 
 let failed = 0
@@ -270,6 +272,44 @@ check('1M is a model suffix, not a flag', buildResumeArgs({ model: 'claude-opus-
   'claude-opus-4-8[1m]',
 ])
 check('1M with no model emits nothing', buildResumeArgs({ model: '', context: '1m', effort: '', mode: '' }), [])
+
+// --- sticky terminal modes ---
+// Claude Code pushes the kitty keyboard protocol once, at the very start of its
+// output, and never again. The renderer rebuilds its xterm on every session switch and
+// re-attach replays only a capped buffer — so once a session outgrew that buffer the
+// push was gone and Shift+Enter silently submitted instead of inserting a newline.
+const fold = (chunks: string[]) => chunks.reduce(nextModes, NO_MODES)
+
+check('the kitty push is captured', fold(['\x1b[>1u']).kitty, '\x1b[>1u')
+check('a pop turns it back off', fold(['\x1b[>1u', '\x1b[<1u']).kitty, '')
+check('state is the CURRENT setting, not a history', fold(['\x1b[>1u', '\x1b[<1u', '\x1b[>5u']).kitty, '\x1b[>5u')
+check('bracketed paste is tracked too', fold(['\x1b[?2004h']).bracketedPaste, '\x1b[?2004h')
+check('...and its disable', fold(['\x1b[?2004h', '\x1b[?2004l']).bracketedPaste, '')
+check('ordinary output changes nothing', fold(['hello \x1b[31mworld\x1b[0m']), NO_MODES)
+// It must never invent a mode: a session that never asked for kitty must not get it.
+check('nothing set means nothing replayed', modePrelude(NO_MODES), '')
+check('only what the session set is replayed', modePrelude(fold(['\x1b[?2004h'])), '\x1b[?2004h')
+check('both replay together', modePrelude(fold(['\x1b[>1u', '\x1b[?2004h'])), '\x1b[>1u\x1b[?2004h')
+// Split across chunk boundaries is the realistic case — PTY data arrives arbitrarily.
+check('a mode later in the stream still lands', fold(['boot...', '\x1b[>1u', 'more output']).kitty, '\x1b[>1u')
+// The regression itself: the push scrolls out of a capped buffer, but the tracked
+// state does not, so the prelude still re-establishes it.
+const CAP = 64
+const stream = ['\x1b[>1u', 'x'.repeat(500)]
+const modes = fold(stream)
+const replayed = stream.join('').slice(-CAP)
+check('the push HAS scrolled out of the replay', replayed.includes('\x1b[>1u'), false)
+check('...but the prelude still restores it', modePrelude(modes), '\x1b[>1u')
+
+// Against the REAL bytes captured from Claude Code 2.1.220 at startup, if present.
+const CAPTURE = 'test/fixtures/startup-modes-2.1.220.bin'
+if (existsSync(CAPTURE)) {
+  const real = readFileSync(CAPTURE, 'latin1')
+  check('real startup capture: kitty push found', fold([real]).kitty, '\x1b[>1u')
+  check('real capture: prelude is non-empty', modePrelude(fold([real])).length > 0, true)
+} else {
+  console.log(`ok    (skipped: no ${CAPTURE})`)
+}
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed')
 process.exit(failed ? 1 : 0)

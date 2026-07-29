@@ -34,6 +34,7 @@ import {
 } from './engine/sessions'
 import { readLastAssistantText } from './engine/transcript'
 import { parseDialogCommand, questionFromText } from './engine/dialog'
+import { nextModes, modePrelude, NO_MODES, type VtModes } from './engine/vt'
 import {
   spoolName,
   tokenFromSpoolName,
@@ -1378,6 +1379,10 @@ interface Term {
   draft: number
   lastInputAt: number
   lastSeenState?: CoarseState // edge-trigger for clearing the draft when a turn starts
+  // Sticky terminal modes this session established, re-asserted when the renderer
+  // rebuilds its xterm. See engine/vt.ts — without this, Shift+Enter silently stopped
+  // working on any session that had outgrown the replay buffer.
+  modes: VtModes
 }
 // Managed terminals keyed by a STABLE string key: the Claude session id for a
 // scanned session, or `new:<pid>` for a freshly-launched one not yet adopted.
@@ -1471,9 +1476,11 @@ function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: str
     spawnedAt: Date.now(),
     draft: 0,
     lastInputAt: 0,
+    modes: NO_MODES,
   }
   terminals.set(key, term)
   p.onData((data) => {
+    term.modes = nextModes(term.modes, data)
     term.buffer = (term.buffer + data).slice(-BUFFER_CAP)
     if (attachedKey === term.key) sendToWin('term:data', { key: term.key, data })
   })
@@ -3092,7 +3099,14 @@ ipcMain.handle('term:open', (_e, key: string, opts: OpenOpts) => {
 ipcMain.on('term:attach', (_e, key: string) => {
   attachedKey = key
   const t = terminals.get(key)
-  if (t?.buffer) sendToWin('term:data', { key, data: t.buffer })
+  if (!t?.buffer) return
+  // Re-assert the session's sticky modes AHEAD of the replay. The renderer builds a
+  // brand-new xterm on every switch, and the buffer is capped — so a mode the session
+  // set at startup is gone from the replay as soon as it has produced BUFFER_CAP of
+  // output. That is what silently broke Shift+Enter on busy sessions. Any mode change
+  // still inside the buffer replays afterwards and wins, so this only supplies the
+  // baseline that scrolled away.
+  sendToWin('term:data', { key, data: modePrelude(t.modes) + t.buffer })
 })
 // Read-only peek at the tail of each session's live output buffer, for the
 // overview grid's thumbnails. Deliberately does NOT touch attachedKey or send
