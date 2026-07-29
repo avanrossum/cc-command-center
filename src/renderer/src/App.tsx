@@ -1583,15 +1583,7 @@ export function App() {
                     return
                   }
                   const parent = live.find((s) => s.sessionId === selected.sessionId)
-                  if (parent)
-                    setSpawn({
-                      parent,
-                      type,
-                      cwd: selected.cwd,
-                      note: text,
-                      name: '',
-                      autoMode: snap.settings?.spawnAutoMode ?? true,
-                    })
+                  if (parent) setSpawn(seedSpawn(parent, type, selected.cwd, text, snap.settings))
                   else {
                     window.cc.sessionSpawnChild(selected.sessionId, selected.cwd, type, text)
                     showFlash(`spawned ${label} from selection`)
@@ -1944,14 +1936,7 @@ export function App() {
           }}
           onSpawn={(s, type) => {
             setMenu(null)
-            setSpawn({
-              parent: s,
-              type,
-              cwd: s.cwd,
-              note: '',
-              name: '',
-              autoMode: snap.settings?.spawnAutoMode ?? true,
-            })
+            setSpawn(seedSpawn(s, type, s.cwd, '', snap.settings))
           }}
           onSend={(s) => {
             setMenu(null)
@@ -2009,6 +1994,7 @@ export function App() {
           spawn={spawn}
           setSpawn={setSpawn}
           apiKeys={snap.apiKeys ?? []}
+          categories={snap.categories ?? []}
           siblingNames={live
             .filter((s) => edgeByChild.get(s.sessionId ?? '')?.parent_id === spawn.parent.sessionId)
             .map((s) => (s.name ?? '').toLowerCase())
@@ -2713,14 +2699,50 @@ function ContextMenu({
   )
 }
 
+// Defaults for a spawn: the app-global last-used launch params (same source the
+// New-session modal seeds from), auto mode unless the user turned that off, and no
+// category chosen — which the main process reads as "inherit the parent's".
+function seedSpawn(
+  parent: Session,
+  type: 'blocking' | 'tangential',
+  cwd: string,
+  note: string,
+  st?: AppSettings,
+): SpawnState {
+  const lastModel = st?.lastModel ?? ''
+  const known = MODEL_OPTS.some((o) => o.v === lastModel)
+  return {
+    parent,
+    type,
+    cwd,
+    note,
+    name: '',
+    model: known ? lastModel : lastModel ? '__custom__' : '',
+    customModel: known ? '' : lastModel,
+    effort: st?.lastEffort ?? '',
+    ctx: st?.lastContext ?? '',
+    mode: (st?.spawnAutoMode ?? true) ? 'auto' : '',
+  }
+}
+
 type SpawnState = {
   parent: Session
   type: 'blocking' | 'tangential'
   cwd: string
   note: string
   name: string
-  autoMode: boolean
   apiKeyId?: number
+  // Launch parameters, same four the New-session modal sets. A child used to
+  // inherit whatever the CLI defaults were, which is not a useful default when the
+  // work you are handing off is cheaper (or harder) than what the parent is doing.
+  model: string
+  customModel: string
+  effort: string
+  ctx: string
+  mode: string
+  // Tangential only — a blocking child's category is derived from its parent, so
+  // it is not offered one. undefined means "inherit the parent's".
+  categoryId?: number | null
 }
 
 // "Use an API key for this session" — a checkbox that reveals a key dropdown.
@@ -2781,26 +2803,40 @@ function SpawnComposer({
   setSpawn,
   siblingNames,
   apiKeys,
+  categories,
 }: {
   spawn: SpawnState
   setSpawn: (s: SpawnState | null) => void
   siblingNames: string[]
   apiKeys: ApiKey[]
+  categories: Category[]
 }) {
   const isBlocking = spawn.type === 'blocking'
   const parentName = spawn.parent.name ?? `pid ${spawn.parent.pid}`
   // Duplicate child name → ambiguous @-addressing on the bus; block it.
   const dupName = !!spawn.name.trim() && siblingNames.includes(spawn.name.trim().toLowerCase())
+  // Re-applied here, not just in the dropdown, so switching to a model that can't
+  // do 1M or ultracode never sends a flag the CLI would reject or ignore.
+  const { ctxOk, effortVal } = launchDerived(spawn.model, spawn.customModel, spawn.effort)
   const submit = () => {
     if (dupName) return
+    const baseModel = spawn.model === '__custom__' ? spawn.customModel.trim() : spawn.model
     window.cc.sessionSpawnChild(
       spawn.parent.sessionId,
       spawn.cwd,
       spawn.type,
       spawn.note.trim() || undefined,
       spawn.name.trim() || undefined,
-      spawn.autoMode,
+      spawn.mode === 'auto',
       spawn.apiKeyId,
+      {
+        model: baseModel,
+        context: ctxOk ? spawn.ctx : '',
+        effort: effortVal,
+        mode: spawn.mode,
+      },
+      // Blocking children derive their category, so never send one for them.
+      isBlocking ? undefined : spawn.categoryId,
     )
     setSpawn(null)
   }
@@ -2873,27 +2909,53 @@ function SpawnComposer({
             if (e.key === 'Escape') setSpawn(null)
           }}
         />
-        <label className="setrow spawnauto">
-          <input
-            type="checkbox"
-            checked={spawn.autoMode}
-            onChange={(e) => setSpawn({ ...spawn, autoMode: e.target.checked })}
-          />
-          <span>
-            <b>Start in auto mode</b>
-            <span className="setsub">recommended for parent/child work</span>
-          </span>
-        </label>
+        {!isBlocking && (
+          <>
+            <div className="spawnlabel">
+              Category{' '}
+              <span className="spawnopt">an offshoot keeps its own — defaults to the parent’s</span>
+            </div>
+            <select
+              className="cat-in"
+              value={spawn.categoryId ?? ''}
+              onChange={(e) =>
+                setSpawn({
+                  ...spawn,
+                  categoryId: e.target.value === '' ? null : Number(e.target.value),
+                })
+              }
+            >
+              <option value="">Uncategorized</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+        <LaunchParams
+          model={spawn.model}
+          setModel={(v) => setSpawn({ ...spawn, model: v })}
+          customModel={spawn.customModel}
+          setCustomModel={(v) => setSpawn({ ...spawn, customModel: v })}
+          effort={spawn.effort}
+          setEffort={(v) => setSpawn({ ...spawn, effort: v })}
+          ctx={spawn.ctx}
+          setCtx={(v) => setSpawn({ ...spawn, ctx: v })}
+          mode={spawn.mode}
+          setMode={(v) => setSpawn({ ...spawn, mode: v })}
+        />
         <ApiKeyPicker
           apiKeys={apiKeys}
           value={spawn.apiKeyId}
           onChange={(id) => setSpawn({ ...spawn, apiKeyId: id })}
         />
         <div className="spawnhint">
-          Parent–child messaging writes to a small mailbox file. Keep <b>both</b> sessions in auto
-          mode for a smooth back-and-forth: each session’s first write crosses a permission gate,
-          and a parent that isn’t in auto also pauses for approval before acting on a child’s reply.
-          Pre-authorizing the mailbox in Settings removes the write gate entirely.
+          Parent–child messaging writes to a small mailbox file. Keep <b>both</b> sessions on{' '}
+          <b>Auto</b> mode for a smooth back-and-forth: each session’s first write crosses a
+          permission gate, and a parent that isn’t in auto also pauses for approval before acting on
+          a child’s reply. Pre-authorizing the mailbox in Settings removes the write gate entirely.
         </div>
         <div className="spawnactions">
           <button className="rbtn" onClick={() => setSpawn(null)}>

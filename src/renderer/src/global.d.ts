@@ -124,6 +124,8 @@ declare global {
         name?: string,
         autoMode?: boolean,
         apiKeyId?: number,
+        flags?: ResumeFlags,
+        categoryId?: number | null,
       ) => Promise<{ pid: number; cwd: string } | null>
       pickFolder: () => Promise<string | null>
       pickPath: (sessionId?: string) => Promise<string | null>

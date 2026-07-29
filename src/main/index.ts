@@ -118,6 +118,7 @@ import {
   buildResumeArgs,
   parseResumeFlags,
   sanitizeResumeFlags,
+  EMPTY_RESUME_FLAGS,
   type ResumeFlags,
 } from './engine/resumeFlags'
 import {
@@ -2165,6 +2166,10 @@ interface PendingChild {
   type: 'blocking' | 'tangential'
   note?: string
   name?: string // user-set name applied on adoption; stable @-handle for the bus
+  // Applied on adoption. undefined = inherit the parent's; null = deliberately
+  // Uncategorized. Only meaningful for a tangential offshoot — a blocking child's
+  // category is DERIVED from its parent every scan, so storing one would be a lie.
+  categoryId?: number | null
   apiKeyId?: number // persisted on the node at adoption so resume re-applies it
   resumeFlags?: ResumeFlags // ditto: re-applied on resume
   resumeSticky?: boolean
@@ -2201,15 +2206,22 @@ function spawnChild(
   name?: string,
   autoMode?: boolean,
   apiKeyId?: number,
+  flags?: ResumeFlags,
+  categoryId?: number | null,
 ): number {
   // Auto mode lets the child's permission classifier approve routine gates (the
-  // mailbox write especially) so parent↔child messaging flows unattended. Only
-  // an EXPLICIT choice (the composer checkbox) updates the remembered
-  // preference; implicit callers (Cmd+K instant spawn) inherit it.
-  const effAuto = typeof autoMode === 'boolean' ? autoMode : getSettings().spawnAutoMode
+  // mailbox write especially) so parent↔child messaging flows unattended. The
+  // composer now expresses it as the Mode picker; implicit callers (Cmd+K instant
+  // spawn) inherit the remembered preference.
+  const picked = sanitizeResumeFlags(flags ?? EMPTY_RESUME_FLAGS)
+  const effAuto =
+    picked.mode === 'auto' ||
+    (!picked.mode && (typeof autoMode === 'boolean' ? autoMode : getSettings().spawnAutoMode))
   if (typeof autoMode === 'boolean') setAppState('spawnAutoMode', String(autoMode))
-  const args = effAuto ? ['--permission-mode', 'auto'] : []
-  const pid = launchSession(cwd, args, { CC_ROLE: 'child' }, apiKeyId)
+  // A child launched without an explicit mode still gets auto when that is the
+  // remembered preference — the messaging path depends on it.
+  const childFlags: ResumeFlags = { ...picked, mode: picked.mode || (effAuto ? 'auto' : '') }
+  const pid = launchSession(cwd, buildResumeArgs(childFlags), { CC_ROLE: 'child' }, apiKeyId)
   const outbox = outboxByPid.get(pid)?.path ?? ''
   const userNote = note?.trim()
   const preamble = awarenessPreamble(outbox)
@@ -2218,12 +2230,15 @@ function spawnChild(
     type,
     note: userNote ? `${preamble}\n\n— — —\n\n${userNote}` : preamble,
     name: name?.trim() || undefined,
+    categoryId,
     apiKeyId,
     // Sticky, always: a resumed child must keep --permission-mode auto or its
     // mailbox-write gate reappears and parent↔child messaging stalls unattended —
     // exactly what auto mode exists to prevent. A background child also has no UI
-    // to raise a params modal from, so it must never be gated.
-    resumeFlags: { model: '', context: '', effort: '', mode: effAuto ? 'auto' : '' },
+    // to raise a params modal from, so it must never be gated. The model/effort a
+    // child was launched with rides along for the same reason: `claude --resume`
+    // starts at the CLI defaults, so without this a child silently changes model.
+    resumeFlags: childFlags,
     resumeSticky: true,
     at: Date.now(),
   })
@@ -2332,6 +2347,26 @@ function tagAdoptedTerminals(sessions: LiveSession[]): void {
   }
 }
 
+// The category a session actually displays under, outside the scan's own cached
+// walk: its own, or — for a blocking child, which has none of its own — its
+// parent's, up the blocking chain. Used when a spawned offshoot has to inherit
+// where its parent lives.
+function effectiveCategoryOf(sessionId: string): number | null {
+  const nodes = getNodeMap()
+  const edges = getEdges()
+  const seen = new Set<string>()
+  let cur: string | undefined = sessionId
+  while (cur && !seen.has(cur)) {
+    seen.add(cur)
+    const node = nodes.get(cur)
+    if (!node) return null // unknown node — same stop the scan's walk makes
+    if (node.category_id != null) return node.category_id
+    const e: Edge | undefined = edges.find((x) => x.child_id === cur)
+    cur = e && e.type === 'blocking' && nodes.has(e.parent_id) ? e.parent_id : undefined
+  }
+  return null
+}
+
 // Once a pending child has been adopted (has a session id), wire the typed edge
 // to its parent and best-effort deliver the handoff note.
 function reconcilePendingChildren(sessions: LiveSession[]): void {
@@ -2353,11 +2388,21 @@ function reconcilePendingChildren(sessions: LiveSession[]): void {
       if (pend.resumeFlags)
         setNodeResumeFlags(s.sessionId, JSON.stringify(sanitizeResumeFlags(pend.resumeFlags)), !!pend.resumeSticky)
       setParent(s.sessionId, pend.parentSessionId, pend.type)
-      // Guarantee the child's category is edge-determined: null here means a
-      // tangential child shows in Uncategorized and a blocking child inherits
-      // its parent via categoryOf. Belt-and-suspenders in case another path
-      // created the node and auto-categorized it before this ran.
-      assignCategory(s.sessionId, null)
+      // A BLOCKING child's category is derived from its parent every scan
+      // (categoryOf walks the blocking chain), so it must hold null — a stored
+      // value there would be ignored and misleading. A TANGENTIAL offshoot keeps
+      // its own, so it takes what the composer picked, and when nothing was picked
+      // it inherits the parent's rather than landing in Uncategorized. Explicitly
+      // set either way, in case another path auto-categorized the node by folder
+      // before this ran.
+      assignCategory(
+        s.sessionId,
+        pend.type === 'blocking'
+          ? null
+          : pend.categoryId !== undefined
+            ? pend.categoryId
+            : effectiveCategoryOf(pend.parentSessionId),
+      )
       // A user-set name is the child's stable, @-addressable handle (the bus
       // resolves @name on the user name before Claude's drifting auto-title).
       if (pend.name) setSessionName(s.sessionId, pend.name)
@@ -3540,9 +3585,15 @@ ipcMain.handle(
     name?: string,
     autoMode?: boolean,
     apiKeyId?: number,
+    flags?: ResumeFlags,
+    categoryId?: number | null,
   ) => {
     if (!parentSessionId || !cwd) return null
-    return { pid: spawnChild(parentSessionId, cwd, type, note, name, autoMode, apiKeyId), cwd }
+    const cat = categoryId === undefined ? undefined : categoryId === null ? null : Number(categoryId)
+    return {
+      pid: spawnChild(parentSessionId, cwd, type, note, name, autoMode, apiKeyId, flags, cat),
+      cwd,
+    }
   },
 )
 // ---------- API keys (renderer never receives a plaintext key) ----------

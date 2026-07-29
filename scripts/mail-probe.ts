@@ -9,6 +9,7 @@ import {
   nextDraft,
 } from '../src/main/engine/mailbox'
 import type { LiveSession } from '../src/main/engine/types'
+import { buildResumeArgs, EMPTY_RESUME_FLAGS } from '../src/main/engine/resumeFlags'
 
 let failed = 0
 function check(name: string, got: unknown, want: unknown): void {
@@ -87,6 +88,30 @@ check('emoji counts as one', type(['👍']), 1)
 check('tab is not text and does not clear', type(['a', '\t']), 1)
 // The realistic sequence: type, submit, type again — the box is only "dirty" when it is.
 check('type → submit → type', type(['a', 's', 'k', '\r', 'n', 'e', 'x', 't']), 4)
+
+// --- child launch argv ---
+// Spawning a child used to hard-code ['--permission-mode','auto']; it now goes
+// through buildResumeArgs so a picked model/effort rides along. The default path
+// must still produce exactly what it did before, or parent↔child messaging stalls
+// on the mailbox-write gate that auto mode exists to clear.
+check('default child is auto and nothing else', buildResumeArgs({ ...EMPTY_RESUME_FLAGS, mode: 'auto' }), [
+  '--permission-mode',
+  'auto',
+])
+check('no mode, no flags', buildResumeArgs(EMPTY_RESUME_FLAGS), [])
+check('a picked model and effort ride along', buildResumeArgs({ model: 'claude-sonnet-5', context: '', effort: 'low', mode: 'auto' }), [
+  '--model',
+  'claude-sonnet-5',
+  '--effort',
+  'low',
+  '--permission-mode',
+  'auto',
+])
+check('1M is a model suffix, not a flag', buildResumeArgs({ model: 'claude-opus-4-8', context: '1m', effort: '', mode: '' }), [
+  '--model',
+  'claude-opus-4-8[1m]',
+])
+check('1M with no model emits nothing', buildResumeArgs({ model: '', context: '1m', effort: '', mode: '' }), [])
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed')
 process.exit(failed ? 1 : 0)

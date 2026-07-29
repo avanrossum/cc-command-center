@@ -121,6 +121,8 @@ contextBridge.exposeInMainWorld('cc', {
     name?: string,
     autoMode?: boolean,
     apiKeyId?: number,
+    flags?: ResumeFlags,
+    categoryId?: number | null,
   ) =>
     ipcRenderer.invoke(
       'session:spawnChild',
@@ -131,6 +133,8 @@ contextBridge.exposeInMainWorld('cc', {
       name,
       autoMode,
       apiKeyId,
+      flags,
+      categoryId,
     ),
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
   pickPath: (sessionId?: string) => ipcRenderer.invoke('dialog:pickPath', sessionId),
