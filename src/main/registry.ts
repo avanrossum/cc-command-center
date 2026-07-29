@@ -268,6 +268,47 @@ export function initRegistry(dbPath: string): void {
     `)
     db.pragma('user_version = 14')
   }
+  if (v < 15) {
+    // The durable mailbox. Every cross-session message is a row from the moment it
+    // is claimed off disk, so "sent, unconfirmed, and now blank" cannot happen: the
+    // body is committed before routing is ever attempted.
+    //
+    // The one place the gate ledger must NOT be copied is its ON DELETE CASCADE.
+    // That is right for a gate — the transcript on disk is the real record — but
+    // deleteNode runs on ORDINARY PTY EXIT (autoRemoveExitedSession), so a cascade
+    // here would wipe every mailbox each time a session quits normally, reproducing
+    // the exact data loss this table exists to prevent. Endpoints are plain TEXT
+    // with no FK, and archival is an explicit step.
+    //
+    // Identity also differs deliberately. A gate is a recurring OBSERVATION keyed by
+    // a stable fingerprint so rescans dedupe. A message is the opposite: every send
+    // is a distinct event that must never dedupe, so the key is a minted id.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS message (
+        id TEXT PRIMARY KEY,
+        from_session_id TEXT NOT NULL,
+        from_handle TEXT NOT NULL,      -- display name frozen at send time
+        to_session_id TEXT,             -- null until addressing resolves
+        to_addr TEXT NOT NULL,          -- the literal address the sender wrote
+        body TEXT NOT NULL,             -- FULL payload, never silently truncated
+        state TEXT NOT NULL,            -- queued|held|delivered|read|failed|expired|archived
+        reason TEXT,                    -- human-readable why-it-is-here
+        spool TEXT,                     -- the on-disk claim, while one still exists
+        thread_id TEXT,                 -- loop control once routing is a mesh
+        origin TEXT NOT NULL DEFAULT 'session',  -- session|user|app
+        created_at INTEGER NOT NULL,
+        routed_at INTEGER,
+        delivered_at INTEGER,
+        read_at INTEGER,
+        terminal_at INTEGER,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_attempt_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS message_open ON message(to_session_id) WHERE terminal_at IS NULL;
+      CREATE INDEX IF NOT EXISTS message_recent ON message(created_at DESC);
+    `)
+    db.pragma('user_version = 15')
+  }
 }
 
 // Remembered launch parameters for a session. `sticky` true → applied silently on
@@ -914,4 +955,237 @@ export function getOpenGates(): GateRow[] {
       'SELECT fp, session_id, category_id, kind, payload, first_seen, last_seen, seen_at, resolved_at FROM gate WHERE resolved_at IS NULL ORDER BY first_seen',
     )
     .all() as GateRow[]
+}
+
+// ---------- the mailbox: durable cross-session messages ----------
+// Persisted the instant a payload is claimed off disk, BEFORE routing is attempted.
+// That ordering is the whole point: the old pipeline emptied the outbox first and
+// kept the only copy in memory, so a message that could not be routed vanished on
+// quit with the sender believing it had sent. See the v15 migration for why this
+// table does not cascade with its node.
+
+export type MessageState =
+  | 'queued' // persisted; addressing not yet resolved
+  | 'held' // resolved but not sendable yet — `reason` carries the substate
+  | 'delivered' // pasted into the target's input. Transport, not comprehension.
+  | 'read' // recipient acknowledged (Phase 4)
+  | 'failed' // terminal and actionable
+  | 'expired' // aged out without ever becoming deliverable
+  | 'archived' // an endpoint was removed; read-only for the retention window
+
+export interface MessageRow {
+  id: string
+  from_session_id: string
+  from_handle: string
+  to_session_id: string | null
+  to_addr: string
+  body: string
+  state: MessageState
+  reason: string | null
+  spool: string | null
+  thread_id: string | null
+  origin: string
+  created_at: number
+  routed_at: number | null
+  delivered_at: number | null
+  read_at: number | null
+  terminal_at: number | null
+  attempts: number
+  last_attempt_at: number | null
+}
+
+export interface NewMessage {
+  id: string
+  fromSessionId: string
+  fromHandle: string
+  toSessionId?: string | null
+  toAddr: string
+  body: string
+  state: MessageState
+  reason?: string | null
+  spool?: string | null
+  origin?: string
+  at: number
+  terminal?: boolean // app/system notes are born terminal — nothing more happens to them
+}
+
+// Every state a message can reach and never leave. Used to stamp terminal_at, which
+// is what the open-set index and the prune are keyed on.
+const TERMINAL_STATES = new Set<MessageState>(['failed', 'expired', 'archived'])
+
+export function insertMessage(m: NewMessage): void {
+  const terminal = m.terminal || TERMINAL_STATES.has(m.state)
+  must()
+    .prepare(
+      `INSERT OR REPLACE INTO message
+         (id, from_session_id, from_handle, to_session_id, to_addr, body, state, reason,
+          spool, origin, created_at, terminal_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    )
+    .run(
+      m.id,
+      m.fromSessionId,
+      m.fromHandle,
+      m.toSessionId ?? null,
+      m.toAddr,
+      m.body,
+      m.state,
+      m.reason ?? null,
+      m.spool ?? null,
+      m.origin ?? 'session',
+      m.at,
+      terminal ? m.at : null,
+    )
+}
+
+// Advance a message. Timestamps are set on the transition that earns them and never
+// cleared, so the row reads as a history rather than only a current position.
+// NOTHING here touches `body` — no transition may discard the payload, which is the
+// invariant the whole table exists to hold.
+export function setMessageState(
+  id: string,
+  state: MessageState,
+  reason: string | null,
+  at: number,
+  opts: { toSessionId?: string | null; spool?: string | null; attempt?: boolean } = {},
+): void {
+  const d = must()
+  const terminal = TERMINAL_STATES.has(state)
+  d.prepare(
+    `UPDATE message SET
+       state=?,
+       reason=?,
+       to_session_id=COALESCE(?, to_session_id),
+       routed_at=CASE WHEN routed_at IS NULL AND ? IS NOT NULL THEN ? ELSE routed_at END,
+       delivered_at=CASE WHEN ?='delivered' AND delivered_at IS NULL THEN ? ELSE delivered_at END,
+       read_at=CASE WHEN ?='read' AND read_at IS NULL THEN ? ELSE read_at END,
+       terminal_at=CASE WHEN ? THEN COALESCE(terminal_at, ?) ELSE terminal_at END,
+       spool=CASE WHEN ? THEN NULL ELSE spool END,
+       attempts=attempts + CASE WHEN ? THEN 1 ELSE 0 END,
+       last_attempt_at=CASE WHEN ? THEN ? ELSE last_attempt_at END
+     WHERE id=?`,
+  ).run(
+    state,
+    reason,
+    opts.toSessionId ?? null,
+    opts.toSessionId ?? null,
+    at,
+    state,
+    at,
+    state,
+    at,
+    terminal ? 1 : 0,
+    at,
+    opts.spool === null ? 1 : 0,
+    opts.attempt ? 1 : 0,
+    opts.attempt ? 1 : 0,
+    at,
+    id,
+  )
+}
+
+// Delivered is treated as terminal until read receipts land (Phase 4), when the
+// terminal point moves to `read` and a delivered-but-never-acknowledged message
+// becomes a visible failure instead of a silent success.
+export function markDelivered(id: string, at: number): void {
+  setMessageState(id, 'delivered', null, at, { spool: null, attempt: true })
+  must().prepare('UPDATE message SET terminal_at=COALESCE(terminal_at, ?) WHERE id=?').run(at, id)
+}
+
+// Newest first — the inbox order. Bodies are PREVIEWED here, not returned whole: this
+// feeds the 1.5s snapshot, and a message may be a quarter of a megabyte. The full
+// body is fetched per row on demand (getMessageBody), so the copy-out surface is
+// still lossless without paying for it on every scan.
+export interface MessageBrief extends Omit<MessageRow, 'body'> {
+  preview: string
+  body_len: number
+}
+export function listMessages(limit = 100, previewChars = 400): MessageBrief[] {
+  return must()
+    .prepare(
+      `SELECT id, from_session_id, from_handle, to_session_id, to_addr, state, reason, spool,
+              thread_id, origin, created_at, routed_at, delivered_at, read_at, terminal_at,
+              attempts, last_attempt_at,
+              substr(body, 1, ?) AS preview, length(body) AS body_len
+       FROM message ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+    )
+    .all(previewChars, limit) as MessageBrief[]
+}
+
+// The whole payload for one message. Deliberately its own call: this is what "copy
+// it out by hand" resolves to, and it must never be the clipped version.
+export function getMessageBody(id: string): string | undefined {
+  const r = must().prepare('SELECT body FROM message WHERE id=?').get(id) as
+    | { body: string }
+    | undefined
+  return r?.body
+}
+
+// Messages still in flight. Read at launch to re-hydrate the in-memory pipeline, so
+// a restart resumes delivery instead of quietly abandoning everything mid-route.
+export function getOpenMessages(): MessageRow[] {
+  return must()
+    .prepare('SELECT * FROM message WHERE terminal_at IS NULL ORDER BY created_at')
+    .all() as MessageRow[]
+}
+
+// Every spool path any row still points at, terminal or not. The orphan sweep needs
+// ALL of them: a message that failed keeps its file for recovery, and if only OPEN
+// rows were counted the sweep would re-adopt that file on every launch and mint a
+// fresh duplicate row each time.
+export function getSpooledPaths(): Set<string> {
+  const rows = must()
+    .prepare('SELECT spool FROM message WHERE spool IS NOT NULL')
+    .all() as { spool: string }[]
+  return new Set(rows.map((r) => r.spool))
+}
+
+export function getMessage(id: string): MessageRow | undefined {
+  return must().prepare('SELECT * FROM message WHERE id=?').get(id) as MessageRow | undefined
+}
+
+export function countOpenMessages(): number {
+  const r = must()
+    .prepare("SELECT COUNT(*) AS n FROM message WHERE terminal_at IS NULL AND state != 'queued'")
+    .get() as { n: number }
+  return r.n
+}
+
+const MESSAGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+const MAX_OPEN_MESSAGES = 500
+const MAX_TERMINAL_MESSAGES = 2000
+const MESSAGES_PER_SESSION = 200
+
+// Two-axis retention, same shape as pruneLedger: age out first, then hard count
+// ceilings applied SEPARATELY to open and terminal rows, plus a per-sender ring cap
+// so one chatty pair cannot crowd the rest of the fleet out of the inbox.
+export function pruneMessages(now: number): void {
+  const d = must()
+  // An open message older than the retention window is never going to route.
+  d.prepare(
+    `UPDATE message SET state='expired', reason=COALESCE(reason,'aged out'), terminal_at=?
+     WHERE terminal_at IS NULL AND created_at < ?`,
+  ).run(now, now - MESSAGE_RETENTION_MS)
+  d.prepare(
+    `UPDATE message SET state='expired', reason=COALESCE(reason,'displaced by newer mail'), terminal_at=?
+     WHERE terminal_at IS NULL AND id NOT IN (
+       SELECT id FROM message WHERE terminal_at IS NULL ORDER BY created_at DESC LIMIT ?
+     )`,
+  ).run(now, MAX_OPEN_MESSAGES)
+  d.prepare('DELETE FROM message WHERE terminal_at IS NOT NULL AND terminal_at < ?').run(
+    now - MESSAGE_RETENTION_MS,
+  )
+  d.prepare(
+    `DELETE FROM message WHERE id IN (
+       SELECT id FROM (
+         SELECT id, ROW_NUMBER() OVER (PARTITION BY from_session_id ORDER BY created_at DESC) AS rn
+         FROM message WHERE terminal_at IS NOT NULL
+       ) WHERE rn > ?
+     )`,
+  ).run(MESSAGES_PER_SESSION)
+  d.prepare(
+    `DELETE FROM message WHERE terminal_at IS NOT NULL AND id NOT IN (
+       SELECT id FROM message WHERE terminal_at IS NOT NULL ORDER BY terminal_at DESC LIMIT ?
+     )`,
+  ).run(MAX_TERMINAL_MESSAGES)
 }

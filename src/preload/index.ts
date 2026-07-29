@@ -136,6 +136,7 @@ contextBridge.exposeInMainWorld('cc', {
       flags,
       categoryId,
     ),
+  messageBody: (id: string) => ipcRenderer.invoke('message:body', id) as Promise<string | null>,
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
   pickPath: (sessionId?: string) => ipcRenderer.invoke('dialog:pickPath', sessionId),
   // Electron 43 removed File.path; this is the supported way to resolve a dropped

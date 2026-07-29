@@ -127,6 +127,7 @@ declare global {
         flags?: ResumeFlags,
         categoryId?: number | null,
       ) => Promise<{ pid: number; cwd: string } | null>
+      messageBody: (id: string) => Promise<string | null>
       pickFolder: () => Promise<string | null>
       pickPath: (sessionId?: string) => Promise<string | null>
       getPathForFile: (file: File) => string

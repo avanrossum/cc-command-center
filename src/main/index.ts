@@ -9,7 +9,7 @@ import {
   safeStorage,
   screen,
 } from 'electron'
-import { join, isAbsolute, dirname, extname } from 'node:path'
+import { join, isAbsolute, dirname, extname, basename } from 'node:path'
 import os from 'node:os'
 import net from 'node:net'
 import { randomBytes } from 'node:crypto'
@@ -97,9 +97,19 @@ import {
   getUnhandledSessions,
   getHeldGates,
   type ApiKeyRow,
+  insertMessage,
+  setMessageState,
+  markDelivered,
+  listMessages,
+  getMessageBody,
+  getOpenMessages,
+  getSpooledPaths,
+  pruneMessages,
   type Category,
   type Edge,
   type OpenGate,
+  type MessageRow,
+  type MessageState,
 } from './registry'
 import {
   runArbiter,
@@ -1063,7 +1073,7 @@ function snapshot(): Snapshot {
     sessions: enriched.map((e) => (unhandled.has(e.sessionId) ? { ...e, unhandled: true } : e)),
     categories: cats,
     edges,
-    messages: messageLog.slice(-40),
+    messages: messageLogEntries(),
     awarenessPaused,
     settings: getSettings(),
     recentFolders: getRecentFolders(),
@@ -1612,7 +1622,12 @@ const RATE_MAX = 6
 const HELD_TTL_MS = 30 * 60_000 // a message that never becomes routable expires
 const DELIVER_TTL_MS = 30 * 60_000 // a queued message whose target never frees up
 const DELIVERY_QUEUE_MAX = 200 // back-pressure ceiling; over it, segments stay held
-const MSG_MAX_CHARS = 4000 // in-memory bound; the spool file always holds the full text
+// What gets PASTED into the recipient. The stored row always holds the whole body;
+// this only bounds the bracketed paste, which a terminal has to swallow in one go.
+const MSG_MAX_CHARS = 4000
+// Refused outright above this, with an explicit failure the sender can see. Never a
+// silent truncation — that is the anti-pattern this table exists to end.
+const MSG_HARD_MAX = 256 * 1024
 // A session ends its OWN process by writing exactly this to its outbox — the app
 // sees it on drain and kills that PTY. (Conversationally asking a child to "exit"
 // only makes it idle; it can't terminate its own process. This gives it a lever.)
@@ -1635,6 +1650,7 @@ function registerOutbox(pid: number, ob: { token: string; path: string }): void 
 }
 
 interface Delivery {
+  id: string // the durable message row this is a live attempt at
   to: string // target session id
   fromSessionId: string // sender session id — rate key + edge-pair validation
   edgeChildId: string // child_id of the governing edge — for the trust re-check
@@ -1648,15 +1664,26 @@ interface Delivery {
   // holding it up changes, the new reason is still surfaced.
   logged?: string
 }
+// What the Messages panel renders. Projected from a `message` row rather than an
+// in-memory ring, so it survives a restart and carries the FULL body — the ring it
+// replaced kept 60 entries clipped to 500 chars, which meant the record of a lost
+// message was itself lossy.
 export interface MsgLogEntry {
+  id: string
   from: string
   to: string
-  text: string
-  status: string
+  text: string // PREVIEW only — the snapshot ships every 1.5s; fetch the rest on demand
+  len: number // full body length, so the panel knows there is more to show
+  status: string // "<state>: <reason>" — what the panel colours and shows
+  state: MessageState
+  reason?: string
   at: number
+  origin: string
+  attempts: number
+  deliveredAt?: number
+  spooled: boolean // the payload is still on disk, recoverable by hand
 }
 const deliveryQueue: Delivery[] = []
-const messageLog: MsgLogEntry[] = []
 const linkRate = new Map<string, number[]>()
 // Messages drained from a child outbox but not yet routable (link unblessed, or
 // child not yet adopted). Buffered here — NOT dropped on read — so they survive
@@ -1669,7 +1696,7 @@ const linkRate = new Map<string, number[]>()
 // the reason last surfaced, so a changed reason still gets a line (see Delivery).
 const heldMessages = new Map<
   string,
-  { text: string; at: number; logged?: string; spool?: string }[]
+  { id: string; text: string; at: number; logged?: string; spool?: string }[]
 >()
 
 function awarenessPreamble(outbox: string): string {
@@ -1717,9 +1744,71 @@ function parseDirective(text: string): { rest: string; handleHint: string } | nu
   return { rest, handleHint: rest.split(/[\s:,]/, 1)[0] ?? '' }
 }
 
-function logMsg(from: string, to: string, text: string, status: string): void {
-  messageLog.push({ from, to, text: text.slice(0, 500), status, at: Date.now() })
-  if (messageLog.length > 60) messageLog.shift()
+let msgCounter = 0
+function mintMessageId(): string {
+  return `m-${Date.now()}-${msgCounter++}`
+}
+
+// Advance a real message and record why. Every non-delivered outcome keeps its body
+// AND its spool file, so "recoverable and copy-pasteable" holds at both layers.
+function noteMsg(
+  id: string,
+  state: MessageState,
+  reason: string | null,
+  opts: { toSessionId?: string | null; spool?: string | null; attempt?: boolean } = {},
+): void {
+  try {
+    setMessageState(id, state, reason, Date.now(), opts)
+  } catch (e) {
+    console.error('[mail] message state write failed', id, state, e)
+  }
+}
+
+// A note the APP is making about the bus — a self-exit, an abandoned link note, a
+// resume cap. Not a message anyone sent, so it is born terminal and tagged
+// origin='app'; the panel shows the app spoke, not a peer.
+function sysNote(from: string, to: string, text: string, status: string, ok = false): void {
+  try {
+    insertMessage({
+      id: mintMessageId(),
+      fromSessionId: from,
+      fromHandle: from,
+      toSessionId: null,
+      toAddr: to,
+      body: text,
+      state: ok ? 'delivered' : 'failed',
+      reason: status,
+      origin: 'app',
+      at: Date.now(),
+      terminal: true,
+    })
+  } catch (e) {
+    console.error('[mail] app note write failed', e)
+  }
+}
+
+// Project stored rows into what the renderer draws. `status` keeps the old
+// "<state>: <reason>" shape the panel already colours on.
+function messageLogEntries(): MsgLogEntry[] {
+  try {
+    return listMessages().map((m) => ({
+      id: m.id,
+      from: m.from_handle,
+      to: m.to_addr,
+      text: m.preview,
+      len: m.body_len,
+      status: m.reason ? `${m.state}: ${m.reason}` : m.state,
+      state: m.state,
+      reason: m.reason ?? undefined,
+      at: m.created_at,
+      origin: m.origin,
+      attempts: m.attempts,
+      deliveredAt: m.delivered_at ?? undefined,
+      spooled: !!m.spool,
+    }))
+  } catch {
+    return []
+  }
 }
 
 export function setAwarenessPaused(paused: boolean): void {
@@ -1819,22 +1908,76 @@ function ingestSpooled(spool: string, token: string): void {
         status = 'self-exit failed'
       }
     }
-    logMsg(nm, 'self', content, status) // log the OUTCOME, after the kill attempt
+    sysNote(nm, 'self', content, status, status.startsWith('terminated')) // the OUTCOME, after the kill
     removeSpool(spool)
     return
   }
-  const text = content.length > MSG_MAX_CHARS ? content.slice(-MSG_MAX_CHARS) : content
-  if (text !== content) logMsg('?', '?', text, `truncated to last ${MSG_MAX_CHARS} chars`)
+  // PERSIST BEFORE ROUTING. This is the ordering the whole design rests on: the
+  // body is committed while the spool file still exists, so there is never an
+  // instant where an in-flight message has no durable copy. The old pipeline
+  // emptied the outbox first and routed afterwards, which is why an unroutable
+  // message left nothing behind at all.
+  const id = mintMessageId()
+  const who = senderOf(token)
+  if (content.length > MSG_HARD_MAX) {
+    insertMessage({
+      id,
+      fromSessionId: who.sessionId ?? token,
+      fromHandle: who.handle,
+      toAddr: addressOf(content),
+      body: content.slice(0, MSG_HARD_MAX),
+      state: 'failed',
+      reason: `message too large (${content.length} chars, limit ${MSG_HARD_MAX})`,
+      spool,
+      at: Date.now(),
+    })
+    return // spool file kept — the sender can be shown exactly what was refused
+  }
+  insertMessage({
+    id,
+    fromSessionId: who.sessionId ?? token,
+    fromHandle: who.handle,
+    toAddr: addressOf(content),
+    body: content, // stored WHOLE; only the injected copy is bounded
+    state: 'queued',
+    spool,
+    at: Date.now(),
+  })
+  // The delivered copy keeps the HEAD, not the tail — the old slice(-4000) dropped
+  // the beginning of a long message, which is where the point usually is. Whole
+  // body is in the row either way.
+  const text = deliverableText(content)
   const arr = heldMessages.get(token) ?? []
-  arr.push({ text, at: Date.now(), spool })
+  arr.push({ id, text, at: Date.now(), spool })
   if (arr.length > 30) {
     // A runaway writer still can't grow the buffer without bound, but what it pushes
-    // out is logged and its spool file kept, rather than vanishing silently.
+    // out is recorded and its spool file kept, rather than vanishing silently.
     for (const dropped of arr.splice(0, arr.length - 30)) {
-      logMsg('?', '?', dropped.text, 'dropped: outbox overflow')
+      noteMsg(dropped.id, 'failed', 'outbox overflow — too many unrouted messages')
     }
   }
   heldMessages.set(token, arr)
+}
+
+// Who owns an outbox, as far as the app can tell at drain time. A child in its
+// first second is not adopted yet, so the token stands in — it is the durable
+// identity anyway, carried across resume.
+function senderOf(token: string): { sessionId?: string; handle: string } {
+  const pid = outboxOwner.get(token)
+  const term = pid ? findTermByPid(pid) : undefined
+  const sid = term?.sessionId
+  const named = sid ? getSessionNames()[sid] : undefined
+  return { sessionId: sid, handle: named ?? (pid ? `pid ${pid}` : token) }
+}
+
+// The address a message is aimed at, as WRITTEN — '@"name"' if directed, else the
+// sender's parent. Recorded verbatim so a misaddressed message shows what was typed
+// rather than where the app guessed it should go.
+function addressOf(content: string): string {
+  const d = parseDirective(content)
+  if (!d) return 'parent'
+  const q = d.rest.match(/^"([^"]+)"/)
+  return q ? q[1] : d.handleHint || 'parent'
 }
 
 // Delete spooled payloads past their retention. Runs at launch and hourly, so a
@@ -1861,39 +2004,120 @@ function pruneSpool(): void {
 // delivered. Recent ones go back into the held buffer keyed by their outbox token —
 // which a resumed session reuses — so a message can still reach its target across a
 // restart. Older ones stay on disk, readable by hand, but are not replayed.
+//
+// Driven by the message TABLE, not by the directory: the rows are the record of
+// what was in flight, and a row that is not terminal was, by definition, never
+// delivered. The directory is swept afterwards only for orphans — files written by
+// a build that predates the table, or whose row was pruned.
 function reclaimSpool(): void {
   pruneSpool()
-  let files: string[] = []
+  const now = Date.now()
+  let reclaimed = 0
+  let expired = 0
+  // Every path ANY row still owns — including terminal ones, which keep their file
+  // for recovery. Counting only open rows made the orphan sweep re-adopt a failed
+  // message's file at every launch, minting a duplicate row each time.
+  let seenSpool = new Set<string>()
+  let open: MessageRow[] = []
   try {
-    files = readdirSync(SPOOL_DIR).filter((f) => f.endsWith('.msg')).sort()
+    seenSpool = getSpooledPaths()
+    open = getOpenMessages()
   } catch {
     return
   }
-  const now = Date.now()
-  let reclaimed = 0
+  for (const m of open) {
+    // An app-origin note is a record, not something to re-deliver.
+    if (m.origin === 'app') continue
+    if (now - m.created_at > SPOOL_RECLAIM_AGE_MS) {
+      // Too old to replay into a fleet that has moved on. The body stays readable in
+      // the inbox and the spool file stays on disk; only the retry stops.
+      noteMsg(m.id, 'expired', 'app restarted before this could be delivered')
+      expired++
+      continue
+    }
+    if (reclaimed >= SPOOL_RECLAIM_MAX) continue
+    const token = tokenForRow(m)
+    if (!token) {
+      noteMsg(m.id, 'failed', 'sender mailbox could not be identified after restart')
+      continue
+    }
+    // Prefer the file if it is still there (it is the byte-exact original); fall
+    // back to the stored body, which is why the body is stored at all.
+    let body = m.body
+    if (m.spool) {
+      try {
+        body = readFileSync(m.spool, 'utf8').trim() || m.body
+      } catch {
+        /* gone — the row still has it */
+      }
+    }
+    if (!body || body === EXIT_SENTINEL) {
+      noteMsg(m.id, 'failed', 'nothing left to deliver', { spool: null })
+      removeSpool(m.spool ?? undefined)
+      continue
+    }
+    const arr = heldMessages.get(token) ?? []
+    arr.push({ id: m.id, text: deliverableText(body), at: now, spool: m.spool ?? undefined })
+    heldMessages.set(token, arr)
+    noteMsg(m.id, 'queued', 'picked back up after restart')
+    reclaimed++
+  }
+  reclaimOrphanSpool(seenSpool, now)
+  if (reclaimed || expired)
+    console.log(`[mail] resumed ${reclaimed} message(s), expired ${expired} from a previous run`)
+}
+
+// Spool files with no row behind them: written by a build older than the message
+// table, or whose row aged out. Ingesting them mints a row, so they stop being
+// invisible — the point of the table is that nothing in flight is off the books.
+function reclaimOrphanSpool(claimed: Set<string>, now: number): void {
+  let files: string[] = []
+  try {
+    files = readdirSync(SPOOL_DIR)
+      .filter((f) => f.endsWith('.msg'))
+      .sort()
+  } catch {
+    return
+  }
+  let n = 0
   for (const f of files) {
-    if (reclaimed >= SPOOL_RECLAIM_MAX) break
+    if (n >= SPOOL_RECLAIM_MAX) break
     const fp = join(SPOOL_DIR, f)
-    let content = ''
+    if (claimed.has(fp)) continue
+    const token = tokenFromSpoolName(f)
+    if (!token) continue // not one of ours — leave it alone
     try {
       if (now - statSync(fp).mtimeMs > SPOOL_RECLAIM_AGE_MS) continue
-      content = readFileSync(fp, 'utf8').trim()
     } catch {
       continue
     }
-    if (!content || content === EXIT_SENTINEL) {
-      removeSpool(fp)
-      continue
-    }
-    const token = tokenFromSpoolName(f)
-    if (!token) continue // not one of ours — leave it alone
-    const arr = heldMessages.get(token) ?? []
-    arr.push({ text: content.slice(-MSG_MAX_CHARS), at: now, spool: fp })
-    heldMessages.set(token, arr)
-    reclaimed++
-    logMsg('?', '?', content, 'reclaimed from spool after restart')
+    ingestSpooled(fp, token)
+    n++
   }
-  if (reclaimed) console.log(`[mail] reclaimed ${reclaimed} spooled message(s)`)
+  if (n) console.log(`[mail] adopted ${n} orphaned spool file(s)`)
+}
+
+// The outbox a stored message came from. The spool filename carries it directly;
+// failing that, from_session_id is either the token itself (sender not yet adopted
+// when it was written) or a session id whose token the registry remembers.
+function tokenForRow(m: MessageRow): string | undefined {
+  if (m.spool) {
+    const t = tokenFromSpoolName(basename(m.spool))
+    if (t) return t
+  }
+  if (m.from_session_id.startsWith('cc-')) return m.from_session_id
+  try {
+    return getOutboxToken(m.from_session_id) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+// The bounded copy that actually gets pasted. The row always holds the whole body.
+function deliverableText(body: string): string {
+  return body.length > MSG_MAX_CHARS
+    ? `${body.slice(0, MSG_MAX_CHARS)}\n[…truncated — full message in the CC Command Center inbox]`
+    : body
 }
 
 // Flush, don't destroy. On PTY exit the outbox is unlinked and the held segments
@@ -1918,7 +2142,7 @@ function flushOutboxOnExit(ob: { token: string; path: string }): void {
   }
   if (!content || content === EXIT_SENTINEL) return
   if (claimToSpool(ob.path, ob.token)) {
-    logMsg(`pid ${outboxOwner.get(ob.token) ?? '?'}`, '?', content, 'kept: sender exited')
+    sysNote(`pid ${outboxOwner.get(ob.token) ?? '?'}`, '?', content, 'kept: sender exited')
   }
 }
 
@@ -1982,7 +2206,7 @@ function routeHeld(sessions: LiveSession[]): void {
     for (let i = 0; i < arr.length; ) {
       const held = arr[i]
       if (now - held.at > HELD_TTL_MS) {
-        logMsg('?', '?', held.text, 'expired: never routable')
+        noteMsg(held.id, 'expired', 'never became routable')
         arr.splice(i, 1) // spool file kept — the payload stays recoverable
         continue
       }
@@ -1995,7 +2219,7 @@ function routeHeld(sessions: LiveSession[]): void {
       // its spool file on disk) until the queue drains, instead of being dropped.
       if (deliveryQueue.length >= DELIVERY_QUEUE_MAX) {
         if (held.logged !== 'queue-full') {
-          logMsg(displayName(sender), '?', held.text, 'held: delivery queue full')
+          noteMsg(held.id, 'held', 'delivery queue full')
           held.logged = 'queue-full'
         }
         i++
@@ -2007,19 +2231,24 @@ function routeHeld(sessions: LiveSession[]): void {
       if (match) {
         if (!match.trusted) {
           if (held.logged !== 'untrusted') {
-            logMsg(displayName(sender), displayName(match.child), held.text, 'held: link not trusted')
+            noteMsg(held.id, 'held', 'link not trusted', { toSessionId: match.child.sessionId })
             held.logged = 'untrusted'
           }
           i++
           continue
         }
         if (!match.body) {
-          logMsg(displayName(sender), displayName(match.child), held.text, 'dropped: empty directed message')
+          noteMsg(held.id, 'failed', 'addressed, but no message body', {
+            toSessionId: match.child.sessionId,
+            spool: null,
+          })
           removeSpool(held.spool) // an address with no body is not a payload to keep
           arr.splice(i, 1)
           continue
         }
+        noteMsg(held.id, 'queued', null, { toSessionId: match.child.sessionId })
         deliveryQueue.push({
+          id: held.id,
           to: match.child.sessionId!,
           fromSessionId: senderId,
           edgeChildId: match.child.sessionId!,
@@ -2037,18 +2266,17 @@ function routeHeld(sessions: LiveSession[]): void {
       const edge = edges.find((e) => e.child_id === senderId)
       if (!edge || !edge.trusted) {
         if (held.logged !== (edge ? 'untrusted' : 'no-parent')) {
-          logMsg(
-            displayName(sender),
-            edge ? 'parent' : '?',
-            held.text,
-            edge ? 'held: link not trusted' : 'held: no parent link',
-          )
+          noteMsg(held.id, 'held', edge ? 'link not trusted' : 'no parent link', {
+            toSessionId: edge?.parent_id,
+          })
           held.logged = edge ? 'untrusted' : 'no-parent'
         }
         i++
         continue
       }
+      noteMsg(held.id, 'queued', null, { toSessionId: edge.parent_id })
       deliveryQueue.push({
+        id: held.id,
         to: edge.parent_id,
         fromSessionId: senderId,
         edgeChildId: senderId,
@@ -2089,7 +2317,7 @@ function tryDeliveries(sessions: LiveSession[]): void {
     if (!target || !term) {
       if (now - d.at > 120_000) {
         deliveryQueue.splice(i, 1)
-        logMsg(d.fromName, d.to, d.text, 'expired: target not open')
+        noteMsg(d.id, 'expired', 'target session was never open')
       } else i++
       continue
     }
@@ -2103,7 +2331,7 @@ function tryDeliveries(sessions: LiveSession[]): void {
         (edge.parent_id === d.fromSessionId && edge.child_id === d.to))
     if (!edge || !edge.trusted || !connectsPair) {
       deliveryQueue.splice(i, 1)
-      logMsg(d.fromName, target.name ?? d.to, d.text, 'dropped: link no longer trusted')
+      noteMsg(d.id, 'failed', 'link no longer trusted')
       continue
     }
     // Only deliver when the target is affirmatively free (fail-safe on unknown) AND
@@ -2118,19 +2346,19 @@ function tryDeliveries(sessions: LiveSession[]): void {
     if (busy || term.draft > 0) {
       const reason = busy ? `busy:${target.state}` : 'typing'
       if (d.logged !== reason) {
-        const why = busy
-          ? `deferred: target busy (${target.state})`
-          : 'deferred: you are typing in that session'
-        logMsg(d.fromName, target.name ?? d.to, d.text, why)
+        noteMsg(
+          d.id,
+          'held',
+          busy ? `target busy (${target.state})` : 'you are typing in that session',
+        )
         d.logged = reason
       }
       if (now - d.at > DELIVER_TTL_MS) {
         deliveryQueue.splice(i, 1)
-        logMsg(
-          d.fromName,
-          target.name ?? d.to,
-          d.text,
-          busy ? 'failed: target never free' : 'failed: unsent draft left in that session',
+        noteMsg(
+          d.id,
+          'failed',
+          busy ? 'target never became free' : 'unsent draft left in that session',
         )
         continue // spool file kept — resendable by hand from ~/.claude/ccc/mail/spool
       }
@@ -2145,7 +2373,7 @@ function tryDeliveries(sessions: LiveSession[]): void {
     const stamps = (linkRate.get(key) ?? []).filter((t) => now - t < RATE_WINDOW_MS)
     if (d.hops > HOP_MAX || stamps.length >= RATE_MAX) {
       deliveryQueue.splice(i, 1)
-      logMsg(d.fromName, target.name ?? d.to, d.text, 'dropped: loop/rate guard')
+      noteMsg(d.id, 'failed', 'loop / rate guard tripped')
       continue
     }
     injectPrompt(term, `[message from ${d.fromName}]\n${d.text}`)
@@ -2154,7 +2382,7 @@ function tryDeliveries(sessions: LiveSession[]): void {
     deliveredTo.add(d.to)
     deliveryQueue.splice(i, 1)
     removeSpool(d.spool) // delivered is the one outcome that needs no recovery
-    logMsg(d.fromName, target.name ?? d.to, d.text, 'delivered')
+    markDelivered(d.id, now)
   }
 }
 
@@ -3522,7 +3750,7 @@ function deliverPendingNotes(sessions: LiveSession[]): void {
     // still has to be abandoned.
     if (now - n.at > 600_000) {
       pendingParentNotes.splice(i, 1)
-      logMsg('CC', n.to, 'child-link note expired undelivered (parent stayed busy 10m)', 'expired')
+      sysNote('CC', n.to, 'child-link note expired undelivered (parent stayed busy 10m)', 'expired')
       continue
     }
     const target = resolveTargetSession(sessions, n.to)
@@ -3537,6 +3765,15 @@ function deliverPendingNotes(sessions: LiveSession[]): void {
 // Global kill switch for autonomous messaging. When paused, outboxes are still
 // drained into the held buffer (nothing is lost) but nothing is routed or
 // delivered until the operator resumes.
+// The full payload of one message, on demand. Kept out of the 1.5s snapshot so a
+// large body costs nothing until someone actually asks to read or copy it.
+ipcMain.handle('message:body', (_e, id: string) => {
+  try {
+    return getMessageBody(String(id ?? '')) ?? null
+  } catch {
+    return null
+  }
+})
 ipcMain.handle('awareness:pause', (_e, paused: boolean) => {
   setAwarenessPaused(!!paused)
   pushSessions()
@@ -3761,7 +3998,7 @@ function resumeFamily(sessionId: string): void {
     let started = 0
     for (const id of familyOf(sessionId)) {
       if (started >= FAMILY_RESUME_CAP) {
-        logMsg('CC', sessionId, `family resume capped at ${FAMILY_RESUME_CAP}`, 'capped')
+        sysNote('CC', sessionId, `family resume capped at ${FAMILY_RESUME_CAP}`, 'capped')
         break
       }
       if (findManagedTerm(id)) continue // already live
@@ -3780,7 +4017,7 @@ function resumeFamily(sessionId: string): void {
       })
       started++
     }
-    if (started > 0) logMsg('CC', sessionId, `resumed ${started} family session(s)`, 'ok')
+    if (started > 0) sysNote('CC', sessionId, `resumed ${started} family session(s)`, 'ok', true)
   } catch (e) {
     console.error('[main] family resume failed', e)
   }
@@ -3915,8 +4152,6 @@ app.whenReady().then(() => {
   } catch {
     /* ignore */
   }
-  reclaimSpool() // pick up anything a previous run left undelivered
-  setInterval(pruneSpool, 60 * 60_000)
   ensureStatusHookScript() // keep the hook script current with this app version
   ensureUsageLineScript() // the per-session usage statusLine (context % + 5h/7d)
   ensureKeyHelperScript() // API-key helper, current with this app version
@@ -3928,6 +4163,17 @@ app.whenReady().then(() => {
     onSettings: () => sendToWin('menu:settings'),
   })
   initRegistry(join(app.getPath('userData'), 'registry.db'))
+  // AFTER initRegistry: re-hydration reads the message table, which is where the
+  // record of what was in flight lives.
+  reclaimSpool() // pick up anything a previous run left undelivered
+  setInterval(() => {
+    pruneSpool()
+    try {
+      pruneMessages(Date.now())
+    } catch (e) {
+      console.error('[mail] prune failed', e)
+    }
+  }, 60 * 60_000)
   syncStatusHooksFlag() // flag mirrors what's ACTUALLY in ~/.claude/settings.json
   migrateMailRuleAtStartup() // one-time Write()→mail-scoped-Edit() rewrite for old grants
   maybeSeed()

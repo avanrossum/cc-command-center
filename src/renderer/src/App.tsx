@@ -124,11 +124,19 @@ interface Edge {
   trusted?: number
 }
 interface MsgLogEntry {
+  id: string
   from: string
   to: string
-  text: string
+  text: string // PREVIEW; the whole body is fetched per row (window.cc.messageBody)
+  len: number // full length, so a clipped preview can say so
   status: string
+  state: 'queued' | 'held' | 'delivered' | 'read' | 'failed' | 'expired' | 'archived'
+  reason?: string
   at: number
+  origin: string // session | user | app
+  attempts: number
+  deliveredAt?: number
+  spooled: boolean // payload still on disk under ~/.claude/ccc/mail/spool
 }
 interface AppSettings {
   trustChildrenByDefault: boolean
@@ -4158,6 +4166,9 @@ function NewSessionComposer({
   )
 }
 
+// The inbox. Messages are stored rows now, not a 60-entry in-memory ring clipped to
+// 500 characters, so this shows the FULL body and survives a restart — which is the
+// point: the thing you most want to read is the message that never arrived.
 function MessageLog({
   messages,
   paused,
@@ -4167,18 +4178,63 @@ function MessageLog({
   paused: boolean
   close: () => void
 }) {
-  // held / deferred / reclaimed are all "still in flight", not failures.
-  const cls = (status: string) =>
-    status.startsWith('delivered') ? 'ok' : /^(held|deferred|reclaimed|kept)/.test(status) ? 'held' : 'drop'
+  const [filter, setFilter] = useState<'open' | 'all'>('open')
+  const [openId, setOpenId] = useState<string | null>(null)
+  const [copied, setCopied] = useState<string | null>(null)
+  // Full bodies, fetched only for rows someone actually opens or copies. The
+  // snapshot carries a preview so a 250KB message costs nothing every 1.5s.
+  const [bodies, setBodies] = useState<Record<string, string>>({})
+  const fullBody = async (m: MsgLogEntry): Promise<string> => {
+    if (bodies[m.id] !== undefined) return bodies[m.id]
+    if (m.len <= m.text.length) return m.text // preview IS the whole thing
+    const b = (await window.cc.messageBody(m.id)) ?? m.text
+    setBodies((prev) => ({ ...prev, [m.id]: b }))
+    return b
+  }
+  const toggle = (m: MsgLogEntry) => {
+    const next = openId === m.id ? null : m.id
+    setOpenId(next)
+    if (next) void fullBody(m)
+  }
+  const TONE: Record<MsgLogEntry['state'], string> = {
+    delivered: 'ok',
+    read: 'ok',
+    queued: 'held',
+    held: 'held',
+    failed: 'drop',
+    expired: 'drop',
+    archived: 'drop',
+  }
+  const DONE = new Set(['delivered', 'read', 'failed', 'expired', 'archived'])
+  const inFlight = messages.filter((m) => !DONE.has(m.state))
+  const stuck = messages.filter((m) => m.state === 'failed' || m.state === 'expired')
+  const shown = filter === 'open' ? messages.filter((m) => !DONE.has(m.state) || m.spooled) : messages
+  // Copy is the recovery path, so it always puts the WHOLE message on the clipboard,
+  // never the preview.
+  const copy = async (m: MsgLogEntry) => {
+    await navigator.clipboard.writeText(await fullBody(m))
+    setCopied(m.id)
+    setTimeout(() => setCopied((c) => (c === m.id ? null : c)), 1400)
+  }
+  const when = (t: number) => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
   return (
     <div className="spawnscrim" onClick={close}>
       <div className="spawnmodal msglog" onClick={(e) => e.stopPropagation()}>
         <div className="msgloghead">
           <div>
-            <div className="spawntitle">Cross-session messages</div>
+            <div className="spawntitle">
+              Messages{' '}
+              {(inFlight.length > 0 || stuck.length > 0) && (
+                <span className="msgbadge">
+                  {inFlight.length > 0 && `${inFlight.length} in flight`}
+                  {inFlight.length > 0 && stuck.length > 0 && ' · '}
+                  {stuck.length > 0 && `${stuck.length} stuck`}
+                </span>
+              )}
+            </div>
             <div className="spawnsub">
-              every message the awareness bus routed, with the reason it is where it is. Anything not
-              delivered keeps its payload on disk under ~/.claude/ccc/mail/spool.
+              Every message between sessions, with the reason it is where it is. Nothing is discarded
+              — an undelivered payload also stays on disk under ~/.claude/ccc/mail/spool.
             </div>
           </div>
           <button
@@ -4195,22 +4251,57 @@ function MessageLog({
         </div>
         {paused && (
           <div className="pausednote">
-            Paused — new messages are buffered and held; nothing is delivered until you resume.
+            Paused — new messages are still recorded and held; nothing is delivered until you resume.
           </div>
         )}
+        <div className="msgfilter">
+          <button className={filter === 'open' ? 'on' : ''} onClick={() => setFilter('open')}>
+            Needs attention
+          </button>
+          <button className={filter === 'all' ? 'on' : ''} onClick={() => setFilter('all')}>
+            All ({messages.length})
+          </button>
+        </div>
         <div className="msglist">
-          {messages.length === 0 && <div className="emptycat">no messages yet</div>}
-          {[...messages].reverse().map((m, i) => (
-            <div key={i} className="msgrow">
-              <div className="msgmeta">
-                <span className="msgroute">
-                  {m.from} → {m.to}
-                </span>
-                <span className={`msgstatus s-${cls(m.status)}`}>{m.status}</span>
-              </div>
-              <div className="msgtext">{m.text}</div>
+          {shown.length === 0 && (
+            <div className="emptycat">
+              {filter === 'open' ? 'nothing waiting — every message landed' : 'no messages yet'}
             </div>
-          ))}
+          )}
+          {shown.map((m) => {
+            const expanded = openId === m.id
+            return (
+              <div key={m.id} className={`msgrow${expanded ? ' open' : ''}`}>
+                <div className="msgmeta" onClick={() => toggle(m)}>
+                  <span className="msgroute">
+                    {m.from} → {m.to}
+                    {m.origin === 'app' && <span className="msgorigin">app</span>}
+                  </span>
+                  <span className={`msgstatus s-${TONE[m.state] ?? 'drop'}`}>{m.status}</span>
+                </div>
+                <div className={`msgtext${expanded ? ' full' : ''}`}>
+                  {expanded ? (bodies[m.id] ?? m.text) : m.text}
+                </div>
+                <div className="msgfoot">
+                  <span className="msgwhen">{when(m.at)}</span>
+                  {m.attempts > 1 && <span className="msgwhen">{m.attempts} attempts</span>}
+                  {m.spooled && (
+                    <span className="msgwhen" title="the payload is also still on disk">
+                      on disk
+                    </span>
+                  )}
+                  {(m.len > m.text.length || m.text.length > 200) && (
+                    <button className="msgmini" onClick={() => toggle(m)}>
+                      {expanded ? 'Collapse' : `Show all (${m.len.toLocaleString()} chars)`}
+                    </button>
+                  )}
+                  <button className="msgmini" onClick={() => void copy(m)}>
+                    {copied === m.id ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+              </div>
+            )
+          })}
         </div>
         <div className="spawnactions">
           <button className="rbtn" onClick={close}>

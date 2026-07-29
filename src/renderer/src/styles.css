@@ -396,7 +396,7 @@ body {
 
 /* ---- message log ---- */
 .msglog {
-  width: 520px;
+  width: 620px;
 }
 .msgloghead {
   display: flex;
@@ -478,6 +478,79 @@ body {
   word-break: break-word;
   max-height: 60px;
   overflow: hidden;
+}
+/* Expanded: the whole body, scrollable in place. A long message is exactly the one
+   worth reading in full, so the clamp has to be liftable. */
+.msgtext.full {
+  max-height: 360px;
+  overflow-y: auto;
+}
+.msgrow.open {
+  background: var(--cc-fill-sel);
+}
+.msgmeta {
+  cursor: pointer;
+}
+.msgbadge {
+  margin-left: 6px;
+  font: 10px var(--cc-font-mono);
+  color: var(--cc-edge-blocking);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.msgorigin {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--cc-hairline);
+  border-radius: 3px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--cc-dim);
+}
+.msgfilter {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+.msgfilter button {
+  font: 11px var(--cc-font-mono);
+  padding: 3px 9px;
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-r-sm);
+  background: transparent;
+  color: var(--cc-dim);
+  cursor: pointer;
+}
+.msgfilter button.on {
+  color: var(--cc-text);
+  border-color: var(--cc-text);
+}
+.msgfoot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 5px;
+}
+.msgwhen {
+  font: 10px var(--cc-font-mono);
+  color: var(--cc-dim);
+}
+.msgmini {
+  font: 10px var(--cc-font-mono);
+  padding: 1px 7px;
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-r-sm);
+  background: transparent;
+  color: var(--cc-dim);
+  cursor: pointer;
+}
+.msgmini:hover {
+  color: var(--cc-text);
+  border-color: var(--cc-text);
+}
+.msgmini:last-child {
+  margin-left: auto;
 }
 
 /* ---- body: category rail + tree pane + terminal ---- */
