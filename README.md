@@ -216,8 +216,6 @@ An optional control agent that writes a plain-English line explaining *why* each
 
 ![The Arbiter panel: running spend against its daily cap, and a log of each run](screenshots/arbiter-log.png)
 
-It has shipped but has not yet been run against a real API key end to end. Treat the first run as the test it is.
-
 ---
 
 ## HITM — Human In The Middle
