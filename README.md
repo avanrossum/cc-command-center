@@ -98,13 +98,31 @@ Resume one member of a task tree after a restart and the **whole family comes ba
 
 ## Sessions that talk to each other
 
-Sessions can message each other through the app over a filesystem mailbox — a parent hands its child a task, the child reports back when done. Every app-spawned session gets an outbox and a one-time preamble teaching it to write there; the app drains outboxes on each scan and routes each message up to the parent or down to a named child along the edge graph. Nothing is installed inside either session to make that work: no skill, no MCP server, no channel daemon, just the tools Claude Code already has.
+Sessions can message each other through the app over a filesystem mailbox — a parent hands its child a task, the child reports back when done, and any two sessions you connect can talk directly. Every app-spawned session gets an outbox and a one-time preamble teaching it to write there; the app drains outboxes on each scan and routes each message to the addressed session. Nothing is installed inside either session to make that work: no skill, no MCP server, no channel daemon, just the tools Claude Code already has.
 
-Delivery is **trust-gated per link**: you bless a link once, and after that messages flow without approving each one, but trust is re-checked at the moment of delivery, so untrusting a link drops what's already in flight. Every hop is written to a message log with its outcome — delivered, held, dropped, expired, self-exit — and a global kill switch stops all of it instantly without losing anything.
+**Sessions only talk to sessions you have connected.** Default deny: a pair may message only along a link you opened, or along the parent–child edge you created by spawning it. No session can open a link for itself or ask you for one. Permission is directional — "the reviewer may report to me" doesn't imply "I may drive the reviewer" — and it is re-checked at the moment of delivery, so revoking a pair stops what's already in flight.
 
-A message is injected only when the target session is affirmatively free, and buffered until it is, so it arrives as a clean new turn instead of landing in the middle of typed input.
+**Nothing is lost, and nothing is silent.** Every message becomes a durable record the instant it's claimed off disk, before any routing is attempted — so a message that can't be delivered still exists, in full, with the reason it's stuck. Undelivered payloads also stay on disk under `~/.claude/ccc/mail/spool`, recoverable by hand. A message waiting on a busy recipient says so; one that failed says why; one you sent to a session that isn't running holds until you reopen it, and resend puts it back in flight without retyping.
 
-This is the "Human In The Middle" idea (see below) made concrete: you sit at a node in the mesh, able to read, hold, or inject every message.
+**A message never interrupts you.** It's injected only when the recipient is affirmatively free *and* has no half-typed prompt sitting in its input box, so it arrives as a clean new turn rather than being appended to a sentence you were in the middle of writing.
+
+**Delivered is not the same as read.** A recipient acknowledges by id; failing that, the app corroborates from the session's own activity. The two are shown differently, because they aren't the same evidence.
+
+Each session gets its own inbox and outbox, ordered by what needs you:
+
+![The Messages panel showing each session's inbox and outbox, with delivery and read state](screenshots/messages-mailboxes.png)
+
+You can write to any session directly — recorded like every other message, and attributed to you:
+
+![The Send tab of the Messages panel, composing a message to a chosen session](screenshots/messages-send.png)
+
+And every pair that may talk is yours to open and yours to revoke:
+
+![The grants tab, showing which sessions are allowed to message each other](screenshots/messages-grants.png)
+
+Sessions can also ask the app rather than guess: `?WHO` lists the sessions they're allowed to message, `?INBOX` reports what's waiting for them, and `?WHOIS` checks a single address before sending. Each one is answered on the same mailbox file, so there's still nothing to install.
+
+This is the "Human In The Middle" idea (see below) made concrete: you sit at a node in the mesh, able to read, hold, revoke, or inject every message.
 
 A handoff, start to finish. The parent sends the work down:
 
@@ -208,8 +226,8 @@ The organizing idea. Human-In-the-**Loop** puts the human at the *edge* of an au
 
 The name is the security sense of "man in the middle" on purpose. An attacker in the middle of a channel can do three things — read traffic, drop or alter it, inject its own. The app gives those three powers to the human, deliberately:
 
-- **read** — a message log of every routing decision, both directions, delivered / held / dropped.
-- **drop or alter** — a global kill switch, per-link untrust, the trust gate, a rate guard.
+- **read** — a durable record of every message and every routing decision, both directions, with the reason it ended where it did.
+- **drop or alter** — a global kill switch that survives a restart, per-pair revocation that stops mail already in flight, default-deny permission, and three rate budgets with a circuit breaker.
 - **inject** — cross-session send, broadcast, spawn-child-with-context, selection-to-tangent.
 
 ### Using this responsibly
