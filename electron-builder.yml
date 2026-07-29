@@ -21,7 +21,7 @@ publish:
 # whose spaces GitHub rewrites to dots on upload — which then don't match the
 # hyphen-safe URLs electron-builder writes into latest-mac.yml, breaking the
 # updater. A hyphenated name keeps the file, the yml URL, and the uploaded asset
-# identical. ${name} is the package.json name (claude-command-center).
+# identical. ${name} is the package.json name (cc-command-center).
 artifactName: ${name}-${version}-${arch}.${ext}
 
 # electron-vite emits the bundled app to out/; native deps (better-sqlite3,

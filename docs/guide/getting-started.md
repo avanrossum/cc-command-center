@@ -25,7 +25,7 @@ The app integrates with parts of Claude Code that are not a public API: the tran
 ## Download and install
 
 1. Go to the public releases repo: **https://github.com/avanrossum/claude-command-center-releases**
-2. Open the latest release and download the DMG. It is named `claude-command-center-<version>-arm64.dmg` (for example, `claude-command-center-0.20.0-arm64.dmg`). The DMG is code-signed and notarized by Apple.
+2. Open the latest release and download the DMG. It is named `cc-command-center-<version>-arm64.dmg` (for example, `cc-command-center-0.23.0-arm64.dmg`). Builds up to v0.22.0 used the older `claude-command-center-` prefix. The DMG is code-signed and notarized by Apple.
 3. Open the downloaded DMG.
 4. Drag **CC Command Center** to your Applications folder.
 5. Eject the DMG.

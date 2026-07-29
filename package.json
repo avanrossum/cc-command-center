@@ -1,5 +1,5 @@
 {
-  "name": "claude-command-center",
+  "name": "cc-command-center",
   "version": "0.22.0",
   "private": true,
   "description": "One-window manager for many concurrent Claude Code sessions",
