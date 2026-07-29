@@ -2700,8 +2700,13 @@ function ContextMenu({
 }
 
 // Defaults for a spawn: the app-global last-used launch params (same source the
-// New-session modal seeds from), auto mode unless the user turned that off, and no
-// category chosen — which the main process reads as "inherit the parent's".
+// New-session modal seeds from), auto mode unless the user turned that off, and the
+// parent's own category preselected — the picker has to SHOW what will happen, so it
+// carries the inherited value rather than reading "Uncategorized" and quietly doing
+// something else. (parent.categoryId is already the effective category: the scan
+// resolves it through the blocking chain before it reaches the renderer.) The
+// main process still treats an absent category as "inherit", which is what the
+// Cmd+K instant spawn — no modal, no pick — relies on.
 function seedSpawn(
   parent: Session,
   type: 'blocking' | 'tangential',
@@ -2722,6 +2727,7 @@ function seedSpawn(
     effort: st?.lastEffort ?? '',
     ctx: st?.lastContext ?? '',
     mode: (st?.spawnAutoMode ?? true) ? 'auto' : '',
+    categoryId: parent.categoryId,
   }
 }
 
