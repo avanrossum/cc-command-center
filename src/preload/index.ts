@@ -136,6 +136,9 @@ contextBridge.exposeInMainWorld('cc', {
       flags,
       categoryId,
     ),
+  grantSet: (a: string, b: string, dir: 'both' | 'to' | 'from' | 'none') =>
+    ipcRenderer.invoke('grant:set', a, b, dir) as Promise<boolean>,
+  grantRevoke: (a: string, b: string) => ipcRenderer.invoke('grant:revoke', a, b) as Promise<boolean>,
   messageBody: (id: string) => ipcRenderer.invoke('message:body', id) as Promise<string | null>,
   messageResend: (id: string) =>
     ipcRenderer.invoke('message:resend', id) as Promise<{ ok: boolean; reason?: string }>,

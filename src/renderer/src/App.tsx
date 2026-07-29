@@ -123,10 +123,20 @@ interface Edge {
   source: string
   trusted?: number
 }
+interface GrantRow {
+  a_id: string
+  b_id: string
+  mode: 'both' | 'a_to_b' | 'b_to_a' | 'none'
+  granted_at: number
+  granted_by: string
+  revoked_at: number | null
+}
 interface MsgLogEntry {
   id: string
   from: string
+  fromId: string
   to: string
+  toId?: string
   text: string // PREVIEW; the whole body is fetched per row (window.cc.messageBody)
   len: number // full length, so a clipped preview can say so
   status: string
@@ -169,6 +179,7 @@ interface Snapshot {
   categories: Category[]
   edges: Edge[]
   messages?: MsgLogEntry[]
+  grants?: GrantRow[]
   awarenessPaused?: boolean
   settings?: AppSettings
   recentFolders?: string[]
@@ -2054,6 +2065,8 @@ export function App() {
       {logOpen && (
         <MessageLog
           messages={snap.messages ?? []}
+          sessions={snap.sessions ?? []}
+          grants={snap.grants ?? []}
           paused={!!snap.awarenessPaused}
           close={() => setLogOpen(false)}
         />
@@ -4166,102 +4179,167 @@ function NewSessionComposer({
   )
 }
 
-// The inbox. Messages are stored rows now, not a 60-entry in-memory ring clipped to
-// 500 characters, so this shows the FULL body and survives a restart — which is the
-// point: the thing you most want to read is the message that never arrived.
+const MSG_TONE: Record<MsgLogEntry['state'], string> = {
+  delivered: 'ok',
+  read: 'ok',
+  queued: 'held',
+  held: 'held',
+  failed: 'drop',
+  expired: 'drop',
+  archived: 'drop',
+}
+const MSG_DONE = new Set(['delivered', 'read', 'failed', 'expired', 'archived'])
+const msgWhen = (t: number) =>
+  new Date(t).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+
+// One message. Body is a preview until you open it — the snapshot ships every 1.5s and
+// a message can be a quarter of a megabyte, so the whole thing is fetched per row.
+function MsgRow({
+  m,
+  onAct,
+}: {
+  m: MsgLogEntry
+  onAct: (m: MsgLogEntry, what: 'resend' | 'cancel') => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [body, setBody] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const full = async (): Promise<string> => {
+    if (body !== null) return body
+    if (m.len <= m.text.length) return m.text
+    const b = (await window.cc.messageBody(m.id)) ?? m.text
+    setBody(b)
+    return b
+  }
+  const toggle = () => {
+    setOpen((o) => !o)
+    if (!open) void full()
+  }
+  // Copy is the recovery path, so it always puts the WHOLE message on the clipboard.
+  const copy = async () => {
+    await navigator.clipboard.writeText(await full())
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1400)
+  }
+  const canResend = m.origin !== 'app' && (m.state === 'failed' || m.state === 'expired')
+  const canCancel = m.state === 'queued' || m.state === 'held'
+  return (
+    <div className={`msgrow${open ? ' open' : ''}`}>
+      <div className="msgmeta" onClick={toggle}>
+        <span className="msgroute">
+          {m.from} → {m.to}
+          {m.origin !== 'session' && <span className="msgorigin">{m.origin}</span>}
+        </span>
+        <span className={`msgstatus s-${MSG_TONE[m.state] ?? 'drop'}`}>{m.status}</span>
+      </div>
+      <div className={`msgtext${open ? ' full' : ''}`}>{open ? (body ?? m.text) : m.text}</div>
+      <div className="msgfoot">
+        <span className="msgwhen">{msgWhen(m.at)}</span>
+        {m.attempts > 1 && <span className="msgwhen">{m.attempts} attempts</span>}
+        {m.spooled && (
+          <span className="msgwhen" title="the payload is also still on disk">
+            on disk
+          </span>
+        )}
+        {(m.len > m.text.length || m.text.length > 200) && (
+          <button className="msgmini" onClick={toggle}>
+            {open ? 'Collapse' : `Show all (${m.len.toLocaleString()} chars)`}
+          </button>
+        )}
+        <button className="msgmini" onClick={() => void copy()}>
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+        {canResend && (
+          <button
+            className="msgmini"
+            title="put this back in flight — the body was never lost"
+            onClick={() => onAct(m, 'resend')}
+          >
+            Resend
+          </button>
+        )}
+        {canCancel && (
+          <button className="msgmini" title="stop trying to deliver this" onClick={() => onAct(m, 'cancel')}>
+            Cancel
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// The mailbox. Grouped per session as a stack of in/out boxes rather than one flat
+// feed: a fleet-wide list answers "what happened recently", but the question you
+// actually have when you open this is "what is waiting on THIS session".
 function MessageLog({
   messages,
+  sessions,
+  grants,
   paused,
   close,
 }: {
   messages: MsgLogEntry[]
+  sessions: Session[]
+  grants: GrantRow[]
   paused: boolean
   close: () => void
 }) {
-  const [filter, setFilter] = useState<'open' | 'all'>('open')
-  const [openId, setOpenId] = useState<string | null>(null)
-  const [copied, setCopied] = useState<string | null>(null)
-  // Full bodies, fetched only for rows someone actually opens or copies. The
-  // snapshot carries a preview so a 250KB message costs nothing every 1.5s.
-  const [bodies, setBodies] = useState<Record<string, string>>({})
-  const fullBody = async (m: MsgLogEntry): Promise<string> => {
-    if (bodies[m.id] !== undefined) return bodies[m.id]
-    if (m.len <= m.text.length) return m.text // preview IS the whole thing
-    const b = (await window.cc.messageBody(m.id)) ?? m.text
-    setBodies((prev) => ({ ...prev, [m.id]: b }))
-    return b
-  }
-  const toggle = (m: MsgLogEntry) => {
-    const next = openId === m.id ? null : m.id
-    setOpenId(next)
-    if (next) void fullBody(m)
-  }
-  const TONE: Record<MsgLogEntry['state'], string> = {
-    delivered: 'ok',
-    read: 'ok',
-    queued: 'held',
-    held: 'held',
-    failed: 'drop',
-    expired: 'drop',
-    archived: 'drop',
-  }
-  const DONE = new Set(['delivered', 'read', 'failed', 'expired', 'archived'])
-  // Delivered means the text reached the input. Read means something confirms it
-  // became a turn. Showing them the same way is what "sent, unconfirmed" looks like.
-  const UNCONFIRMED = messages.filter((m) => m.state === 'delivered' && m.origin !== 'app')
-  const inFlight = messages.filter((m) => !DONE.has(m.state))
-  const stuck = messages.filter((m) => m.state === 'failed' || m.state === 'expired')
-  const shown = filter === 'open' ? messages.filter((m) => !DONE.has(m.state) || m.spooled) : messages
-  // Copy is the recovery path, so it always puts the WHOLE message on the clipboard,
-  // never the preview.
-  const copy = async (m: MsgLogEntry) => {
-    await navigator.clipboard.writeText(await fullBody(m))
-    setCopied(m.id)
-    setTimeout(() => setCopied((c) => (c === m.id ? null : c)), 1400)
-  }
-  const when = (t: number) =>
-    new Date(t).toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  const [busy, setBusy] = useState<string | null>(null)
+  const [tab, setTab] = useState<'inbox' | 'route' | 'grants'>('inbox')
   const [err, setErr] = useState<string | null>(null)
-  const act = async (m: MsgLogEntry, what: 'resend' | 'cancel') => {
-    setBusy(m.id)
-    setErr(null)
-    const r =
-      what === 'resend' ? await window.cc.messageResend(m.id) : await window.cc.messageCancel(m.id)
-    if (!r.ok) setErr(r.reason ?? `could not ${what}`)
-    setBusy(null)
+  const [openSid, setOpenSid] = useState<string | null>(null)
+  const nameOf = (sid?: string): string => {
+    if (!sid) return 'unrouted'
+    if (sid === 'user') return 'you'
+    const s = sessions.find((x) => x.sessionId === sid)
+    return s?.name ?? sid.slice(0, 8)
   }
-  // Resendable = it never landed and the app still has the body. A delivered message
-  // is deliberately not re-sendable from here: that would be a new message, and it
-  // should read as one to whoever receives it.
-  const canResend = (m: MsgLogEntry) =>
-    m.origin !== 'app' && (m.state === 'failed' || m.state === 'expired')
-  const canCancel = (m: MsgLogEntry) => m.state === 'queued' || m.state === 'held'
+  const act = async (m: MsgLogEntry, what: 'resend' | 'cancel') => {
+    setErr(null)
+    const r = what === 'resend' ? await window.cc.messageResend(m.id) : await window.cc.messageCancel(m.id)
+    if (!r.ok) setErr(r.reason ?? `could not ${what}`)
+  }
+
+  // Per-session in/out stacks. A message appears in the sender's OUT and the
+  // recipient's IN, which is what makes each box readable on its own.
+  const groups = new Map<string, { in: MsgLogEntry[]; out: MsgLogEntry[] }>()
+  const bucket = (sid: string) => {
+    let g = groups.get(sid)
+    if (!g) groups.set(sid, (g = { in: [], out: [] }))
+    return g
+  }
+  for (const m of messages) {
+    if (m.origin === 'app' && !m.toId) {
+      bucket('__app').in.push(m)
+      continue
+    }
+    if (m.toId) bucket(m.toId).in.push(m)
+    else bucket(m.fromId).out.push(m) // never resolved to anyone — it is the sender's problem
+    if (m.fromId && m.fromId !== 'user' && m.toId) bucket(m.fromId).out.push(m)
+  }
+  const attention = (ms: MsgLogEntry[]) => ms.filter((m) => !MSG_DONE.has(m.state)).length
+  const stuck = (ms: MsgLogEntry[]) => ms.filter((m) => m.state === 'failed' || m.state === 'expired').length
+  const rows = [...groups.entries()]
+    .map(([sid, g]) => ({ sid, ...g, need: attention([...g.in, ...g.out]) + stuck([...g.in, ...g.out]) }))
+    .sort((a, b) => b.need - a.need || nameOf(a.sid).localeCompare(nameOf(b.sid)))
+  const totalNeed = rows.reduce((n, r) => n + r.need, 0)
+
+  const live = sessions.filter((s) => s.sessionId && !s.dormant)
   return (
     <div className="spawnscrim" onClick={close}>
       <div className="spawnmodal msglog" onClick={(e) => e.stopPropagation()}>
         <div className="msgloghead">
           <div>
             <div className="spawntitle">
-              Messages{' '}
-              {(inFlight.length > 0 || stuck.length > 0) && (
-                <span className="msgbadge">
-                  {inFlight.length > 0 && `${inFlight.length} in flight`}
-                  {inFlight.length > 0 && stuck.length > 0 && ' · '}
-                  {stuck.length > 0 && `${stuck.length} stuck`}
-                  {(inFlight.length > 0 || stuck.length > 0) && UNCONFIRMED.length > 0 && ' · '}
-                  {UNCONFIRMED.length > 0 && `${UNCONFIRMED.length} unconfirmed`}
-                </span>
-              )}
+              Messages {totalNeed > 0 && <span className="msgbadge">{totalNeed} need you</span>}
             </div>
             <div className="spawnsub">
-              Every message between sessions, with the reason it is where it is. Nothing is discarded
-              — an undelivered payload also stays on disk under ~/.claude/ccc/mail/spool.
+              Each session's in and out boxes. Nothing is discarded — an undelivered payload also
+              stays on disk under ~/.claude/ccc/mail/spool.
             </div>
           </div>
           <button
@@ -4269,8 +4347,8 @@ function MessageLog({
             onClick={() => window.cc.awarenessPause(!paused)}
             title={
               paused
-                ? 'Autonomous messaging is paused — click to resume'
-                : 'Pause all autonomous messaging (messages are buffered, not lost)'
+                ? 'Messaging between sessions is paused — click to resume'
+                : 'Pause all messaging between sessions (messages are recorded, not lost)'
             }
           >
             {paused ? '▶ Resume messaging' : '⏸ Pause messaging'}
@@ -4278,84 +4356,185 @@ function MessageLog({
         </div>
         {paused && (
           <div className="pausednote">
-            Paused — new messages are still recorded and held; nothing is delivered until you resume.
+            Paused — messages are still recorded and held; nothing is delivered until you resume.
           </div>
         )}
         <div className="msgfilter">
-          <button className={filter === 'open' ? 'on' : ''} onClick={() => setFilter('open')}>
-            Needs attention
+          <button className={tab === 'inbox' ? 'on' : ''} onClick={() => setTab('inbox')}>
+            Mailboxes
           </button>
-          <button className={filter === 'all' ? 'on' : ''} onClick={() => setFilter('all')}>
-            All ({messages.length})
+          <button className={tab === 'route' ? 'on' : ''} onClick={() => setTab('route')}>
+            Send
+          </button>
+          <button className={tab === 'grants' ? 'on' : ''} onClick={() => setTab('grants')}>
+            Who may message whom ({grants.filter((g) => g.mode !== 'none').length})
           </button>
         </div>
         {err && <div className="pausednote">{err}</div>}
-        <div className="msglist">
-          {shown.length === 0 && (
-            <div className="emptycat">
-              {filter === 'open' ? 'nothing waiting — every message landed' : 'no messages yet'}
-            </div>
-          )}
-          {shown.map((m) => {
-            const expanded = openId === m.id
-            return (
-              <div key={m.id} className={`msgrow${expanded ? ' open' : ''}`}>
-                <div className="msgmeta" onClick={() => toggle(m)}>
-                  <span className="msgroute">
-                    {m.from} → {m.to}
-                    {m.origin === 'app' && <span className="msgorigin">app</span>}
-                  </span>
-                  <span className={`msgstatus s-${TONE[m.state] ?? 'drop'}`}>{m.status}</span>
-                </div>
-                <div className={`msgtext${expanded ? ' full' : ''}`}>
-                  {expanded ? (bodies[m.id] ?? m.text) : m.text}
-                </div>
-                <div className="msgfoot">
-                  <span className="msgwhen">{when(m.at)}</span>
-                  {m.attempts > 1 && <span className="msgwhen">{m.attempts} attempts</span>}
-                  {m.spooled && (
-                    <span className="msgwhen" title="the payload is also still on disk">
-                      on disk
+        {tab === 'inbox' && (
+          <div className="msglist">
+            {rows.length === 0 && <div className="emptycat">no messages yet</div>}
+            {rows.map((r) => {
+              const open = openSid === r.sid
+              return (
+                <div key={r.sid} className="msggroup">
+                  <div className="msggrouphead" onClick={() => setOpenSid(open ? null : r.sid)}>
+                    <span className="msggroupname">
+                      {r.sid === '__app' ? 'From the app' : nameOf(r.sid)}
                     </span>
-                  )}
-                  {(m.len > m.text.length || m.text.length > 200) && (
-                    <button className="msgmini" onClick={() => toggle(m)}>
-                      {expanded ? 'Collapse' : `Show all (${m.len.toLocaleString()} chars)`}
-                    </button>
-                  )}
-                  <button className="msgmini" onClick={() => void copy(m)}>
-                    {copied === m.id ? 'Copied' : 'Copy'}
-                  </button>
-                  {canResend(m) && (
-                    <button
-                      className="msgmini"
-                      disabled={busy === m.id}
-                      title="put this message back in flight — the body was never lost"
-                      onClick={() => void act(m, 'resend')}
-                    >
-                      Resend
-                    </button>
-                  )}
-                  {canCancel(m) && (
-                    <button
-                      className="msgmini"
-                      disabled={busy === m.id}
-                      title="stop trying to deliver this"
-                      onClick={() => void act(m, 'cancel')}
-                    >
-                      Cancel
-                    </button>
+                    <span className="msggroupcount">
+                      {r.in.length} in · {r.out.length} out
+                    </span>
+                    {r.need > 0 && <span className="msggroupneed">{r.need}</span>}
+                    <span className="msggroupchev">{open ? '▾' : '▸'}</span>
+                  </div>
+                  {open && (
+                    <div className="msggroupbody">
+                      {r.in.length > 0 && <div className="msgstack">Inbox</div>}
+                      {r.in.map((m) => (
+                        <MsgRow key={`i${m.id}`} m={m} onAct={act} />
+                      ))}
+                      {r.out.length > 0 && <div className="msgstack">Outbox</div>}
+                      {r.out.map((m) => (
+                        <MsgRow key={`o${m.id}`} m={m} onAct={act} />
+                      ))}
+                    </div>
                   )}
                 </div>
-              </div>
-            )
-          })}
-        </div>
+              )
+            })}
+          </div>
+        )}
+        {tab === 'route' && <RouteTab sessions={live} onErr={setErr} />}
+        {tab === 'grants' && <GrantsTab sessions={live} grants={grants} nameOf={nameOf} />}
         <div className="spawnactions">
           <button className="rbtn" onClick={close}>
             Close
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// You, writing to a session. Attributed to YOU, never dressed up as coming from
+// another session — the audit trail should never be ambiguous about who spoke.
+function RouteTab({ sessions, onErr }: { sessions: Session[]; onErr: (s: string | null) => void }) {
+  const [to, setTo] = useState('')
+  const [text, setText] = useState('')
+  const [sent, setSent] = useState(false)
+  const send = async () => {
+    if (!to || !text.trim()) return
+    onErr(null)
+    const r = await window.cc.sessionSend(to, text.trim())
+    if (!r.ok) onErr(r.reason ?? 'could not send')
+    else {
+      setSent(true)
+      setText('')
+      setTimeout(() => setSent(false), 1500)
+    }
+  }
+  return (
+    <div className="msgpane">
+      <div className="spawnlabel">To</div>
+      <select className="cat-in" value={to} onChange={(e) => setTo(e.target.value)}>
+        <option value="">Pick a session…</option>
+        {sessions.map((s) => (
+          <option key={s.sessionId} value={s.sessionId}>
+            {s.name ?? s.sessionId.slice(0, 8)}
+          </option>
+        ))}
+      </select>
+      <div className="spawnlabel">Message</div>
+      <textarea
+        className="spawnnote"
+        value={text}
+        placeholder="Goes into that session as a new turn. ⌘↩ to send."
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void send()
+        }}
+      />
+      <div className="msgfoot">
+        <span className="msgwhen">Sent as you, and recorded like any other message.</span>
+        <button className="msgmini" disabled={!to || !text.trim()} onClick={() => void send()}>
+          {sent ? 'Sent' : 'Send'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// Default deny. Nothing here happens by itself: a session can never open a link for
+// itself, only use one you opened.
+function GrantsTab({
+  sessions,
+  grants,
+  nameOf,
+}: {
+  sessions: Session[]
+  grants: GrantRow[]
+  nameOf: (sid?: string) => string
+}) {
+  const [a, setA] = useState('')
+  const [b, setB] = useState('')
+  const [dir, setDir] = useState<'both' | 'to' | 'from'>('both')
+  const live = grants.filter((g) => g.mode !== 'none')
+  const arrow = (g: GrantRow) =>
+    g.mode === 'both' ? '↔' : g.mode === 'a_to_b' ? '→' : '←'
+  return (
+    <div className="msgpane">
+      <div className="spawnsub">
+        Sessions may only message each other along a link you have allowed. Spawned children are
+        allowed automatically when you leave that setting on; every other pair is yours to open.
+      </div>
+      <div className="grantnew">
+        <select className="cat-in" value={a} onChange={(e) => setA(e.target.value)}>
+          <option value="">Session…</option>
+          {sessions.map((s) => (
+            <option key={s.sessionId} value={s.sessionId}>
+              {s.name ?? s.sessionId.slice(0, 8)}
+            </option>
+          ))}
+        </select>
+        <select className="cat-in grantdir" value={dir} onChange={(e) => setDir(e.target.value as 'both')}>
+          <option value="both">↔ both ways</option>
+          <option value="to">→ may send to</option>
+          <option value="from">← may receive from</option>
+        </select>
+        <select className="cat-in" value={b} onChange={(e) => setB(e.target.value)}>
+          <option value="">Session…</option>
+          {sessions
+            .filter((s) => s.sessionId !== a)
+            .map((s) => (
+              <option key={s.sessionId} value={s.sessionId}>
+                {s.name ?? s.sessionId.slice(0, 8)}
+              </option>
+            ))}
+        </select>
+        <button
+          className="msgmini"
+          disabled={!a || !b || a === b}
+          onClick={() => void window.cc.grantSet(a, b, dir)}
+        >
+          Allow
+        </button>
+      </div>
+      <div className="msglist">
+        {live.length === 0 && (
+          <div className="emptycat">no pairs allowed yet — spawned children are allowed by edge</div>
+        )}
+        {live.map((g) => (
+          <div key={`${g.a_id}|${g.b_id}`} className="grantrow">
+            <span className="msgroute">
+              {nameOf(g.a_id)} {arrow(g)} {nameOf(g.b_id)}
+            </span>
+            <span className="msgwhen">{g.granted_by === 'user' ? 'you allowed this' : g.granted_by}</span>
+            <button className="msgmini" onClick={() => void window.cc.grantRevoke(g.a_id, g.b_id)}>
+              Revoke
+            </button>
+          </div>
+        ))}
       </div>
     </div>
   )

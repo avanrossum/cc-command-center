@@ -3689,3 +3689,87 @@ select.cat-in {
   font-size: 13px;
   line-height: 1;
 }
+
+/* ---- mailbox: per-session in/out stacks ---- */
+.msggroup {
+  border-bottom: 1px solid var(--cc-hairline);
+}
+.msggroup:last-child {
+  border-bottom: 0;
+}
+.msggrouphead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  background: var(--cc-accordion-bg);
+}
+.msggrouphead:hover {
+  background: var(--cc-accordion-hover);
+}
+.msggroupname {
+  font-size: 12px;
+  color: var(--cc-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msggroupcount {
+  font: 10px var(--cc-font-mono);
+  color: var(--cc-dim);
+  margin-left: auto;
+}
+.msggroupneed {
+  font: 10px var(--cc-font-mono);
+  color: var(--cc-bg);
+  background: var(--cc-edge-blocking);
+  border-radius: 8px;
+  padding: 0 6px;
+}
+.msggroupchev {
+  font-size: 10px;
+  color: var(--cc-dim);
+}
+.msggroupbody {
+  padding-left: 8px;
+  border-left: 2px solid var(--cc-hairline);
+  margin-left: 10px;
+}
+/* "Inbox" / "Outbox" — which direction the stack below is. */
+.msgstack {
+  font: 9.5px var(--cc-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--cc-faint);
+  padding: 6px 10px 2px;
+}
+.msgpane {
+  margin-top: 10px;
+}
+.grantnew {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 10px 0;
+}
+.grantnew .cat-in {
+  flex: 1;
+  min-width: 0;
+}
+.grantnew .grantdir {
+  flex: 0 0 128px;
+}
+.grantrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--cc-hairline);
+}
+.grantrow:last-child {
+  border-bottom: 0;
+}
+.grantrow .msgwhen {
+  margin-left: auto;
+}

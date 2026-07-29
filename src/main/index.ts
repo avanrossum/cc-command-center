@@ -1775,7 +1775,9 @@ interface Delivery {
 export interface MsgLogEntry {
   id: string
   from: string
+  fromId: string // for the per-session in/out grouping the panel does
   to: string
+  toId?: string
   text: string // PREVIEW only — the snapshot ships every 1.5s; fetch the rest on demand
   len: number // full body length, so the panel knows there is more to show
   status: string // "<state>: <reason>" — what the panel colours and shows
@@ -1930,7 +1932,9 @@ function messageLogEntries(): MsgLogEntry[] {
     return listMessages().map((m) => ({
       id: m.id,
       from: m.from_handle,
+      fromId: m.from_session_id,
       to: m.to_addr,
+      toId: m.to_session_id ?? undefined,
       text: m.preview,
       len: m.body_len,
       status: m.reason ? `${m.state}: ${m.reason}` : m.state,

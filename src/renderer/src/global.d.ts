@@ -127,6 +127,8 @@ declare global {
         flags?: ResumeFlags,
         categoryId?: number | null,
       ) => Promise<{ pid: number; cwd: string } | null>
+      grantSet: (a: string, b: string, dir: 'both' | 'to' | 'from' | 'none') => Promise<boolean>
+      grantRevoke: (a: string, b: string) => Promise<boolean>
       messageBody: (id: string) => Promise<string | null>
       messageResend: (id: string) => Promise<{ ok: boolean; reason?: string }>
       messageCancel: (id: string) => Promise<{ ok: boolean; reason?: string }>
