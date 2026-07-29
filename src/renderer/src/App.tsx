@@ -2248,7 +2248,7 @@ function SettingsModal({
             <span className="setsub">
               {mailGranted
                 ? 'Granted — sessions write their outbox without a permission prompt.'
-                : 'Pre-authorize writes to ~/.claude/ccc/ in your global Claude settings so sessions don’t get prompted on every message.'}
+                : 'Pre-authorize writes to ~/.claude/ccc/mail/ in your global Claude settings so sessions don’t get prompted on every message. Scoped to the mail trees only.'}
             </span>
           </span>
           <button
@@ -2558,12 +2558,15 @@ function FirstRunMail({
       <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
         <div className="spawntitle">Let sessions message each other without prompts?</div>
         <div className="spawnsub">
-          The awareness bus lets your sessions message each other by writing tiny files to{' '}
-          <code>~/.claude/ccc/</code>. By default, Claude Code asks permission every time a session
-          writes there. With your OK, CC Command Center will add one narrowly-scoped rule —{' '}
-          <code>Write(~/.claude/ccc/**)</code> — to your global <code>~/.claude/settings.json</code>{' '}
-          (backed up first) so those writes just work. Nothing else is changed. You can undo it there
-          anytime, or turn it on later in Settings.
+          Sessions message each other by writing small files under{' '}
+          <code>~/.claude/ccc/mail/</code>. By default, Claude Code asks permission every time a
+          session writes there. With your OK, CC Command Center adds two narrowly-scoped rules —{' '}
+          <code>Edit(~/.claude/ccc/mail/**)</code> and <code>Edit(~/.claude/ccc/mail-dev/**)</code>{' '}
+          — to your global <code>~/.claude/settings.json</code> (backed up first) so those writes
+          just work. Scoped to the mail trees only, deliberately not <code>~/.claude/ccc/**</code>:
+          that tree also holds the status-hook script, which runs on every hook event, and a session
+          is not pre-authorized to touch it. Nothing else is changed. You can undo it there anytime,
+          or turn it on later in Settings.
         </div>
         <div className="spawnactions">
           <button

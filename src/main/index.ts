@@ -4633,6 +4633,17 @@ app.whenReady().then(() => {
   } catch {
     /* ignore */
   }
+  // The pre-authorized permission rule is a CONSTANT (MAIL_RULES) covering the two
+  // standard mail trees — deliberately never derived from MAIL_DIR, so no environment
+  // variable can influence what gets written into the user's global settings. The
+  // consequence of moving the tree is therefore a permission prompt on every outbox
+  // write, which is confusing to run into unexplained.
+  if (process.env.CCC_MAIL_DIR && !/\/\.claude\/ccc\/mail(-dev)?$/.test(MAIL_DIR)) {
+    console.warn(
+      `[mail] CCC_MAIL_DIR points outside the pre-authorized trees (${MAIL_DIR}). ` +
+        `Sessions will be prompted on every outbox write; the granted rule is not widened to match.`,
+    )
+  }
   ensureStatusHookScript() // keep the hook script current with this app version
   ensureUsageLineScript() // the per-session usage statusLine (context % + 5h/7d)
   ensureKeyHelperScript() // API-key helper, current with this app version
