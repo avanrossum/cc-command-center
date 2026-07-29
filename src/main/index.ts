@@ -192,7 +192,15 @@ let lastUnhandled = new Set<string>() // last good unhandled set, retained if a 
 // after a restart everything is dormant (dones don't show for dormant), so no
 // spurious dones on launch.
 const lastViewedMtime = new Map<string, number>()
-const DORMANT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000 // dormant/resumable sessions age out after a week
+// How long a stopped session keeps offering to resume. Two tiers, because the gate
+// exists to bound CLUTTER and must not discard INTENT.
+//
+// A session inherits a category automatically from its folder, so "categorised" alone
+// says nothing about whether you meant to keep it. Giving it a name, or wiring it into
+// a task tree, is a deliberate act — and one of those disappearing after a week of not
+// being launched is a session lost, not clutter pruned. It happened.
+const DORMANT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000 // incidental: auto-categorised only
+const KEPT_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000 // deliberate: you named it, or it has an edge
 
 // ---------- session polling (status board) ----------
 // A managed session parked on an interactive dialog it can't clear itself. Two
@@ -984,9 +992,13 @@ function snapshot(): Snapshot {
   for (const [sid, node] of nodes) {
     if (liveIds.has(sid) || removed.has(sid)) continue
     if (node.category_id == null && !edgeIds.has(sid)) continue
-    // Recency gate: only recently-active sessions stay resumable, so the dormant
-    // list can't grow without bound as sessions accumulate in a categorized cwd.
-    if (node.last_seen && now - node.last_seen > DORMANT_MAX_AGE_MS) continue
+    // Recency gate: stopped sessions age out so the list can't grow without bound as
+    // sessions accumulate in a categorised cwd. Measured on last time the process RAN,
+    // which is why the tier matters — a session you named and filed but haven't
+    // launched in a week is not stale, it's waiting.
+    const deliberate = !!names[sid] || edgeIds.has(sid)
+    const maxAge = deliberate ? KEPT_MAX_AGE_MS : DORMANT_MAX_AGE_MS
+    if (node.last_seen && now - node.last_seen > maxAge) continue
     // A session id with no transcript was never a conversation, so there is nothing
     // for `claude --resume` to load and it must not be offered as resumable.
     //
