@@ -200,6 +200,42 @@ Detection is passive and scoped to the session: file paths from that session's o
 
 ---
 
+## Bring in signal from outside
+
+A panel docked under the session list, folded until you want it, for things worth your
+attention that no session is going to tell you about. Something you write watches
+whatever you care about on its own schedule — a repo that's been mid-refactor for nine
+days, a secret committed on Tuesday, a test that fails one run in five — and drops a
+JSON file in a directory. The panel finds it.
+
+![The Digests panel listing its sources, each with an unread count](screenshots/digests-sources.png)
+
+Sources are discovered by listing a directory, so a producer written a year from now
+appears with no change to the app. Items sort by **when the thing happened**, not when
+it was noticed, so a source backfilling a week doesn't read as one busy afternoon.
+`score` shows as a number, `severity` as a colour.
+
+![One source's items, showing severity chips and ages](screenshots/digests-items.png)
+
+Three depths, one at a time: sources, that source's items, then the item — with the full
+body, its tags, and a copy button that takes the whole thing. Opening an item marks it
+read; dismiss it and it doesn't come back. Keep it and it stays as a working set. The
+whole panel pops out into a floating card like Timeline and Activity.
+
+![One item open, with its markdown body, tags, and actions](screenshots/digests-item.png)
+
+Actions on an item are hints, not commands. The app reveals a path in Finder and renders
+anything it doesn't recognize as inert — these files are written by unattended jobs, and
+nothing in one is ever executed.
+
+**This one costs you an afternoon before it does anything.** The app ships no producers,
+because the whole point is that it doesn't need to know what your signal means. What it
+gives you back is a place for all of it that you didn't have to build a UI for.
+[How to write one](docs/digests.md) — the contract is a JSON file in a directory, in
+whatever language you like.
+
+---
+
 ## Make the terminal yours
 
 - **Per-terminal color themes.** Nine iTerm-style schemes, each with an accent that doubles as the session's identity swatch, set per session and kept across resume — color-code your sessions and a glance tells you which one you're in.
