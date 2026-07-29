@@ -86,6 +86,10 @@ Notifications are per category as well: any class can be overridden where it mat
 
 ## Structure work as a tree
 
+**This is the feature the whole app grew out of.** You're deep in a project and you hit something that needs solving but isn't the thing you're doing. Today that leaves you three options, and all of them cost you something: chase it in the current session and muddy the context you were holding (and the one *you* were holding); open another terminal, start a session, and retype enough context to make it useful, at which point you're managing windows and remembering which one is waiting on you; or ask the session to note it for later and hope later arrives.
+
+A subagent gets close, but you can't talk to one. It runs, it reports back, and you were never in the conversation. So v0.1.0 of this app was one feature: spawn a child session on a specific task, hand it context from the session you're already in, and then go work with it directly. Right-click, spawn a child, open the link, ask the parent to brief it. Everything below exists to make that one move work.
+
 Spawn a **child session** to go work on one thing without staining the context you're in — seeded with a handoff note carrying just enough to pick up the idea. `⌘K` spawns one straight from whatever you have selected in the terminal. Links are typed: a **blocking** child means the parent isn't done until the child is; a **tangential** child is a decoupled side-exploration that never blocks the parent.
 
 The session list renders the tree, indented, with a solid line for a blocking edge and a dotted one for a tangential offshoot, so you can see which session spawned which and tell a hard dependency from an independent spin-off. A parent whose blocking child is unfinished computes as blocked and names the child it's waiting on, rather than sitting there reading as idle.
@@ -221,6 +225,16 @@ An optional control agent that writes a plain-English line explaining *why* each
 - **Read-only.** It explains; it takes no action on any session.
 
 ![The Arbiter panel: running spend against its daily cap, and a log of each run](screenshots/arbiter-log.png)
+
+---
+
+## Intended use, and the line I can't enforce
+
+Every mechanism in here assumes you are the one starting it. You spawn the child. You open the link between a pair. You ask the parent to brief it. Messages deliver into a session you're sitting in, or one you left running deliberately, and the whole triage surface exists so that you come back to things rather than so that they proceed without you. That is what this is for, and it's the shape it was built and tested against. Used that way, I've worked hard to keep it consistent with the Claude Code CLI's terms of service; nothing in here is trying to be a workaround.
+
+**But the mailbox could be pointed at something else, and the app can't stop you.** Wire enough grants together, leave sessions running in auto mode, and you have the makings of an unattended automation harness driving subscription sessions. Once you've opened the links, mail delivers. There is no check I could add that reliably tells a chain you're supervising apart from one you walked away from, so I'm not going to pretend there's a technical guardrail here.
+
+So, plainly: **if you're building full-scale automation, run it on an API key with metered billing.** The per-session API key feature exists for exactly that, which is why it's in here at all. Read the [Claude Code terms](https://www.anthropic.com/legal/consumer-terms) yourself and make your own call. None of this is legal advice, and this is one of the few places in the app where the guardrail has to be you.
 
 ---
 
