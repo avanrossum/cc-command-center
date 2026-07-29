@@ -1281,7 +1281,9 @@ export function archiveMessages(sessionId: string, at: number): void {
     .run(at, sessionId, sessionId)
 }
 
-const MESSAGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+// User-set, in days. A mailbox is a record you may need to go back to, and how far
+// back is a judgement about your own work, not something to hard-code.
+const DEFAULT_RETENTION_DAYS = 7
 const MAX_OPEN_MESSAGES = 500
 const MAX_TERMINAL_MESSAGES = 2000
 const MESSAGES_PER_SESSION = 200
@@ -1289,8 +1291,12 @@ const MESSAGES_PER_SESSION = 200
 // Two-axis retention, same shape as pruneLedger: age out first, then hard count
 // ceilings applied SEPARATELY to open and terminal rows, plus a per-sender ring cap
 // so one chatty pair cannot crowd the rest of the fleet out of the inbox.
-export function pruneMessages(now: number): void {
+export function pruneMessages(now: number, retentionDays?: number): void {
   const d = must()
+  const days = Number.isFinite(retentionDays) && (retentionDays as number) > 0
+    ? Math.min(365, retentionDays as number)
+    : DEFAULT_RETENTION_DAYS
+  const MESSAGE_RETENTION_MS = days * 24 * 60 * 60 * 1000
   // An open message older than the retention window is never going to route.
   d.prepare(
     `UPDATE message SET state='expired', reason=COALESCE(reason,'aged out'), terminal_at=?

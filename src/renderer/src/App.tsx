@@ -167,6 +167,7 @@ interface AppSettings {
   terminalFont: string
   terminalFontSize: number
   hideUnmanaged: boolean
+  mailRetentionDays: number
   notifyEnabled: boolean
   notifyPermission: boolean
   notifyQuestion: boolean
@@ -2218,6 +2219,28 @@ function SettingsModal({
             </span>
           </span>
         </label>
+
+        <div className="setrow">
+          <span>
+            <b>Keep messages for</b>
+            <span className="setsub">
+              How long a finished message stays readable in the mailbox — including the mail of a
+              session you have removed, which is archived rather than deleted. After this it is
+              pruned.
+            </span>
+          </span>
+          <select
+            className="cat-in setnarrow"
+            value={settings?.mailRetentionDays ?? 7}
+            onChange={(e) => window.cc.settingsSet('mailRetentionDays', e.target.value)}
+          >
+            {[1, 3, 7, 14, 30, 90].map((d) => (
+              <option key={d} value={d}>
+                {d} day{d === 1 ? '' : 's'}
+              </option>
+            ))}
+          </select>
+        </div>
 
         <div className="setrow">
           <span>

@@ -3773,3 +3773,8 @@ select.cat-in {
 .grantrow .msgwhen {
   margin-left: auto;
 }
+
+.setnarrow {
+  flex: 0 0 110px;
+  margin-left: auto;
+}

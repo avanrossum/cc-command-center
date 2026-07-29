@@ -293,6 +293,7 @@ interface AppSettings {
   terminalFont: string // xterm fontFamily override ('' = built-in default stack)
   terminalFontSize: number // xterm font size in px
   hideUnmanaged: boolean // hide live Claude sessions this app doesn't own (default OFF)
+  mailRetentionDays: number // how long a message stays readable after it is finished
   // macOS notifications. Master is OFF until turned on (enabling it is also when
   // macOS asks for permission). Per-class defaults notify only for the BLOCKING
   // classes; 'done' is the high-volume one and stays off unless asked for.
@@ -330,6 +331,10 @@ function getSettings(): AppSettings {
       return Number.isFinite(n) && n >= 6 && n <= 40 ? n : 12.5
     })(),
     hideUnmanaged: getAppState('hideUnmanaged') === 'true', // default OFF
+    mailRetentionDays: (() => {
+      const n = Number(getAppState('mailRetentionDays'))
+      return Number.isFinite(n) && n >= 1 && n <= 365 ? n : 7
+    })(),
     notifyEnabled: getAppState('notifyEnabled') === 'true', // default OFF (opt-in)
     notifyPermission: getAppState('notifyPermission') !== 'false', // default ON (blocking)
     notifyQuestion: getAppState('notifyQuestion') !== 'false', // default ON (blocking)
@@ -4629,7 +4634,7 @@ app.whenReady().then(() => {
   setInterval(() => {
     pruneSpool()
     try {
-      pruneMessages(Date.now())
+      pruneMessages(Date.now(), getSettings().mailRetentionDays)
     } catch (e) {
       console.error('[mail] prune failed', e)
     }
