@@ -996,7 +996,12 @@ function snapshot(): Snapshot {
     // other id and it became a permanent row that looked resumable forever, sitting
     // in the list at exactly the moment a real session was being named, so it
     // collected the name meant for something else.
-    if (!transcriptIds().has(sid)) continue
+    // Guard: only filter when we actually managed to read some transcripts. If the set
+    // came back empty — an unreadable projects tree, a layout we don't expect — every
+    // dormant session would vanish at once. Showing a phantom row is a far smaller
+    // failure than hiding someone's whole resumable list.
+    const known = transcriptIds()
+    if (known.size > 0 && !known.has(sid)) continue
     enriched.push({
       pid: 0,
       sessionId: sid,
