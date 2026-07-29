@@ -3165,7 +3165,7 @@ function DigestsPanel({ sources }: { sources: DigestSource[] }): React.ReactElem
 
   return (
     <div className={`dg${open ? ' open' : ''}`}>
-      <button className="dg-head" onClick={() => setOpen(!open)} title="Digests — feeds from unattended producers">
+      <button className="dg-head" onClick={() => setOpen(!open)} title="Digests">
         <span className={`dg-dot${totalUnread > 0 ? ' on' : ''}`} />
         <span className="dg-name">Digests</span>
         {totalUnread > 0 && <span className="dg-badge">{totalUnread}</span>}

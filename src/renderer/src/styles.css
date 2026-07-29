@@ -3844,16 +3844,19 @@ select.cat-in {
   overflow: hidden; /* the slider is wider than the panel by design */
   max-height: clamp(360px, 40vh, 500px);
 }
+/* Three panels side by side, so one panel is a third of the slider. The basis must be
+   stated explicitly: `flex: 1` sets flex-basis to 0 and silently overrides `width`,
+   which collapsed the slider to a single panel and squashed every view into a third of
+   the rail. */
 .dg-slider {
   display: flex;
-  width: 300%;
-  flex: 1;
+  flex: 0 0 300%;
   min-height: 0;
   transition: transform 180ms ease;
 }
 .dg-view {
-  width: 33.3333%;
-  flex: none;
+  flex: 0 0 33.3333%;
+  min-width: 0;
   overflow-y: auto;
 }
 .dg-view[aria-hidden='true'] {
