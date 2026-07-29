@@ -1112,6 +1112,18 @@ export function listMessages(limit = 100, previewChars = 400): MessageBrief[] {
     .all(previewChars, limit) as MessageBrief[]
 }
 
+// Put a finished message back in flight. Only ever called for an explicit user
+// resend, so it bumps attempts and records that a human did it — a message must
+// never revive itself, which is how a retry loop becomes an autonomous fleet.
+export function reopenMessage(id: string, reason: string, at: number): void {
+  must()
+    .prepare(
+      `UPDATE message SET state='queued', reason=?, terminal_at=NULL,
+         attempts=attempts+1, last_attempt_at=? WHERE id=?`,
+    )
+    .run(reason, at, id)
+}
+
 // The whole payload for one message. Deliberately its own call: this is what "copy
 // it out by hand" resolves to, and it must never be the clipped version.
 export function getMessageBody(id: string): string | undefined {

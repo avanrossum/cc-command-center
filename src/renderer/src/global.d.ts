@@ -128,6 +128,8 @@ declare global {
         categoryId?: number | null,
       ) => Promise<{ pid: number; cwd: string } | null>
       messageBody: (id: string) => Promise<string | null>
+      messageResend: (id: string) => Promise<{ ok: boolean; reason?: string }>
+      messageCancel: (id: string) => Promise<{ ok: boolean; reason?: string }>
       pickFolder: () => Promise<string | null>
       pickPath: (sessionId?: string) => Promise<string | null>
       getPathForFile: (file: File) => string

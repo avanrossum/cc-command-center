@@ -4216,7 +4216,29 @@ function MessageLog({
     setCopied(m.id)
     setTimeout(() => setCopied((c) => (c === m.id ? null : c)), 1400)
   }
-  const when = (t: number) => new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  const when = (t: number) =>
+    new Date(t).toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  const [busy, setBusy] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const act = async (m: MsgLogEntry, what: 'resend' | 'cancel') => {
+    setBusy(m.id)
+    setErr(null)
+    const r =
+      what === 'resend' ? await window.cc.messageResend(m.id) : await window.cc.messageCancel(m.id)
+    if (!r.ok) setErr(r.reason ?? `could not ${what}`)
+    setBusy(null)
+  }
+  // Resendable = it never landed and the app still has the body. A delivered message
+  // is deliberately not re-sendable from here: that would be a new message, and it
+  // should read as one to whoever receives it.
+  const canResend = (m: MsgLogEntry) =>
+    m.origin !== 'app' && (m.state === 'failed' || m.state === 'expired')
+  const canCancel = (m: MsgLogEntry) => m.state === 'queued' || m.state === 'held'
   return (
     <div className="spawnscrim" onClick={close}>
       <div className="spawnmodal msglog" onClick={(e) => e.stopPropagation()}>
@@ -4262,6 +4284,7 @@ function MessageLog({
             All ({messages.length})
           </button>
         </div>
+        {err && <div className="pausednote">{err}</div>}
         <div className="msglist">
           {shown.length === 0 && (
             <div className="emptycat">
@@ -4298,6 +4321,26 @@ function MessageLog({
                   <button className="msgmini" onClick={() => void copy(m)}>
                     {copied === m.id ? 'Copied' : 'Copy'}
                   </button>
+                  {canResend(m) && (
+                    <button
+                      className="msgmini"
+                      disabled={busy === m.id}
+                      title="put this message back in flight — the body was never lost"
+                      onClick={() => void act(m, 'resend')}
+                    >
+                      Resend
+                    </button>
+                  )}
+                  {canCancel(m) && (
+                    <button
+                      className="msgmini"
+                      disabled={busy === m.id}
+                      title="stop trying to deliver this"
+                      onClick={() => void act(m, 'cancel')}
+                    >
+                      Cancel
+                    </button>
+                  )}
                 </div>
               </div>
             )

@@ -4,6 +4,13 @@
 // target lookup that picks the dead row means a message stalls forever with no log.)
 import type { LiveSession } from './types'
 
+// Just enough of a registry edge to route on, so this module stays free of the DB.
+export interface RoutableEdge {
+  parent_id: string
+  child_id: string
+  trusted?: number | boolean | null
+}
+
 // A spooled payload is named "<outboxToken>__<claimedAt>-<n>.msg". The token is the
 // stable identity a session carries across resume, so the suffix has to be strippable
 // again — the whole point of the spool is that a restart can re-claim what is in it.
@@ -68,3 +75,67 @@ export function resolveTargetSession(
   }
   return dead
 }
+
+// A quoted address is an explicit claim about WHO the message is for. When it names
+// nothing, the honest outcome is a failure the sender is told about — not a guess.
+// (A BARE "@word" is different: it may just be the message starting with an @, so a
+// miss there still falls through to the parent, which is the documented behaviour
+// that lets "@scoped/pkg …" reach the parent instead of vanishing.)
+export type DirectedResult =
+  | { kind: 'match'; child: LiveSession; body: string; trusted: boolean }
+  | { kind: 'unknown'; wanted: string; candidates: string[] }
+  | undefined
+
+export function matchDirectedChild(
+  sessions: LiveSession[],
+  edges: RoutableEdge[],
+  senderId: string,
+  rest: string,
+  // How a session's @-handle is spelled. Injected rather than imported so this can
+  // be exercised without the registry — the resolution rules are where addressing
+  // silently goes wrong, so they need to be testable.
+  displayName: (s: LiveSession) => string,
+): DirectedResult {
+  const kids: { child: LiveSession; trusted: boolean }[] = []
+  for (const e of edges) {
+    if (e.parent_id !== senderId) continue
+    const child = sessions.find((s) => s.sessionId === e.child_id)
+    if (child) kids.push({ child, trusted: !!e.trusted })
+  }
+  // Quoted form: @"Multi Word Name" body. Quotes delimit the name unambiguously,
+  // so a name with spaces routes even though a bare @name assumes a single token.
+  // This is the form we instruct parents to use (see parentBlessNote / preamble).
+  const q = rest.match(/^"([^"]+)"[\s:,-]*/)
+  if (q) {
+    const wanted = q[1].trim()
+    for (const { child, trusted } of kids) {
+      if (displayName(child).toLowerCase() === wanted.toLowerCase()) {
+        return { kind: 'match', child, body: rest.slice(q[0].length).trim(), trusted }
+      }
+    }
+    // A named session that has since ended takes its edge with it (edges cascade on
+    // node delete), so "the child I was talking to yesterday" lands here.
+    return { kind: 'unknown', wanted, candidates: kids.map((k) => displayName(k.child)) }
+  }
+  // Bare form: longest display-name prefix, requiring a word boundary after (so
+  // "@apidoc" can't match a child named "a"). Works when the name is reproduced
+  // verbatim (incl. spaces); single-word names are the common case.
+  let best: { kind: 'match'; child: LiveSession; body: string; trusted: boolean } | undefined
+  const lower = rest.toLowerCase()
+  for (const { child, trusted } of kids) {
+    const nm = displayName(child)
+    if (!nm || !lower.startsWith(nm.toLowerCase())) continue
+    const after = rest.charAt(nm.length) // '' at end-of-string is fine (exact match)
+    if (after && !/[\s:,]/.test(after)) continue // reject mid-word prefix hits
+    if (!best || nm.length > displayName(best.child).length) {
+      best = {
+        kind: 'match',
+        child,
+        body: rest.slice(nm.length).replace(/^[\s:,-]+/, '').trim(),
+        trusted,
+      }
+    }
+  }
+  return best
+}
+

@@ -39,6 +39,8 @@ import {
   tokenFromSpoolName,
   resolveTargetSession,
   nextDraft,
+  matchDirectedChild,
+  type DirectedResult,
 } from './engine/mailbox'
 import type { LiveSession, CoarseState } from './engine/types'
 import { installAppMenu, setAboutPanel } from './about'
@@ -102,6 +104,8 @@ import {
   markDelivered,
   listMessages,
   getMessageBody,
+  getMessage,
+  reopenMessage,
   getOpenMessages,
   getSpooledPaths,
   pruneMessages,
@@ -1635,7 +1639,10 @@ const MSG_HARD_MAX = 256 * 1024
 // preamble can't false-trigger it.
 const EXIT_SENTINEL = '[[CCC:EXIT]]'
 let outboxCounter = 0
-let awarenessPaused = false // global kill switch — hold all routing + delivery
+// Global kill switch — hold all routing + delivery. Persisted (see restoreAwareness
+// PausedAtStartup): a kill switch that silently un-flips itself on the next launch is
+// worse than none, because you stop checking it. Loaded after initRegistry.
+let awarenessPaused = false
 const outboxOwner = new Map<string, number>() // outbox token -> owning session pid
 const outboxByPid = new Map<number, { token: string; path: string }>() // pid -> its outbox
 // Minting is separate from registration because the path must go into the pty's
@@ -1813,6 +1820,22 @@ function messageLogEntries(): MsgLogEntry[] {
 
 export function setAwarenessPaused(paused: boolean): void {
   awarenessPaused = paused
+  try {
+    setAppState('awarenessPaused', String(paused))
+  } catch (e) {
+    console.error('[mail] could not persist the pause state', e)
+  }
+}
+
+// Read the persisted pause back at launch. While paused the drain still PERSISTS —
+// safe now that a message is a row before anything routes — and nothing is delivered.
+function restoreAwarenessPaused(): void {
+  try {
+    awarenessPaused = getAppState('awarenessPaused') === 'true'
+    if (awarenessPaused) console.log('[mail] messaging is PAUSED (restored from last run)')
+  } catch {
+    /* fresh profile */
+  }
 }
 
 let spoolCounter = 0
@@ -2149,46 +2172,20 @@ function flushOutboxOnExit(ob: { token: string; path: string }): void {
 // Resolve an "@name …" directive against the sender's children by display-name
 // prefix, requiring a word boundary after the name (so "@apidoc" can't match a
 // child named "a"); longest match wins. Returns undefined if no child matches.
-function matchDirectedChild(
-  sessions: LiveSession[],
-  edges: Edge[],
-  senderId: string,
-  rest: string,
-): { child: LiveSession; body: string; trusted: boolean } | undefined {
-  const kids: { child: LiveSession; trusted: boolean }[] = []
-  for (const e of edges) {
-    if (e.parent_id !== senderId) continue
-    const child = sessions.find((s) => s.sessionId === e.child_id)
-    if (child) kids.push({ child, trusted: !!e.trusted })
-  }
-  // Quoted form: @"Multi Word Name" body. Quotes delimit the name unambiguously,
-  // so a name with spaces routes even though a bare @name assumes a single token.
-  // This is the form we instruct parents to use (see parentBlessNote / preamble).
-  const q = rest.match(/^"([^"]+)"[\s:,-]*/)
-  if (q) {
-    const wanted = q[1].trim().toLowerCase()
-    for (const { child, trusted } of kids) {
-      if (displayName(child).toLowerCase() === wanted) {
-        return { child, body: rest.slice(q[0].length).trim(), trusted }
-      }
-    }
-    return undefined // explicit quoted name that matches nothing — don't guess; route up
-  }
-  // Bare form: longest display-name prefix, requiring a word boundary after (so
-  // "@apidoc" can't match a child named "a"). Works when the name is reproduced
-  // verbatim (incl. spaces); single-word names are the common case.
-  let best: { child: LiveSession; body: string; trusted: boolean } | undefined
-  const lower = rest.toLowerCase()
-  for (const { child, trusted } of kids) {
-    const nm = displayName(child)
-    if (!nm || !lower.startsWith(nm.toLowerCase())) continue
-    const after = rest.charAt(nm.length) // '' at end-of-string is fine (exact match)
-    if (after && !/[\s:,]/.test(after)) continue // reject mid-word prefix hits
-    if (!best || nm.length > displayName(best.child).length) {
-      best = { child, body: rest.slice(nm.length).replace(/^[\s:,-]+/, '').trim(), trusted }
-    }
-  }
-  return best
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+// Tell a sender its message did not go anywhere. Queued through the same
+// deliver-when-free path as every other app note, so a bounce can never land in the
+// middle of a turn or on top of something the human is typing.
+function bounceToSender(sender: LiveSession, why: string): void {
+  if (!sender.sessionId) return
+  pendingParentNotes.push({
+    to: sender.sessionId,
+    text: `[CC Command Center — fleet] Your last message was NOT delivered. ${why}`,
+    at: Date.now(),
+  })
 }
 
 // Route each held segment independently: "@name …" DOWN to the named child (if one
@@ -2227,7 +2224,24 @@ function routeHeld(sessions: LiveSession[]): void {
       }
 
       const directed = parseDirective(held.text)
-      const match = directed ? matchDirectedChild(sessions, edges, senderId, directed.rest) : undefined
+      const routed = directed
+        ? matchDirectedChild(sessions, edges, senderId, directed.rest, displayName)
+        : undefined
+      // An explicit address that names nothing is a hard failure, and the sender is
+      // TOLD. It used to fall through and reroute to the parent, so a message aimed
+      // at a session that had ended was reported as "no parent link" — a complaint
+      // about a relationship the sender never mentioned — or, worse, quietly landed
+      // on the wrong session.
+      if (routed?.kind === 'unknown') {
+        const known = routed.candidates.length
+          ? `this session can message: ${routed.candidates.join(', ')}`
+          : 'this session has no linked sessions'
+        noteMsg(held.id, 'failed', `no session named "${routed.wanted}" — ${known}`)
+        bounceToSender(sender, `No session named "${routed.wanted}". ${capitalize(known)}.`)
+        arr.splice(i, 1) // spool file kept — the payload is recoverable and resendable
+        continue
+      }
+      const match = routed?.kind === 'match' ? routed : undefined
       if (match) {
         if (!match.trusted) {
           if (held.logged !== 'untrusted') {
@@ -2289,6 +2303,20 @@ function routeHeld(sessions: LiveSession[]): void {
       arr.splice(i, 1)
     }
     if (arr.length === 0) heldMessages.delete(token)
+  }
+}
+
+// Remove every live attempt at a message from the in-memory pipeline, so a resend or
+// a cancel can't race an attempt already in flight for the same row.
+function dropInFlight(id: string): void {
+  for (const [token, arr] of heldMessages) {
+    const kept = arr.filter((h) => h.id !== id)
+    if (kept.length === arr.length) continue
+    if (kept.length) heldMessages.set(token, kept)
+    else heldMessages.delete(token)
+  }
+  for (let i = deliveryQueue.length - 1; i >= 0; i--) {
+    if (deliveryQueue[i].id === id) deliveryQueue.splice(i, 1)
   }
 }
 
@@ -3765,6 +3793,48 @@ function deliverPendingNotes(sessions: LiveSession[]): void {
 // Global kill switch for autonomous messaging. When paused, outboxes are still
 // drained into the held buffer (nothing is lost) but nothing is routed or
 // delivered until the operator resumes.
+// Put a message back in flight by hand. The user's stated workflow: a send that
+// failed because the target was gated, offline, or not yet resumed is retried
+// without retyping it — the body has been on disk the whole time.
+ipcMain.handle('message:resend', (_e, id: string) => {
+  try {
+    const m = getMessage(String(id ?? ''))
+    if (!m) return { ok: false, reason: 'no such message' }
+    if (m.origin === 'app') return { ok: false, reason: 'that is an app note, not a message' }
+    const body = getMessageBody(m.id)
+    if (!body) return { ok: false, reason: 'the body is gone' }
+    const token = tokenForRow(m)
+    if (!token) return { ok: false, reason: 'the sending session can no longer be identified' }
+    dropInFlight(m.id) // never two live attempts at one row
+    const arr = heldMessages.get(token) ?? []
+    arr.push({ id: m.id, text: deliverableText(body), at: Date.now(), spool: m.spool ?? undefined })
+    heldMessages.set(token, arr)
+    reopenMessage(m.id, 'resent by you', Date.now())
+    pushSessions()
+    return { ok: true }
+  } catch (e) {
+    console.error('[mail] resend failed', e)
+    return { ok: false, reason: 'resend failed' }
+  }
+})
+
+// Stop trying, deliberately. Distinct from every automatic terminal state because
+// the reason says a human decided it — the audit trail should never be ambiguous
+// about who gave up.
+ipcMain.handle('message:cancel', (_e, id: string) => {
+  try {
+    const m = getMessage(String(id ?? ''))
+    if (!m) return { ok: false, reason: 'no such message' }
+    dropInFlight(m.id)
+    noteMsg(m.id, 'failed', 'cancelled by you', { spool: null })
+    removeSpool(m.spool ?? undefined)
+    pushSessions()
+    return { ok: true }
+  } catch {
+    return { ok: false, reason: 'cancel failed' }
+  }
+})
+
 // The full payload of one message, on demand. Kept out of the 1.5s snapshot so a
 // large body costs nothing until someone actually asks to read or copy it.
 ipcMain.handle('message:body', (_e, id: string) => {
@@ -4165,6 +4235,7 @@ app.whenReady().then(() => {
   initRegistry(join(app.getPath('userData'), 'registry.db'))
   // AFTER initRegistry: re-hydration reads the message table, which is where the
   // record of what was in flight lives.
+  restoreAwarenessPaused() // a kill switch has to survive a restart to be one
   reclaimSpool() // pick up anything a previous run left undelivered
   setInterval(() => {
     pruneSpool()

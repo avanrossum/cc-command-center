@@ -7,6 +7,7 @@ import {
   tokenFromSpoolName,
   resolveTargetSession,
   nextDraft,
+  matchDirectedChild,
 } from '../src/main/engine/mailbox'
 import type { LiveSession } from '../src/main/engine/types'
 import { buildResumeArgs, EMPTY_RESUME_FLAGS } from '../src/main/engine/resumeFlags'
@@ -88,6 +89,38 @@ check('emoji counts as one', type(['👍']), 1)
 check('tab is not text and does not clear', type(['a', '\t']), 1)
 // The realistic sequence: type, submit, type again — the box is only "dirty" when it is.
 check('type → submit → type', type(['a', 's', 'k', '\r', 'n', 'e', 'x', 't']), 4)
+
+// --- addressing ---
+// The case that bit in the wild: a parent addressed @"a child that had ended". The
+// edge went with the node, so the quoted name matched nothing, the message fell
+// through to "send it to the parent instead", and the sender had no parent — so it
+// was reported as "no parent link", a complaint about a relationship nobody mentioned.
+const NAMES: Record<string, string> = { C1: 'reviewer', C2: 'db work', P: 'parent' }
+const nameOf = (x: LiveSession) => NAMES[x.sessionId] ?? ''
+const fleet = [mk('P', 1, true, 'idle'), mk('C1', 2, true, 'idle'), mk('C2', 3, true, 'idle')]
+const kids = [
+  { parent_id: 'P', child_id: 'C1', trusted: 1 },
+  { parent_id: 'P', child_id: 'C2', trusted: 0 },
+]
+const addr = (rest: string, edges = kids, sessions = fleet) =>
+  matchDirectedChild(sessions, edges, 'P', rest, nameOf)
+
+check('quoted name routes to that child', addr('"reviewer" hello')?.kind, 'match')
+check('quoted match carries the body only', (addr('"reviewer" hello') as { body: string }).body, 'hello')
+check('quoted match is case-insensitive', addr('"REVIEWER" hi')?.kind, 'match')
+check('a name with a space still routes', addr('"db work" hi')?.kind, 'match')
+check('trust travels with the edge', (addr('"db work" hi') as { trusted: boolean }).trusted, false)
+// The regression guard: this MUST NOT fall through to the parent.
+check('a quoted name that no longer exists FAILS', addr('"ghost" hello')?.kind, 'unknown')
+check('the failure names what was wanted', (addr('"ghost" hi') as { wanted: string }).wanted, 'ghost')
+check('the failure lists who IS reachable', (addr('"ghost" hi') as { candidates: string[] }).candidates, ['reviewer', 'db work'])
+check('with no children at all it still fails', addr('"ghost" hi', [])?.kind, 'unknown')
+check('an ended child is gone from the candidates', (addr('"ghost" hi', kids, [fleet[0], fleet[1]]) as { candidates: string[] }).candidates, ['reviewer'])
+// A BARE @word may just be a message that starts with '@' — a miss there still goes
+// to the parent, which is what lets "@scoped/pkg …" reach a human instead of failing.
+check('bare name routes when it matches', addr('reviewer hello')?.kind, 'match')
+check('bare miss stays undefined (falls through to the parent)', addr('scoped/pkg is broken'), undefined)
+check('bare prefix cannot match mid-word', addr('reviewerish thing'), undefined)
 
 // --- child launch argv ---
 // Spawning a child used to hard-code ['--permission-mode','auto']; it now goes

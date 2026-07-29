@@ -549,8 +549,13 @@ body {
   color: var(--cc-text);
   border-color: var(--cc-text);
 }
-.msgmini:last-child {
+/* Copy is always present, so it anchors the right-hand action cluster. */
+.msgfoot .msgmini:nth-of-type(1) {
   margin-left: auto;
+}
+.msgmini:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 /* ---- body: category rail + tree pane + terminal ---- */
