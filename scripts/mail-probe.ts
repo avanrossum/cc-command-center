@@ -7,13 +7,16 @@ import {
   tokenFromSpoolName,
   resolveTargetSession,
   nextDraft,
-  matchDirectedChild,
+  matchDirectedPeer,
+  type Peer,
   isUserAddress,
   stripUserAddress,
   parseQuery,
+  mayMessage,
 } from '../src/main/engine/mailbox'
 import type { LiveSession } from '../src/main/engine/types'
 import { buildResumeArgs, EMPTY_RESUME_FLAGS } from '../src/main/engine/resumeFlags'
+
 
 let failed = 0
 function check(name: string, got: unknown, want: unknown): void {
@@ -93,7 +96,7 @@ check('tab is not text and does not clear', type(['a', '\t']), 1)
 // The realistic sequence: type, submit, type again — the box is only "dirty" when it is.
 check('type → submit → type', type(['a', 's', 'k', '\r', 'n', 'e', 'x', 't']), 4)
 
-// --- addressing ---
+// --- addressing over permitted peers ---
 // The case that bit in the wild: a parent addressed @"a child that had ended". The
 // edge went with the node, so the quoted name matched nothing, the message fell
 // through to "send it to the parent instead", and the sender had no parent — so it
@@ -102,23 +105,27 @@ const NAMES: Record<string, string> = { C1: 'reviewer', C2: 'db work', P: 'paren
 const ALIAS: Record<string, string> = { C1: 'reviewer-c1', C2: 'db-work-c2' }
 // Most stable first: alias, then the drifting display name.
 const nameOf = (x: LiveSession) => [ALIAS[x.sessionId], NAMES[x.sessionId]].filter(Boolean)
-const fleet = [mk('P', 1, true, 'idle'), mk('C1', 2, true, 'idle'), mk('C2', 3, true, 'idle')]
-const kids = [
-  { parent_id: 'P', child_id: 'C1', trusted: 1 },
-  { parent_id: 'P', child_id: 'C2', trusted: 0 },
-]
-const addr = (rest: string, edges = kids, sessions = fleet) =>
-  matchDirectedChild(sessions, edges, 'P', rest, nameOf)
+const peer = (sessionId: string, allowed = true): Peer => ({
+  session: mk(sessionId, 9, true, 'idle'),
+  allowed,
+})
+const PEERS = [peer('C1'), peer('C2')]
+const addr = (rest: string, peers: Peer[] = PEERS) => matchDirectedPeer(peers, rest, nameOf)
 
-check('quoted name routes to that child', addr('"reviewer" hello')?.kind, 'match')
+check('quoted name routes to that peer', addr('"reviewer" hello')?.kind, 'match')
 check('quoted match carries the body only', (addr('"reviewer" hello') as { body: string }).body, 'hello')
 check('quoted match is case-insensitive', addr('"REVIEWER" hi')?.kind, 'match')
 check('a name with a space still routes', addr('"db work" hi')?.kind, 'match')
-check('trust travels with the edge', (addr('"db work" hi') as { trusted: boolean }).trusted, false)
 // The regression guard: this MUST NOT fall through to the parent.
-check('a quoted name that no longer exists FAILS', addr('"ghost" hello')?.kind, 'unknown')
+check('a name you cannot reach FAILS', addr('"ghost" hello')?.kind, 'unknown')
 check('the failure names what was wanted', (addr('"ghost" hi') as { wanted: string }).wanted, 'ghost')
 check('the failure lists who IS reachable, by alias', (addr('"ghost" hi') as { candidates: string[] }).candidates, ['reviewer-c1', 'db-work-c2'])
+check('with no peers at all it still fails', addr('"ghost" hi', [])?.kind, 'unknown')
+// Default deny: an un-permitted peer is MATCHED (so its mail holds and flushes when
+// you grant it) but never counted as reachable in the failure hint.
+check('an un-permitted peer still matches, to hold', addr('"reviewer" hi', [peer('C1', false)])?.kind, 'match')
+check('...and carries allowed=false', (addr('"reviewer" hi', [peer('C1', false)]) as { peer: Peer }).peer.allowed, false)
+check('an un-permitted peer is not advertised as reachable', (addr('"ghost" hi', [peer('C1', false)]) as { candidates: string[] }).candidates, [])
 // The point of the alias: it keeps resolving after Claude's auto-title drifts.
 check('the immutable alias resolves', addr('"reviewer-c1" hi')?.kind, 'match')
 check('the display name still resolves', addr('"reviewer" hi')?.kind, 'match')
@@ -126,8 +133,6 @@ NAMES.C1 = 'something else entirely'
 check('alias survives a title change', addr('"reviewer-c1" hi')?.kind, 'match')
 check('the OLD display name stops resolving', addr('"reviewer" hi')?.kind, 'unknown')
 NAMES.C1 = 'reviewer'
-check('with no children at all it still fails', addr('"ghost" hi', [])?.kind, 'unknown')
-check('an ended child is gone from the candidates', (addr('"ghost" hi', kids, [fleet[0], fleet[1]]) as { candidates: string[] }).candidates, ['reviewer-c1'])
 // A BARE @word may just be a message that starts with '@' — a miss there still goes
 // to the parent, which is what lets "@scoped/pkg …" reach a human instead of failing.
 check('bare name routes when it matches', addr('reviewer hello')?.kind, 'match')
@@ -169,6 +174,38 @@ const scrub = (s: string) => s.replace(CONTROL_RE, '[redacted]')
 check('an ACK in a body is redacted', scrub('reply with ACK m-1-2 ok?'), 'reply with [redacted] ok?')
 check('an exit sentinel in a body is redacted', scrub('write [[CCC:EXIT]] now'), 'write [redacted] now')
 check('ordinary text is untouched', scrub('acknowledge the m-form please'), 'acknowledge the m-form please')
+
+// --- who may message whom ---
+// Default deny is the whole safety property here, so every arm gets an assertion.
+// mayMessage is pure over (grants, edges) — no DB — so it can be exercised directly.
+type G = import('../src/main/engine/mailbox').GrantRow
+const grant = (a: string, b: string, mode: G['mode']): [string, G] => [
+  `${a}|${b}`,
+  { a_id: a, b_id: b, mode, granted_at: 1, granted_by: 'user', revoked_at: null },
+]
+const E = (parent_id: string, child_id: string, trusted: number) => ({ parent_id, child_id, trusted })
+const may = (g: [string, G][], edges: ReturnType<typeof E>[], from: string, to: string) =>
+  mayMessage(new Map(g), edges, from, to)
+
+check('default DENY with nothing granted', may([], [], 'A', 'B'), false)
+check('a session cannot message itself', may([grant('A', 'A', 'both')], [], 'A', 'A'), false)
+check('a trusted edge permits parent → child', may([], [E('A', 'B', 1)], 'A', 'B'), true)
+check('a trusted edge permits child → parent', may([], [E('A', 'B', 1)], 'B', 'A'), true)
+check('an UNtrusted edge permits nothing', may([], [E('A', 'B', 0)], 'A', 'B'), false)
+check('an unrelated edge permits nothing', may([], [E('A', 'C', 1)], 'A', 'B'), false)
+// A grant reaches across the tree — that is the mesh.
+check('a granted pair with no edge may message', may([grant('A', 'B', 'both')], [], 'A', 'B'), true)
+check('...in both directions', may([grant('A', 'B', 'both')], [], 'B', 'A'), true)
+// Direction is stored against the SORTED pair, so it must survive being asked either way.
+check('a_to_b permits A → B', may([grant('A', 'B', 'a_to_b')], [], 'A', 'B'), true)
+check('a_to_b DENIES B → A', may([grant('A', 'B', 'a_to_b')], [], 'B', 'A'), false)
+check('b_to_a permits B → A', may([grant('A', 'B', 'b_to_a')], [], 'B', 'A'), true)
+check('b_to_a DENIES A → B', may([grant('A', 'B', 'b_to_a')], [], 'A', 'B'), false)
+// Revoke is stored, not deleted, so it OVERRIDES the trusted edge underneath. Deleting
+// the row instead would fall back through to the edge and the revoke would do nothing.
+check('an explicit revoke beats a trusted edge', may([grant('A', 'B', 'none')], [E('A', 'B', 1)], 'A', 'B'), false)
+check('...in both directions', may([grant('A', 'B', 'none')], [E('A', 'B', 1)], 'B', 'A'), false)
+check('a grant beats an untrusted edge', may([grant('A', 'B', 'both')], [E('A', 'B', 0)], 'A', 'B'), true)
 
 // --- child launch argv ---
 // Spawning a child used to hard-code ['--permission-mode','auto']; it now goes

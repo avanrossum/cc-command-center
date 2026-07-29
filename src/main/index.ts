@@ -39,7 +39,8 @@ import {
   tokenFromSpoolName,
   resolveTargetSession,
   nextDraft,
-  matchDirectedChild,
+  matchDirectedPeer,
+  type Peer,
   isUserAddress,
   stripUserAddress,
   parseQuery,
@@ -66,6 +67,14 @@ import {
   getOutboxToken,
   ensureAlias,
   getAliasMap,
+  grantMap,
+  mayMessage,
+  setGrant,
+  revokeGrant,
+  listGrants,
+  revokeGrantsFor,
+  archiveMessages,
+  type GrantRow,
   getArbiterSpend,
   getArbiterLog,
   appendArbiterLog,
@@ -250,6 +259,7 @@ interface Snapshot {
   categories: Category[]
   edges: Edge[]
   messages: MsgLogEntry[]
+  grants: GrantRow[] // who you have allowed to message whom
   awarenessPaused: boolean
   settings: AppSettings
   recentFolders: string[]
@@ -1097,6 +1107,13 @@ function snapshot(): Snapshot {
     categories: cats,
     edges,
     messages: messageLogEntries(),
+    grants: (() => {
+      try {
+        return listGrants()
+      } catch {
+        return []
+      }
+    })(),
     awarenessPaused,
     settings: getSettings(),
     recentFolders: getRecentFolders(),
@@ -1484,6 +1501,20 @@ function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: str
   return term
 }
 
+// A session going away takes its live permissions with it, and its mail becomes an
+// archive rather than a deletion. Deliberately NOT a cascade: deleteNode runs on
+// ordinary PTY exit, so an FK cascade here would wipe a mailbox every time a session
+// quits normally — the exact loss the durable table exists to prevent.
+function archiveMailFor(sessionId: string): void {
+  const now = Date.now()
+  try {
+    archiveMessages(sessionId, now)
+    revokeGrantsFor(sessionId, now)
+  } catch (e) {
+    console.error('[mail] archive on removal failed', e)
+  }
+}
+
 // Remove a session that has already exited: purge its dead session files and drop
 // the registry node so the file-scan can't re-enumerate it, then drop its terminal
 // entry and push a fresh snapshot so the row disappears. Deliberately does NOT
@@ -1492,6 +1523,7 @@ function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: str
 // (this runs from onExit), so purge + deleteNode is enough to make it vanish.
 function autoRemoveExitedSession(sessionId: string, key: string): void {
   purgeDeadSessionFiles(sessionId)
+  archiveMailFor(sessionId)
   deleteNode(sessionId)
   try {
     unlinkSync(join(STATUS_DIR, `${sessionId}.json`)) // drop its hook-status file too
@@ -1675,6 +1707,8 @@ const SPOOL_RECLAIM_MAX = 100
 const HOP_MAX = 6
 const RATE_WINDOW_MS = 60_000
 const RATE_MAX = 6
+const SENDER_MAX = 12 // one session's total outbound per window, across all peers
+const FLEET_MAX = 60 // whole-fleet ceiling; tripping it pauses rather than drops
 const HELD_TTL_MS = 30 * 60_000 // a message that never becomes routable expires
 const DELIVER_TTL_MS = 30 * 60_000 // a queued message whose target never frees up
 const DELIVERY_QUEUE_MAX = 200 // back-pressure ceiling; over it, segments stay held
@@ -1723,8 +1757,7 @@ function registerOutbox(pid: number, ob: { token: string; path: string }): void 
 interface Delivery {
   id: string // the durable message row this is a live attempt at
   to: string // target session id
-  fromSessionId: string // sender session id — rate key + edge-pair validation
-  edgeChildId: string // child_id of the governing edge — for the trust re-check
+  fromSessionId: string // sender session id — rate key + the permission re-check
   fromName: string
   text: string
   hops: number
@@ -1756,6 +1789,10 @@ export interface MsgLogEntry {
 }
 const deliveryQueue: Delivery[] = []
 const linkRate = new Map<string, number[]>()
+// Per-sender outbound, and fleet-wide. The pair budget bounds a conversation; these
+// bound a FAN-OUT, which a mesh makes possible and a tree did not.
+const senderRate = new Map<string, number[]>()
+let fleetRate: number[] = []
 // Messages drained from a child outbox but not yet routable (link unblessed, or
 // child not yet adopted). Buffered here — NOT dropped on read — so they survive
 // until the link is trusted / the child is adopted, then flush. Keyed by token.
@@ -2299,12 +2336,42 @@ function bounceToSender(sender: LiveSession, why: string): void {
   })
 }
 
+// Everyone this session is connected to, with whether it may send there RIGHT NOW.
+// Default deny: a pair appears here only through an explicit grant or an existing
+// trusted edge. A session can never open a link for itself — only use one you opened.
+//
+// A connected-but-not-yet-permitted peer (a child spawned with trust off) is included
+// with allowed=false so its mail HOLDS and flushes the moment you grant it, rather
+// than failing and making you retype.
+function peersOf(
+  me: string,
+  sessions: LiveSession[],
+  edges: Edge[],
+  grants: Map<string, GrantRow>,
+): Peer[] {
+  const out: Peer[] = []
+  const seen = new Set<string>()
+  for (const s of sessions) {
+    const sid = s.sessionId
+    if (!sid || sid === me || seen.has(sid)) continue
+    const linked = edges.some(
+      (e) => (e.parent_id === me && e.child_id === sid) || (e.child_id === me && e.parent_id === sid),
+    )
+    const granted = grants.has(sid <= me ? `${sid}|${me}` : `${me}|${sid}`)
+    if (!linked && !granted) continue
+    seen.add(sid)
+    out.push({ session: s, allowed: mayMessage(grants, edges, me, sid) })
+  }
+  return out
+}
+
 // Route each held segment independently: "@name …" DOWN to the named child (if one
 // matches AND the link is trusted), everything else UP to the sender's parent — so
 // an "@scoped/pkg" that matches no child still reaches the parent instead of being
 // lost. Routed/expired segments are removed; the rest stay held for the next scan.
 function routeHeld(sessions: LiveSession[]): void {
   const now = Date.now()
+  const grants = grantMap()
   for (const [token, arr] of heldMessages) {
     const senderPid = outboxOwner.get(token)
     const sender = senderPid
@@ -2336,7 +2403,7 @@ function routeHeld(sessions: LiveSession[]): void {
 
       const directed = parseDirective(held.text)
       const routed = directed
-        ? matchDirectedChild(sessions, edges, senderId, directed.rest, handlesOf)
+        ? matchDirectedPeer(peersOf(senderId, sessions, edges, grants), directed.rest, handlesOf)
         : undefined
       // An explicit address that names nothing is a hard failure, and the sender is
       // TOLD. It used to fall through and reroute to the parent, so a message aimed
@@ -2356,39 +2423,45 @@ function routeHeld(sessions: LiveSession[]): void {
         continue
       }
       if (routed?.kind === 'unknown') {
+        // Uniform on purpose — see matchDirectedPeer. This says nothing about whether
+        // a session by that name exists somewhere the sender may not reach.
         const known = routed.candidates.length
-          ? `this session can message: ${routed.candidates.join(', ')}`
-          : 'this session has no linked sessions'
-        noteMsg(held.id, 'failed', `no session named "${routed.wanted}" — ${known}`)
-        bounceToSender(sender, `No session named "${routed.wanted}". ${capitalize(known)}.`)
+          ? `you can message: ${routed.candidates.join(', ')}`
+          : 'you have no sessions you may message'
+        noteMsg(held.id, 'failed', `"${routed.wanted}" is not a session you may message — ${known}`)
+        bounceToSender(sender, `"${routed.wanted}" is not a session you may message. ${capitalize(known)}.`)
         arr.splice(i, 1) // spool file kept — the payload is recoverable and resendable
         continue
       }
       const match = routed?.kind === 'match' ? routed : undefined
       if (match) {
-        if (!match.trusted) {
-          if (held.logged !== 'untrusted') {
-            noteMsg(held.id, 'held', 'link not trusted', { toSessionId: match.child.sessionId })
-            held.logged = 'untrusted'
+        const targetId = match.peer.session.sessionId!
+        if (!match.peer.allowed) {
+          // Connected but not permitted yet. Holds rather than fails, so granting the
+          // pair delivers what was already written instead of asking for a retype.
+          if (held.logged !== 'no-grant') {
+            noteMsg(held.id, 'held', 'you have not allowed these two to message yet', {
+              toSessionId: targetId,
+            })
+            held.logged = 'no-grant'
           }
           i++
           continue
         }
         if (!match.body) {
           noteMsg(held.id, 'failed', 'addressed, but no message body', {
-            toSessionId: match.child.sessionId,
+            toSessionId: targetId,
             spool: null,
           })
           removeSpool(held.spool) // an address with no body is not a payload to keep
           arr.splice(i, 1)
           continue
         }
-        noteMsg(held.id, 'queued', null, { toSessionId: match.child.sessionId })
+        noteMsg(held.id, 'queued', null, { toSessionId: targetId })
         deliveryQueue.push({
           id: held.id,
-          to: match.child.sessionId!,
+          to: targetId,
           fromSessionId: senderId,
-          edgeChildId: match.child.sessionId!,
           fromName: displayName(sender),
           text: match.body,
           hops: 1,
@@ -2399,14 +2472,19 @@ function routeHeld(sessions: LiveSession[]): void {
         continue
       }
 
-      // Plain, or a directive that matched no child → UP to the sender's parent.
+      // Plain text, or a bare @word that matched nothing → UP to the sender's parent.
+      // Permission is asked the same way as for any other pair; the parent link is not
+      // special, it just happens to be granted by the trusted edge underneath.
       const edge = edges.find((e) => e.child_id === senderId)
-      if (!edge || !edge.trusted) {
-        if (held.logged !== (edge ? 'untrusted' : 'no-parent')) {
-          noteMsg(held.id, 'held', edge ? 'link not trusted' : 'no parent link', {
-            toSessionId: edge?.parent_id,
-          })
-          held.logged = edge ? 'untrusted' : 'no-parent'
+      if (!edge || !mayMessage(grants, edges, senderId, edge.parent_id)) {
+        if (held.logged !== (edge ? 'no-grant' : 'no-parent')) {
+          noteMsg(
+            held.id,
+            'held',
+            edge ? 'you have not allowed these two to message yet' : 'no parent link',
+            { toSessionId: edge?.parent_id },
+          )
+          held.logged = edge ? 'no-grant' : 'no-parent'
         }
         i++
         continue
@@ -2416,7 +2494,6 @@ function routeHeld(sessions: LiveSession[]): void {
         id: held.id,
         to: edge.parent_id,
         fromSessionId: senderId,
-        edgeChildId: senderId,
         fromName: displayName(sender),
         text: held.text,
         hops: 1,
@@ -2560,6 +2637,8 @@ function whoisAnswer(
 function tryDeliveries(sessions: LiveSession[]): void {
   if (awarenessPaused || deliveryQueue.length === 0) return
   const now = Date.now()
+  const grants = grantMap()
+  const edges = getEdges()
   const deliveredTo = new Set<string>()
   let i = 0
   while (i < deliveryQueue.length) {
@@ -2577,17 +2656,12 @@ function tryDeliveries(sessions: LiveSession[]): void {
       } else i++
       continue
     }
-    // re-check trust at delivery: an untrust (or re-parent) drops in-flight. Find
-    // the governing edge by edgeChildId; it must still be trusted AND connect
-    // sender↔target (either direction — parent→child or child→parent).
-    const edge = getEdges().find((e) => e.child_id === d.edgeChildId)
-    const connectsPair =
-      !!edge &&
-      ((edge.child_id === d.fromSessionId && edge.parent_id === d.to) ||
-        (edge.parent_id === d.fromSessionId && edge.child_id === d.to))
-    if (!edge || !edge.trusted || !connectsPair) {
+    // Permission is re-checked HERE, at the moment of delivery, not only when the
+    // message was routed. Revoking a pair stops what is already in flight — that is
+    // what makes "revocable" mean anything.
+    if (!mayMessage(grants, edges, d.fromSessionId, d.to)) {
       deliveryQueue.splice(i, 1)
-      noteMsg(d.id, 'failed', 'link no longer trusted')
+      noteMsg(d.id, 'failed', 'permission for this pair was withdrawn')
       continue
     }
     // Only deliver when the target is affirmatively free (fail-safe on unknown) AND
@@ -2621,15 +2695,45 @@ function tryDeliveries(sessions: LiveSession[]): void {
       i++
       continue
     }
-    // Rate guard keyed on the LINK (both directions share one budget), so a
-    // bidirectional parent↔child ping-pong is capped at RATE_MAX per window total,
-    // not RATE_MAX per direction. (The hop guard is unused in this mailbox model.)
+    // Three budgets, because in a mesh the pair key alone is not enough.
+    //
+    // PAIR — both directions share one window, so a bidirectional ping-pong is capped
+    // at RATE_MAX total rather than RATE_MAX each way. This is the tree's guard.
+    // SENDER — a per-session outbound cap. The pair key cannot see a fan-out STAR: one
+    // session messaging six different peers stays under every pair budget while
+    // producing six times the traffic.
+    // FLEET — a global cap that, when tripped, does not drop anything; it flips the
+    // persisted pause, which stops everything and shows the user a switch they have to
+    // turn back on themselves.
     const pair = [d.fromSessionId, d.to].sort()
     const key = `${pair[0]}|${pair[1]}`
     const stamps = (linkRate.get(key) ?? []).filter((t) => now - t < RATE_WINDOW_MS)
+    const sent = (senderRate.get(d.fromSessionId) ?? []).filter((t) => now - t < RATE_WINDOW_MS)
+    const fleet = fleetRate.filter((t) => now - t < RATE_WINDOW_MS)
+    if (fleet.length >= FLEET_MAX) {
+      setAwarenessPaused(true)
+      sysNote(
+        'CC',
+        'fleet',
+        `Messaging paused automatically: more than ${FLEET_MAX} deliveries in a minute across the whole fleet. Nothing was discarded — resume when you have looked at it.`,
+        'circuit breaker tripped',
+      )
+      pushSessions()
+      return
+    }
     if (d.hops > HOP_MAX || stamps.length >= RATE_MAX) {
       deliveryQueue.splice(i, 1)
-      noteMsg(d.id, 'failed', 'loop / rate guard tripped')
+      noteMsg(d.id, 'failed', `rate guard: more than ${RATE_MAX} between this pair in a minute`)
+      continue
+    }
+    if (sent.length >= SENDER_MAX) {
+      // Held, not failed: a burst is usually a session doing something legitimate
+      // quickly, and the budget is a throttle rather than a verdict.
+      if (d.logged !== 'sender-budget') {
+        noteMsg(d.id, 'held', `sending too fast — more than ${SENDER_MAX} messages in a minute`)
+        d.logged = 'sender-budget'
+      }
+      i++
       continue
     }
     // The envelope names the sender AND the message id, so a receipt is possible at
@@ -2645,6 +2749,10 @@ function tryDeliveries(sessions: LiveSession[]): void {
     )
     stamps.push(now)
     linkRate.set(key, stamps)
+    sent.push(now)
+    senderRate.set(d.fromSessionId, sent)
+    fleet.push(now)
+    fleetRate = fleet
     deliveredTo.add(d.to)
     deliveryQueue.splice(i, 1)
     removeSpool(d.spool) // delivered is the one outcome that needs no recovery
@@ -4183,16 +4291,54 @@ ipcMain.handle('session:copyOutput', (_e, sessionId: string, cwd: string) => {
 
 // Cross-session send: inject a prompt into another managed session. Returns a
 // delivery result the UI surfaces (sent / can't reach a monitor-only session).
+// You, sending to a session directly. This used to bypass the pause, the free-target
+// gate, the rate limits and the log entirely — a back door the mesh must not keep,
+// because an unlogged path is exactly the one you cannot audit later. It is still
+// UNCONDITIONAL on permission (grants govern what SESSIONS may do; you may write to
+// any session you can see), but it is now recorded like everything else and it
+// respects the two gates that exist to protect the session on the other end.
 ipcMain.handle('session:send', (_e, sessionId: string, text: string) => {
-  if (!sessionId || !text?.trim()) return { ok: false, reason: 'empty' }
+  const body = String(text ?? '').trim()
+  if (!sessionId || !body) return { ok: false, reason: 'empty' }
   const t = findManagedTerm(sessionId)
   if (!t) return { ok: false, reason: 'monitor-only' } // not open under management here
+  if (t.draft > 0) return { ok: false, reason: 'that session has an unsent draft in its box' }
+  const id = mintMessageId()
   try {
-    injectPrompt(t, text.trim())
+    insertMessage({
+      id,
+      fromSessionId: 'user',
+      fromHandle: 'you',
+      toSessionId: sessionId,
+      toAddr: (t.sessionId && getSessionNames()[t.sessionId]) || sessionId.slice(0, 8),
+      body,
+      state: 'queued',
+      origin: 'user',
+      at: Date.now(),
+    })
+    injectPrompt(t, body)
+    markDelivered(id, Date.now())
+    pushSessions()
     return { ok: true }
   } catch {
+    noteMsg(id, 'failed', 'could not write to that session')
     return { ok: false, reason: 'write-failed' }
   }
+})
+
+// Grants: who may message whom. Every one is a human act — no session can open a link
+// for itself, only use one you opened.
+ipcMain.handle('grant:set', (_e, a: string, b: string, dir: 'both' | 'to' | 'from' | 'none') => {
+  if (!a || !b || a === b) return false
+  setGrant(String(a), String(b), dir, 'user', Date.now())
+  pushSessions()
+  return true
+})
+ipcMain.handle('grant:revoke', (_e, a: string, b: string) => {
+  if (!a || !b) return false
+  revokeGrant(String(a), String(b), Date.now())
+  pushSessions()
+  return true
 })
 
 // Pick a folder without launching anything; remembers the last location so the
@@ -4372,6 +4518,7 @@ function removeSessionsHard(ids: string[]): string[] {
     }
     if (attachedKey === id) attachedKey = null
     purgeDeadSessionFiles(id)
+    archiveMailFor(id) // readable and copy-pasteable for the retention window
     deleteNode(id)
     try {
       unlinkSync(join(STATUS_DIR, `${id}.json`)) // drop its hook-status file too

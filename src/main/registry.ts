@@ -1,4 +1,7 @@
 import Database from 'better-sqlite3'
+import { pairOf, type GrantRow } from './engine/mailbox'
+
+export { mayMessage, type GrantRow } from './engine/mailbox'
 
 // Persistent registry: maps each stable Claude session id to a "node" that
 // carries the command center's own metadata (category now; typed parent/child
@@ -323,6 +326,29 @@ export function initRegistry(dbPath: string): void {
       CREATE UNIQUE INDEX IF NOT EXISTS node_alias ON node(alias) WHERE alias IS NOT NULL;
     `)
     db.pragma('user_version = 16')
+  }
+  if (v < 17) {
+    // Who may message whom. The tree gave permission for free — one edge, one trusted
+    // bit — but a mesh has N² pairs and cannot auto-grant. DEFAULT DENY: a pair may
+    // message only with a live row here, or along an existing trusted edge.
+    //
+    // Stored as a SORTED pair so (a,b) and (b,a) are one row and a grant cannot be
+    // duplicated or half-revoked. `mode` is directional, so "Beta may report to Alpha"
+    // does not imply "Alpha may drive Beta". mode='none' is an explicit revoke that
+    // OVERRIDES an underlying trusted edge — without it, revoking a parent/child pair
+    // would silently do nothing.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS message_grant (
+        a_id TEXT NOT NULL,
+        b_id TEXT NOT NULL,
+        mode TEXT NOT NULL,              -- both | a_to_b | b_to_a | none
+        granted_at INTEGER NOT NULL,
+        granted_by TEXT NOT NULL,        -- user | auto-edge
+        revoked_at INTEGER,
+        PRIMARY KEY (a_id, b_id)
+      );
+    `)
+    db.pragma('user_version = 17')
   }
 }
 
@@ -1239,6 +1265,22 @@ export function countOpenMessages(): number {
   return r.n
 }
 
+// A removed session's mail is ARCHIVED, not deleted: still readable and copyable in
+// the inbox under the retention window, then pruned like anything else terminal. An
+// open message is archived where it stands; a delivered one keeps its own outcome,
+// because "this landed before the session was removed" is the true record.
+export function archiveMessages(sessionId: string, at: number): void {
+  must()
+    .prepare(
+      `UPDATE message SET state='archived',
+         reason=COALESCE(reason,'') || CASE WHEN reason IS NULL OR reason='' THEN '' ELSE ' · ' END
+                || 'session removed',
+         terminal_at=COALESCE(terminal_at, ?)
+       WHERE (from_session_id=? OR to_session_id=?) AND terminal_at IS NULL`,
+    )
+    .run(at, sessionId, sessionId)
+}
+
 const MESSAGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 const MAX_OPEN_MESSAGES = 500
 const MAX_TERMINAL_MESSAGES = 2000
@@ -1276,4 +1318,65 @@ export function pruneMessages(now: number): void {
        SELECT id FROM message WHERE terminal_at IS NOT NULL ORDER BY terminal_at DESC LIMIT ?
      )`,
   ).run(MAX_TERMINAL_MESSAGES)
+}
+
+// ---------- messaging grants: who may talk to whom ----------
+// Default deny. The user grants; no session can ever open a link for itself, only use
+// one that was opened for it. Every grant is a human act (or the auto-trust on a child
+// the human deliberately spawned), which is the line between a fleet you direct and a
+// fleet that organises itself.
+
+// `dir` is expressed FROM x TO y and normalised to the stored orientation.
+export function setGrant(
+  x: string,
+  y: string,
+  dir: 'both' | 'to' | 'from' | 'none',
+  by: string,
+  at: number,
+): void {
+  if (x === y) return
+  const { a, b, flipped } = pairOf(x, y)
+  const mode =
+    dir === 'both' || dir === 'none'
+      ? dir
+      : (dir === 'to') !== flipped
+        ? 'a_to_b'
+        : 'b_to_a'
+  must()
+    .prepare(
+      `INSERT INTO message_grant (a_id, b_id, mode, granted_at, granted_by, revoked_at)
+       VALUES (?,?,?,?,?,NULL)
+       ON CONFLICT(a_id, b_id) DO UPDATE SET mode=excluded.mode, granted_at=excluded.granted_at,
+         granted_by=excluded.granted_by, revoked_at=NULL`,
+    )
+    .run(a, b, mode, at, by)
+}
+
+// Revoke is stored as mode='none' rather than a delete, so it also overrides the
+// trusted edge underneath. A deleted row would fall straight back through to the edge
+// and the revoke would appear to do nothing.
+export function revokeGrant(x: string, y: string, at: number): void {
+  setGrant(x, y, 'none', 'user', at)
+}
+
+export function listGrants(): GrantRow[] {
+  return must()
+    .prepare('SELECT * FROM message_grant WHERE revoked_at IS NULL ORDER BY granted_at DESC')
+    .all() as GrantRow[]
+}
+
+// Every explicit decision, as a lookup. Read once per scan, not per pair.
+export function grantMap(): Map<string, GrantRow> {
+  const m = new Map<string, GrantRow>()
+  for (const g of listGrants()) m.set(`${g.a_id}|${g.b_id}`, g)
+  return m
+}
+
+// A removed session's grants go with it. Not a cascade — the same reasoning as the
+// message table: nodes are deleted on ordinary exit, and a grant is a decision the
+// user made, so it is retired explicitly and visibly.
+export function revokeGrantsFor(sessionId: string, at: number): void {
+  must()
+    .prepare('UPDATE message_grant SET revoked_at=? WHERE (a_id=? OR b_id=?) AND revoked_at IS NULL')
+    .run(at, sessionId, sessionId)
 }

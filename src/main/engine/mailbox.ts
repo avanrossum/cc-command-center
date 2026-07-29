@@ -77,74 +77,71 @@ export function resolveTargetSession(
 }
 
 // A quoted address is an explicit claim about WHO the message is for. When it names
-// nothing, the honest outcome is a failure the sender is told about — not a guess.
-// (A BARE "@word" is different: it may just be the message starting with an @, so a
-// miss there still falls through to the parent, which is the documented behaviour
-// that lets "@scoped/pkg …" reach the parent instead of vanishing.)
+// nothing you may reach, the honest outcome is a failure the sender is told about —
+// not a guess. (A BARE "@word" is different: it may just be a message that starts with
+// an @, so a miss there still falls through to the parent, which is what lets
+// "@scoped/pkg is broken" reach a human instead of failing.)
+//
+// The failure is deliberately UNIFORM: it says the same thing whether the address
+// names a session in another category or no session at all. Anything else would be an
+// existence oracle — a session could map the fleet by addressing names and reading the
+// difference between "not permitted" and "no such session".
 export type DirectedResult =
-  | { kind: 'match'; child: LiveSession; body: string; trusted: boolean }
+  | { kind: 'match'; peer: Peer; body: string }
   | { kind: 'unknown'; wanted: string; candidates: string[] }
   | undefined
 
-export function matchDirectedChild(
-  sessions: LiveSession[],
-  edges: RoutableEdge[],
-  senderId: string,
+// Someone this session is connected to. `allowed` is the live permission: a peer that
+// is connected but not yet permitted (a child spawned with trust off) HOLDS its mail
+// and flushes when you grant it, rather than failing.
+export interface Peer {
+  session: LiveSession
+  allowed: boolean
+}
+
+export function matchDirectedPeer(
+  peers: Peer[],
   rest: string,
-  // Every address a session answers to, most stable FIRST: its immutable alias, then
+  // Every address a session answers to, MOST STABLE FIRST: its immutable alias, then
   // its display name. Injected rather than imported so this can be exercised without
   // the registry — resolution is where addressing goes wrong silently.
   handlesOf: (s: LiveSession) => string[],
 ): DirectedResult {
-  const kids: { child: LiveSession; trusted: boolean }[] = []
-  for (const e of edges) {
-    if (e.parent_id !== senderId) continue
-    const child = sessions.find((s) => s.sessionId === e.child_id)
-    if (child) kids.push({ child, trusted: !!e.trusted })
-  }
-  // Quoted form: @"Multi Word Name" body. Quotes delimit the name unambiguously,
-  // so a name with spaces routes even though a bare @name assumes a single token.
-  // This is the form we instruct parents to use (see parentBlessNote / preamble).
+  // Quoted form: @"Multi Word Name" body. Quotes delimit the name unambiguously, so a
+  // name with spaces routes even though a bare @name assumes a single token. This is
+  // the form the teaching texts instruct sessions to use.
   const q = rest.match(/^"([^"]+)"[\s:,-]*/)
   if (q) {
     const wanted = q[1].trim().toLowerCase()
-    for (const { child, trusted } of kids) {
-      if (handlesOf(child).some((h) => h.toLowerCase() === wanted)) {
-        return { kind: 'match', child, body: rest.slice(q[0].length).trim(), trusted }
+    for (const p of peers) {
+      if (handlesOf(p.session).some((h) => h.toLowerCase() === wanted)) {
+        return { kind: 'match', peer: p, body: rest.slice(q[0].length).trim() }
       }
     }
-    // A named session that has since ended takes its edge with it (edges cascade on
-    // node delete), so "the child I was talking to yesterday" lands here.
     return {
       kind: 'unknown',
       wanted: q[1].trim(),
-      candidates: kids.map((k) => handlesOf(k.child)[0]).filter(Boolean),
+      candidates: peers.filter((p) => p.allowed).map((p) => handlesOf(p.session)[0]).filter(Boolean),
     }
   }
-  // Bare form: longest display-name prefix, requiring a word boundary after (so
-  // "@apidoc" can't match a child named "a"). Works when the name is reproduced
-  // verbatim (incl. spaces); single-word names are the common case.
-  let best: { kind: 'match'; child: LiveSession; body: string; trusted: boolean } | undefined
+  // Bare form: longest handle prefix, requiring a word boundary after (so "@apidoc"
+  // can't match a peer named "a"). Longest wins, so an alias and a display name that
+  // both prefix-match resolve to whichever is more specific.
+  let best: { kind: 'match'; peer: Peer; body: string } | undefined
   let bestLen = 0
   const lower = rest.toLowerCase()
-  for (const { child, trusted } of kids) {
-    for (const nm of handlesOf(child)) {
+  for (const p of peers) {
+    for (const nm of handlesOf(p.session)) {
       if (!nm || !lower.startsWith(nm.toLowerCase())) continue
       const after = rest.charAt(nm.length) // '' at end-of-string is fine (exact match)
       if (after && !/[\s:,]/.test(after)) continue // reject mid-word prefix hits
       if (nm.length <= bestLen) continue
       bestLen = nm.length
-      best = {
-        kind: 'match',
-        child,
-        body: rest.slice(nm.length).replace(/^[\s:,-]+/, '').trim(),
-        trusted,
-      }
+      best = { kind: 'match', peer: p, body: rest.slice(nm.length).replace(/^[\s:,-]+/, '').trim() }
     }
   }
   return best
 }
-
 
 // Reserved addresses, recognised before any peer lookup so no session can ever claim
 // one by naming itself after it.
@@ -172,3 +169,47 @@ export function parseQuery(content: string): { verb: string; arg: string } | und
   const m = /^\?(WHO|INBOX|WHOIS)\b\s*(.*)$/i.exec(content.trim())
   return m ? { verb: m[1].toUpperCase(), arg: (m[2] ?? '').trim() } : undefined
 }
+
+// ---------- messaging permission ----------
+// Pure over (grants, edges): default deny is the safety property of the whole mesh, so
+// it lives here where it can be exercised directly rather than behind the database.
+
+export interface GrantRow {
+  a_id: string
+  b_id: string
+  mode: 'both' | 'a_to_b' | 'b_to_a' | 'none'
+  granted_at: number
+  granted_by: string
+  revoked_at: number | null
+}
+
+// Canonical ordering, so a pair is one row however it is named.
+export function pairOf(x: string, y: string): { a: string; b: string; flipped: boolean } {
+  return x <= y ? { a: x, b: y, flipped: false } : { a: y, b: x, flipped: true }
+}
+
+// May `from` send to `to`? An explicit row always wins — including 'none'. Otherwise
+// fall back to a trusted edge, which preserves the parent/child messaging that exists
+// today without mirroring edge state into a second table that could drift.
+export function mayMessage(
+  grants: Map<string, GrantRow>,
+  edges: { parent_id: string; child_id: string; trusted?: number | boolean | null }[],
+  from: string,
+  to: string,
+): boolean {
+  if (from === to) return false
+  const { a, b, flipped } = pairOf(from, to)
+  const g = grants.get(`${a}|${b}`)
+  if (g) {
+    if (g.mode === 'none') return false
+    if (g.mode === 'both') return true
+    const fromIsA = !flipped
+    return g.mode === 'a_to_b' ? fromIsA : !fromIsA
+  }
+  return edges.some(
+    (e) =>
+      !!e.trusted &&
+      ((e.parent_id === from && e.child_id === to) || (e.child_id === from && e.parent_id === to)),
+  )
+}
+
