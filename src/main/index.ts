@@ -34,6 +34,7 @@ import {
 } from './engine/sessions'
 import { readLastAssistantText } from './engine/transcript'
 import { parseDialogCommand, questionFromText } from './engine/dialog'
+import { spoolName, tokenFromSpoolName, resolveTargetSession } from './engine/mailbox'
 import type { LiveSession, CoarseState } from './engine/types'
 import { installAppMenu, setAboutPanel } from './about'
 import {
@@ -1617,7 +1618,10 @@ interface Delivery {
   hops: number
   at: number
   spool?: string // the on-disk payload; removed only once this is delivered
-  logged: boolean // one-shot latch so a long defer logs its reason once, not per scan
+  // The reason last logged for this message. A latch so a long wait logs once per
+  // scan-loop rather than every 1.5s — but keyed on the REASON, so if what is
+  // holding it up changes, the new reason is still surfaced.
+  logged?: string
 }
 export interface MsgLogEntry {
   from: string
@@ -1636,10 +1640,11 @@ const linkRate = new Map<string, number[]>()
 // never concatenated — so a directed and a plain message written back to back are
 // classified and routed independently rather than merged in one direction.
 // `spool` is the on-disk copy claimed at drain time; it outlives this entry and is
-// removed only when the message is delivered (or was never a payload).
+// removed only when the message is delivered (or was never a payload). `logged` is
+// the reason last surfaced, so a changed reason still gets a line (see Delivery).
 const heldMessages = new Map<
   string,
-  { text: string; at: number; logged: boolean; spool?: string }[]
+  { text: string; at: number; logged?: string; spool?: string }[]
 >()
 
 function awarenessPreamble(outbox: string): string {
@@ -1702,7 +1707,7 @@ let spoolCounter = 0
 // to its outbox token. Returns the spool path, or undefined if the claim failed — in
 // which case the original is untouched and the next scan retries it.
 function claimToSpool(fp: string, token: string): string | undefined {
-  const dest = join(SPOOL_DIR, `${token}-${Date.now()}-${spoolCounter++}.msg`)
+  const dest = join(SPOOL_DIR, spoolName(token, Date.now(), spoolCounter++))
   try {
     mkdirSync(SPOOL_DIR, { recursive: true })
     renameSync(fp, dest)
@@ -1749,9 +1754,12 @@ function drainOutboxes(): void {
     const spool = claimToSpool(fp, token)
     if (!spool) continue
     try {
-      writeFileSync(fp, '') // recreate the outbox so the owner's next write has a file
-    } catch {
-      /* the owner's next write recreates it anyway */
+      // Recreate the outbox: a session told to Edit its mailbox needs the file to
+      // exist. A Write still works without it, so this is not fatal — but it is not
+      // something to swallow either.
+      writeFileSync(fp, '')
+    } catch (e) {
+      console.error('[mail] could not recreate outbox', fp, e)
     }
     ingestSpooled(spool, token)
   }
@@ -1793,7 +1801,7 @@ function ingestSpooled(spool: string, token: string): void {
   const text = content.length > MSG_MAX_CHARS ? content.slice(-MSG_MAX_CHARS) : content
   if (text !== content) logMsg('?', '?', text, `truncated to last ${MSG_MAX_CHARS} chars`)
   const arr = heldMessages.get(token) ?? []
-  arr.push({ text, at: Date.now(), logged: false, spool })
+  arr.push({ text, at: Date.now(), spool })
   if (arr.length > 30) {
     // A runaway writer still can't grow the buffer without bound, but what it pushes
     // out is logged and its spool file kept, rather than vanishing silently.
@@ -1852,10 +1860,10 @@ function reclaimSpool(): void {
       removeSpool(fp)
       continue
     }
-    // Trailing "-<claimedAt>-<n>" is what claimToSpool appended; the rest is the token.
-    const token = f.replace(/-\d+-\d+\.msg$/, '')
+    const token = tokenFromSpoolName(f)
+    if (!token) continue // not one of ours — leave it alone
     const arr = heldMessages.get(token) ?? []
-    arr.push({ text: content.slice(-MSG_MAX_CHARS), at: now, logged: false, spool: fp })
+    arr.push({ text: content.slice(-MSG_MAX_CHARS), at: now, spool: fp })
     heldMessages.set(token, arr)
     reclaimed++
     logMsg('?', '?', content, 'reclaimed from spool after restart')
@@ -1872,7 +1880,7 @@ function flushOutboxOnExit(ob: { token: string; path: string }): void {
     if (held.spool) continue // claimed at drain time — already on disk
     try {
       mkdirSync(SPOOL_DIR, { recursive: true })
-      writeFileSync(join(SPOOL_DIR, `${ob.token}-${Date.now()}-${spoolCounter++}.msg`), held.text)
+      writeFileSync(join(SPOOL_DIR, spoolName(ob.token, Date.now(), spoolCounter++)), held.text)
     } catch {
       /* nothing further we can do */
     }
@@ -1961,9 +1969,9 @@ function routeHeld(sessions: LiveSession[]): void {
       // Back-pressure rather than loss: at the ceiling the segment stays held (and
       // its spool file on disk) until the queue drains, instead of being dropped.
       if (deliveryQueue.length >= DELIVERY_QUEUE_MAX) {
-        if (!held.logged) {
+        if (held.logged !== 'queue-full') {
           logMsg(displayName(sender), '?', held.text, 'held: delivery queue full')
-          held.logged = true
+          held.logged = 'queue-full'
         }
         i++
         continue
@@ -1973,9 +1981,9 @@ function routeHeld(sessions: LiveSession[]): void {
       const match = directed ? matchDirectedChild(sessions, edges, senderId, directed.rest) : undefined
       if (match) {
         if (!match.trusted) {
-          if (!held.logged) {
+          if (held.logged !== 'untrusted') {
             logMsg(displayName(sender), displayName(match.child), held.text, 'held: link not trusted')
-            held.logged = true
+            held.logged = 'untrusted'
           }
           i++
           continue
@@ -1995,7 +2003,6 @@ function routeHeld(sessions: LiveSession[]): void {
           hops: 1,
           at: now,
           spool: held.spool, // ownership of the on-disk copy moves to the delivery
-          logged: false,
         })
         arr.splice(i, 1)
         continue
@@ -2004,14 +2011,14 @@ function routeHeld(sessions: LiveSession[]): void {
       // Plain, or a directive that matched no child → UP to the sender's parent.
       const edge = edges.find((e) => e.child_id === senderId)
       if (!edge || !edge.trusted) {
-        if (!held.logged) {
+        if (held.logged !== (edge ? 'untrusted' : 'no-parent')) {
           logMsg(
             displayName(sender),
             edge ? 'parent' : '?',
             held.text,
             edge ? 'held: link not trusted' : 'held: no parent link',
           )
-          held.logged = true
+          held.logged = edge ? 'untrusted' : 'no-parent'
         }
         i++
         continue
@@ -2025,7 +2032,6 @@ function routeHeld(sessions: LiveSession[]): void {
         hops: 1,
         at: now,
         spool: held.spool,
-        logged: false,
       })
       arr.splice(i, 1)
     }
@@ -2080,9 +2086,9 @@ function tryDeliveries(sessions: LiveSession[]): void {
     // busy waited forever with no log line and no file, indistinguishable from never
     // having been sent. Now it says so once, and it eventually gives up out loud.
     if (target.state !== 'idle' && target.state !== 'waiting') {
-      if (!d.logged) {
+      if (d.logged !== `busy:${target.state}`) {
         logMsg(d.fromName, target.name ?? d.to, d.text, `deferred: target busy (${target.state})`)
-        d.logged = true
+        d.logged = `busy:${target.state}`
       }
       if (now - d.at > DELIVER_TTL_MS) {
         deliveryQueue.splice(i, 1)
@@ -2111,21 +2117,6 @@ function tryDeliveries(sessions: LiveSession[]): void {
     removeSpool(d.spool) // delivered is the one outcome that needs no recovery
     logMsg(d.fromName, target.name ?? d.to, d.text, 'delivered')
   }
-}
-
-// Resolve a delivery target, preferring the ALIVE row. A resumed session yields a
-// dead and a live record under one session id; a dead row's state is always
-// 'unknown', which never passes the free-target gate, so picking it stalls the
-// message permanently. The enrich dedup and the pending-new guards already prefer
-// alive — this was the one lookup in the app that didn't.
-function resolveTargetSession(sessions: LiveSession[], id: string): LiveSession | undefined {
-  let dead: LiveSession | undefined
-  for (const s of sessions) {
-    if (s.sessionId !== id) continue
-    if (s.alive) return s
-    dead ??= s
-  }
-  return dead
 }
 
 // Children spawned from an active session. The typed edge can't be set until the
