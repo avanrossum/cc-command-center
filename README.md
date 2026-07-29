@@ -248,28 +248,6 @@ The name is the security sense of "man in the middle" on purpose. An attacker in
 - **drop or alter** — a global kill switch that survives a restart, per-pair revocation that stops mail already in flight, default-deny permission, and three rate budgets with a circuit breaker.
 - **inject** — cross-session send, broadcast, spawn-child-with-context, selection-to-tangent.
 
-### Using this responsibly
-
-Sessions can message each other, so it is worth being explicit about where the line
-is, because the app does not enforce your intent for you.
-
-What this is built for: **you** direct the work. Mid-problem you surface something
-that belongs to the agent that owns that domain, and you route it there rather than
-spawning yet another session to rediscover the context. Every hop is a handoff you
-asked for. The human is still in the middle.
-
-What it is not for: scale without a human. Sessions cannot grant each other links —
-only you can, and default deny means an unapproved pair simply does not connect.
-There is a global pause, per-pair revocation that stops mail already in flight, a
-per-session send budget, and a fleet-wide circuit breaker that pauses everything
-rather than quietly dropping messages. Those exist so an unattended fleet is
-something you have to build on purpose, not something you drift into.
-
-If what you actually want is an autonomous fleet, run those sessions on an API key.
-The app supports per-session keys precisely so that work is metered and billed to you,
-rather than smuggled through a subscription that is priced for a human at a keyboard.
-That is a difference in kind, not in degree, and the honest path is the metered one.
-
 See [`docs/concepts.md`](docs/concepts.md) for the full rationale.
 
 ---
