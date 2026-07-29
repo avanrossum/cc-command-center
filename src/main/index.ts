@@ -34,7 +34,12 @@ import {
 } from './engine/sessions'
 import { readLastAssistantText } from './engine/transcript'
 import { parseDialogCommand, questionFromText } from './engine/dialog'
-import { spoolName, tokenFromSpoolName, resolveTargetSession } from './engine/mailbox'
+import {
+  spoolName,
+  tokenFromSpoolName,
+  resolveTargetSession,
+  nextDraft,
+} from './engine/mailbox'
 import type { LiveSession, CoarseState } from './engine/types'
 import { installAppMenu, setAboutPanel } from './about'
 import {
@@ -895,6 +900,14 @@ function snapshot(): Snapshot {
     }
   })
 
+  // Feed the enriched (hook-fused) state back to each managed terminal: a session
+  // that just started a turn had its input box consumed, so any tracked draft is
+  // gone. This is the one clear that does not depend on how a key was encoded.
+  for (const e of enriched) {
+    const t = findManagedTerm(e.sessionId)
+    if (t) noteSessionState(t, e.state)
+  }
+
   // Dormant nodes: sessions the user gave meaning to (categorized or placed in a
   // task tree) that aren't currently running. Keep them in the list so they
   // survive a quit/restart and can be resumed. Uncategorized, edge-less dead
@@ -1265,6 +1278,15 @@ interface Term {
   cwd: string
   key: string // mutable: a new:<pid> terminal is rehomed to its session id on adoption
   spawnedAt: number // when THIS process started — hook events older than this are stale
+  // Roughly how many characters the human has typed into the input box and not yet
+  // submitted. The bus refuses to deliver while this is above zero: injectPrompt is a
+  // bracketed paste followed by a CR, so pasting into a box that already holds a
+  // half-written prompt sends the human's draft along with the message as one turn.
+  // Approximate on purpose — it is a "has unsent text" flag that fails toward
+  // deferring, not an editor model. See noteUserInput.
+  draft: number
+  lastInputAt: number
+  lastSeenState?: CoarseState // edge-trigger for clearing the draft when a turn starts
 }
 // Managed terminals keyed by a STABLE string key: the Claude session id for a
 // scanned session, or `new:<pid>` for a freshly-launched one not yet adopted.
@@ -1356,6 +1378,8 @@ function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: str
     cwd: meta.cwd,
     key,
     spawnedAt: Date.now(),
+    draft: 0,
+    lastInputAt: 0,
   }
   terminals.set(key, term)
   p.onData((data) => {
@@ -2081,18 +2105,32 @@ function tryDeliveries(sessions: LiveSession[]): void {
       logMsg(d.fromName, target.name ?? d.to, d.text, 'dropped: link no longer trusted')
       continue
     }
-    // Only deliver when the target is affirmatively free (fail-safe on unknown).
-    // This branch used to be a bare `continue`: a message to a session that stayed
-    // busy waited forever with no log line and no file, indistinguishable from never
-    // having been sent. Now it says so once, and it eventually gives up out loud.
-    if (target.state !== 'idle' && target.state !== 'waiting') {
-      if (d.logged !== `busy:${target.state}`) {
-        logMsg(d.fromName, target.name ?? d.to, d.text, `deferred: target busy (${target.state})`)
-        d.logged = `busy:${target.state}`
+    // Only deliver when the target is affirmatively free (fail-safe on unknown) AND
+    // the human has no unsent text in its input box. injectPrompt is a bracketed
+    // paste followed by a CR, so delivering into a half-written prompt sends the
+    // human's draft out as part of the message.
+    //
+    // This used to be a bare `continue`: a message to a session that stayed busy
+    // waited forever with no log line and no file, indistinguishable from never
+    // having been sent. Now it says why, once, and gives up out loud.
+    const busy = target.state !== 'idle' && target.state !== 'waiting'
+    if (busy || term.draft > 0) {
+      const reason = busy ? `busy:${target.state}` : 'typing'
+      if (d.logged !== reason) {
+        const why = busy
+          ? `deferred: target busy (${target.state})`
+          : 'deferred: you are typing in that session'
+        logMsg(d.fromName, target.name ?? d.to, d.text, why)
+        d.logged = reason
       }
       if (now - d.at > DELIVER_TTL_MS) {
         deliveryQueue.splice(i, 1)
-        logMsg(d.fromName, target.name ?? d.to, d.text, 'failed: target never free')
+        logMsg(
+          d.fromName,
+          target.name ?? d.to,
+          d.text,
+          busy ? 'failed: target never free' : 'failed: unsent draft left in that session',
+        )
         continue // spool file kept — resendable by hand from ~/.claude/ccc/mail/spool
       }
       i++
@@ -2196,6 +2234,22 @@ function spawnChild(
 // needs the bracketed-paste envelope; a raw CR alone does not submit, so the CR
 // is sent separately after a beat. This is the transport for every cross-session
 // send (Channels injection is blocked in this environment).
+// Every keystroke passes through here (term:input is the single choke point), so the
+// app can know the human has unsent text without scraping the terminal. nextDraft
+// holds the accounting; see engine/mailbox.ts for why it is approximate.
+function noteUserInput(term: Term, data: string): void {
+  if (!data) return
+  term.lastInputAt = Date.now()
+  term.draft = nextDraft(term.draft, data)
+}
+
+// A turn starting means the box was consumed, whatever the keys looked like on the
+// way in. Edge-triggered: a draft typed WHILE the session works is still a draft.
+function noteSessionState(term: Term, state: CoarseState): void {
+  if (state === 'working' && term.lastSeenState !== 'working') term.draft = 0
+  term.lastSeenState = state
+}
+
 function injectPrompt(term: Term, text: string, crDelay = 150): void {
   term.pty.write(`\x1b[200~${text}\x1b[201~`)
   setTimeout(() => {
@@ -2382,7 +2436,10 @@ ipcMain.handle('term:peek', (_e, sessionIds: string[]) => {
   })
 })
 ipcMain.on('term:input', (_e, key: string, data: string) => {
-  terminals.get(key)?.pty.write(data)
+  const term = terminals.get(key)
+  if (!term) return
+  noteUserInput(term, data)
+  term.pty.write(data)
 })
 // Cmd+Click a file path in the terminal → open it. Resolve relative paths against
 // the session's cwd (which we track), strip a :line:col suffix, open with the OS
@@ -3423,10 +3480,11 @@ function deliverPendingNotes(sessions: LiveSession[]): void {
       logMsg('CC', n.to, 'child-link note expired undelivered (parent stayed busy 10m)', 'expired')
       continue
     }
-    const target = sessions.find((s) => s.sessionId === n.to)
+    const target = resolveTargetSession(sessions, n.to)
     const term = findManagedTerm(n.to)
     if (!target || !term || term.exited) continue // parent not open yet — wait
     if (target.state !== 'idle' && target.state !== 'waiting') continue // busy — wait
+    if (term.draft > 0) continue // unsent draft in the box — pasting would send it
     injectPrompt(term, n.text, 400)
     pendingParentNotes.splice(i, 1)
   }
