@@ -182,6 +182,18 @@ Replies are injected via the existing `injectPrompt` (`:1995-2004`) and logged w
 
 ## UI
 
+**Segmentation is the requirement, not a flat log** (user, 2026-07-29, after using the
+Phase 2 panel): the final view needs "better segmentation across sessions — almost
+like a stack of in/outboxes per session." A flat, fleet-wide list answers "what
+happened recently"; it does not answer "what is waiting on THIS session", which is
+the question you actually have when you open it. Per-session grouping also makes the
+hard category separation legible in the mailbox, which a flat list quietly erodes.
+
+Shape to build toward: the inbox groups by session, each group showing that session's
+IN (addressed to it) and OUT (sent by it) stacks with their own counts, collapsed by
+default and ordered by what needs attention. The fleet-wide flat list stays available
+as a view, not as the default. This supersedes the flat list shipped in Phase 2.
+
 One modal, three tabs, replacing `MessageLog` (`App.tsx:4093-4153`) and re-pointed at real rows instead of the 40-entry snapshot slice (`index.ts:1051`):
 - **Inbox** — every message with state, reason, both endpoints, full body, copy button, and Resend / Cancel / Grant-and-deliver.
 - **Route** — pick sender, pick recipient from the directory, send. Keep `session:send` (`:3319-3329`) as the transport but LOG it: today it bypasses trust, pause, the free-target gate, the rate limit, and the log entirely. A mesh must not retain an unlogged back door.
@@ -196,7 +208,7 @@ The bus reads the RAW transcript state: `tryDeliveries` runs at `index.ts:683`, 
 
 ## Phased plan
 
-### 1. Phase 1 — Stop losing payloads
+### 1. Phase 1 — Stop losing payloads  ✅ SHIPPED v0.21.0
 
 **Delivers:** The reported bug stops recurring, and every message ever sent is recoverable from disk by hand. No schema change, no UI change, no protocol change — shippable as a patch release.
 
@@ -204,7 +216,7 @@ The bus reads the RAW transcript state: `tryDeliveries` runs at `index.ts:683`, 
 
 **Files:** src/main/index.ts — drainOutboxes :1675-1720 (esp. the truncate at :1692), tryDeliveries :1860-1916 (target lookup :1871, busy gate :1894), onExit :1364-1379, edge:set :2714-2718. No new permission rule needed: MAIL_RULES at :2811 already covers mail/**.
 
-### 2. Phase 2 — Durable message table + read-only inbox
+### 2. Phase 2 — Durable message table + read-only inbox  ✅ SHIPPED (unreleased)
 
 **Delivers:** "Sent, unconfirmed, and now blank" becomes structurally impossible. The user can open a panel and read/copy any message ever sent, with its real state and the reason it is in that state.
 
@@ -212,7 +224,7 @@ Migration v15: message table (no FK to node — see architecture) with the full 
 
 **Files:** src/main/registry.ts (new v15 block after :270; model the lifecycle and prune on gate/syncGates/pruneLedger at :163-196, :745-822, :824-865). src/main/index.ts :1607-1608, :1663-1666, :1051, and the scan ordering at :682-683 vs :713. src/renderer/src/App.tsx :4093-4153.
 
-### 3. Phase 3 — Manual resend and hard-fail bounces
+### 3. Phase 3 — Manual resend and hard-fail bounces  ✅ SHIPPED (unreleased)
 
 **Delivers:** The user's stated workflow: a send that failed because the target was gated, offline, or unresumed can be resent from the UI without retyping. Mis-addressed messages stop disappearing.
 
