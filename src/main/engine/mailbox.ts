@@ -91,22 +91,24 @@ export type DirectedResult =
   | { kind: 'unknown'; wanted: string; candidates: string[] }
   | undefined
 
-// Someone this session is connected to. `allowed` is the live permission: a peer that
-// is connected but not yet permitted (a child spawned with trust off) HOLDS its mail
-// and flushes when you grant it, rather than failing.
+// Someone this session is connected to. Built from the DURABLE graph — nodes, edges
+// and grants — not from whatever happens to be running: at launch nothing has resumed
+// yet, and judging an address against an empty fleet told a sender it had no peers at
+// all when its peers were simply not up. That is the same mistake the gate ledger
+// already paid for once with its liveSessionIds guard.
+//
+// `allowed` is the live permission; `live` is whether it is running right now. A peer
+// that is connected but not yet permitted, or permitted but not yet resumed, HOLDS its
+// mail rather than failing — so granting it, or reopening it, delivers what was
+// already written instead of asking for a retype.
 export interface Peer {
-  session: LiveSession
+  sessionId: string
+  handles: string[] // alias first, then display name
   allowed: boolean
+  live: boolean
 }
 
-export function matchDirectedPeer(
-  peers: Peer[],
-  rest: string,
-  // Every address a session answers to, MOST STABLE FIRST: its immutable alias, then
-  // its display name. Injected rather than imported so this can be exercised without
-  // the registry — resolution is where addressing goes wrong silently.
-  handlesOf: (s: LiveSession) => string[],
-): DirectedResult {
+export function matchDirectedPeer(peers: Peer[], rest: string): DirectedResult {
   // Quoted form: @"Multi Word Name" body. Quotes delimit the name unambiguously, so a
   // name with spaces routes even though a bare @name assumes a single token. This is
   // the form the teaching texts instruct sessions to use.
@@ -114,14 +116,19 @@ export function matchDirectedPeer(
   if (q) {
     const wanted = q[1].trim().toLowerCase()
     for (const p of peers) {
-      if (handlesOf(p.session).some((h) => h.toLowerCase() === wanted)) {
+      if (p.handles.some((h) => h.toLowerCase() === wanted)) {
         return { kind: 'match', peer: p, body: rest.slice(q[0].length).trim() }
       }
     }
     return {
       kind: 'unknown',
       wanted: q[1].trim(),
-      candidates: peers.filter((p) => p.allowed).map((p) => handlesOf(p.session)[0]).filter(Boolean),
+      // Names a session may reach, running or not. Listing only the running ones is
+      // what made a restart read as "you have no sessions you may message".
+      candidates: peers
+        .filter((p) => p.allowed)
+        .map((p) => (p.live ? p.handles[0] : `${p.handles[0]} (not running)`))
+        .filter(Boolean),
     }
   }
   // Bare form: longest handle prefix, requiring a word boundary after (so "@apidoc"
@@ -131,7 +138,7 @@ export function matchDirectedPeer(
   let bestLen = 0
   const lower = rest.toLowerCase()
   for (const p of peers) {
-    for (const nm of handlesOf(p.session)) {
+    for (const nm of p.handles) {
       if (!nm || !lower.startsWith(nm.toLowerCase())) continue
       const after = rest.charAt(nm.length) // '' at end-of-string is fine (exact match)
       if (after && !/[\s:,]/.test(after)) continue // reject mid-word prefix hits

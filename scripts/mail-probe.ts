@@ -105,13 +105,14 @@ check('type → submit → type', type(['a', 's', 'k', '\r', 'n', 'e', 'x', 't']
 const NAMES: Record<string, string> = { C1: 'reviewer', C2: 'db work', P: 'parent' }
 const ALIAS: Record<string, string> = { C1: 'reviewer-c1', C2: 'db-work-c2' }
 // Most stable first: alias, then the drifting display name.
-const nameOf = (x: LiveSession) => [ALIAS[x.sessionId], NAMES[x.sessionId]].filter(Boolean)
-const peer = (sessionId: string, allowed = true): Peer => ({
-  session: mk(sessionId, 9, true, 'idle'),
+const peer = (sessionId: string, allowed = true, live = true): Peer => ({
+  sessionId,
+  handles: [ALIAS[sessionId], NAMES[sessionId]].filter(Boolean),
   allowed,
+  live,
 })
-const PEERS = [peer('C1'), peer('C2')]
-const addr = (rest: string, peers: Peer[] = PEERS) => matchDirectedPeer(peers, rest, nameOf)
+const PEERS = () => [peer('C1'), peer('C2')]
+const addr = (rest: string, peers: Peer[] = PEERS()) => matchDirectedPeer(peers, rest)
 
 check('quoted name routes to that peer', addr('"reviewer" hello')?.kind, 'match')
 check('quoted match carries the body only', (addr('"reviewer" hello') as { body: string }).body, 'hello')
@@ -139,6 +140,23 @@ NAMES.C1 = 'reviewer'
 check('bare name routes when it matches', addr('reviewer hello')?.kind, 'match')
 check('bare miss stays undefined (falls through to the parent)', addr('scoped/pkg is broken'), undefined)
 check('bare prefix cannot match mid-word', addr('reviewerish thing'), undefined)
+
+// The restart case, found in the wild: a message addressed to a session that had been
+// removed, evaluated while the OTHER sessions had not resumed yet. The peer list used
+// to come from live sessions, so the sender was told it had no sessions to message at
+// all — a statement about the fleet being cold, dressed up as a statement about the
+// sender's links.
+const COLD = [peer('C1', true, false), peer('C2', true, false)]
+check('a cold fleet still lists the sender\'s peers', (addr('"ghost" hi', COLD) as { candidates: string[] }).candidates, [
+  'reviewer-c1 (not running)',
+  'db-work-c2 (not running)',
+])
+check('a known peer that is not running still MATCHES', addr('"reviewer-c1" hi', COLD)?.kind, 'match')
+check('...and is flagged not-live, so its mail holds instead of failing', (addr('"reviewer-c1" hi', COLD) as { peer: Peer }).peer.live, false)
+// Only a sender with genuinely no links should hear that it has none.
+check('no links at all is still reported honestly', (addr('"ghost" hi', []) as { candidates: string[] }).candidates, [])
+// Running peers are not annotated — the note is only there when it explains something.
+check('a running peer is listed plainly', (addr('"ghost" hi', [peer('C1')]) as { candidates: string[] }).candidates, ['reviewer-c1'])
 
 // --- reserved addresses and the directory lane ---
 check('@"user" is reserved', isUserAddress('"user" the build is green'), true)

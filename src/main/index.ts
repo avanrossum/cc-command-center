@@ -75,6 +75,7 @@ import {
   revokeGrantsFor,
   archiveMessages,
   type GrantRow,
+  type NodeRow,
   getArbiterSpend,
   getArbiterLog,
   appendArbiterLog,
@@ -1855,19 +1856,8 @@ function parentBlessNote(childName: string, outbox: string): string {
   )
 }
 
-// Every address a session answers to, MOST STABLE FIRST. The alias is minted once and
-// never moves; the display name is Claude's drifting auto-title unless the user set
-// one, so an address that worked yesterday can silently stop resolving. Both are
-// accepted so nothing that used to work breaks.
-function handlesOf(s: LiveSession): string[] {
-  const out: string[] = []
-  const alias = s.sessionId ? aliasCache.get(s.sessionId) : undefined
-  if (alias) out.push(alias)
-  const nm = displayName(s)
-  if (nm && nm !== alias) out.push(nm)
-  return out
-}
-// Refreshed each scan from the registry; minting happens there too.
+// sessionId -> its permanent @-address. Refreshed each scan from the registry, which
+// is also where minting happens. Read by peersOf to build each session's handles.
 let aliasCache = new Map<string, string>()
 
 // The display name a human sees for a session (user override, else Claude's title,
@@ -2345,42 +2335,61 @@ function bounceToSender(sender: LiveSession, why: string): void {
   })
 }
 
-// Everyone this session is connected to, with whether it may send there RIGHT NOW.
-// Default deny: a pair appears here only through an explicit grant or an existing
-// trusted edge. A session can never open a link for itself — only use one you opened.
+// Everyone this session is connected to, from the DURABLE graph. Default deny: a pair
+// appears here only through an explicit grant or an existing trusted edge. A session
+// can never open a link for itself — only use one you opened.
 //
-// A connected-but-not-yet-permitted peer (a child spawned with trust off) is included
-// with allowed=false so its mail HOLDS and flushes the moment you grant it, rather
-// than failing and making you retype.
+// Deliberately built from NODES rather than from live sessions. At launch nothing has
+// resumed yet, so a live-only list made a sender look like it had no peers at all and
+// turned "that session is gone" into "you have no sessions you may message". A peer
+// that is known but not currently running is listed, and its mail HOLDS until it comes
+// back rather than failing.
 function peersOf(
   me: string,
   sessions: LiveSession[],
   edges: Edge[],
   grants: Map<string, GrantRow>,
+  nodes: Map<string, NodeRow>,
+  names: Record<string, string>,
 ): Peer[] {
+  const ids = new Set<string>()
+  for (const e of edges) {
+    if (e.parent_id === me) ids.add(e.child_id)
+    else if (e.child_id === me) ids.add(e.parent_id)
+  }
+  for (const g of grants.values()) {
+    if (g.a_id === me) ids.add(g.b_id)
+    else if (g.b_id === me) ids.add(g.a_id)
+  }
+  ids.delete(me)
+  const removed = getRemovedSet()
   const out: Peer[] = []
-  const seen = new Set<string>()
-  for (const s of sessions) {
-    const sid = s.sessionId
-    if (!sid || sid === me || seen.has(sid)) continue
-    const linked = edges.some(
-      (e) => (e.parent_id === me && e.child_id === sid) || (e.child_id === me && e.parent_id === sid),
-    )
-    const granted = grants.has(sid <= me ? `${sid}|${me}` : `${me}|${sid}`)
-    if (!linked && !granted) continue
-    seen.add(sid)
-    out.push({ session: s, allowed: mayMessage(grants, edges, me, sid) })
+  for (const sid of ids) {
+    // A removed session is genuinely gone — it must not be offered as reachable.
+    if (removed.has(sid) || !nodes.has(sid)) continue
+    const live = sessions.find((x) => x.sessionId === sid && x.alive)
+    const handles: string[] = []
+    const alias = aliasCache.get(sid)
+    if (alias) handles.push(alias)
+    const nm = names[sid] ?? nodes.get(sid)?.name ?? undefined
+    if (nm && nm !== alias) handles.push(nm)
+    if (!handles.length) handles.push(sid.slice(0, 8))
+    out.push({ sessionId: sid, handles, allowed: mayMessage(grants, edges, me, sid), live: !!live })
   }
   return out
 }
 
-// Route each held segment independently: "@name …" DOWN to the named child (if one
+// Route each held segment independently// Route each held segment independently: "@name …" DOWN to the named child (if one
 // matches AND the link is trusted), everything else UP to the sender's parent — so
 // an "@scoped/pkg" that matches no child still reaches the parent instead of being
 // lost. Routed/expired segments are removed; the rest stay held for the next scan.
 function routeHeld(sessions: LiveSession[]): void {
   const now = Date.now()
   const grants = grantMap()
+  // The durable graph, read once per pass — see peersOf for why this is not the live
+  // session list.
+  const nodes = getNodeMap()
+  const names = getSessionNames()
   for (const [token, arr] of heldMessages) {
     const senderPid = outboxOwner.get(token)
     const sender = senderPid
@@ -2412,7 +2421,7 @@ function routeHeld(sessions: LiveSession[]): void {
 
       const directed = parseDirective(held.text)
       const routed = directed
-        ? matchDirectedPeer(peersOf(senderId, sessions, edges, grants), directed.rest, handlesOf)
+        ? matchDirectedPeer(peersOf(senderId, sessions, edges, grants, nodes, names), directed.rest)
         : undefined
       // An explicit address that names nothing is a hard failure, and the sender is
       // TOLD. It used to fall through and reroute to the parent, so a message aimed
@@ -2444,7 +2453,17 @@ function routeHeld(sessions: LiveSession[]): void {
       }
       const match = routed?.kind === 'match' ? routed : undefined
       if (match) {
-        const targetId = match.peer.session.sessionId!
+        const targetId = match.peer.sessionId
+        // Known but not running. Holds rather than fails, so resuming it delivers what
+        // was already written — the reason says which of the two it is waiting on.
+        if (!match.peer.live) {
+          if (held.logged !== 'not-running') {
+            noteMsg(held.id, 'held', 'that session is not running', { toSessionId: targetId })
+            held.logged = 'not-running'
+          }
+          i++
+          continue
+        }
         if (!match.peer.allowed) {
           // Connected but not permitted yet. Holds rather than fails, so granting the
           // pair delivers what was already written instead of asking for a retype.
@@ -2541,6 +2560,9 @@ function processMailbox(sessions: LiveSession[]): void {
 function answerQueries(sessions: LiveSession[]): void {
   if (pendingQueries.length === 0) return
   const edges = getEdges()
+  const grants = grantMap()
+  const nodes = getNodeMap()
+  const names = getSessionNames()
   // Drain a SNAPSHOT. Re-queuing into the same list we are iterating would spin
   // forever the moment two askers were both un-adopted.
   const batch = pendingQueries.splice(0, pendingQueries.length)
@@ -2555,29 +2577,26 @@ function answerQueries(sessions: LiveSession[]): void {
     }
     const me = asker.sessionId
     let reply = ''
+    // One source of truth for "who may I message" — the same peer list routing uses,
+    // so the directory can never advertise something a send would then refuse (or hide
+    // something it would accept).
+    const peers = peersOf(me, sessions, edges, grants, nodes, names)
     if (q.verb === 'WHO') {
-      // Scoped to PERMITTED peers only: this session's parent and its own trusted
-      // children. A session must not be able to enumerate the fleet — that would leak
-      // the hard category separation the whole app is built around.
-      const lines: string[] = []
-      const up = edges.find((e) => e.child_id === me)
-      if (up?.trusted) {
-        const parent = sessions.find((x) => x.sessionId === up.parent_id)
-        if (parent) lines.push(`  (your parent) ${describePeer(parent)} — plain text goes here`)
-      }
-      for (const e of edges) {
-        if (e.parent_id !== me || !e.trusted) continue
-        const kid = sessions.find((x) => x.sessionId === e.child_id)
-        if (kid) lines.push(`  ${describePeer(kid)}`)
-      }
+      // Scoped to PERMITTED peers only. A session must not be able to enumerate the
+      // fleet — that would leak the hard category separation the app is built around.
+      const allowed = peers.filter((x) => x.allowed)
+      const parentId = edges.find((e) => e.child_id === me)?.parent_id
+      const lines = allowed.map(
+        (x) => `  ${describePeer(x)}${x.sessionId === parentId ? ' — your parent; plain text goes here' : ''}`,
+      )
       reply = lines.length
         ? `Sessions you may message:\n${lines.join('\n')}\n` +
           `Address one with @"<handle>" (keep the quotes). @user writes to your human only.`
-        : 'You have no linked sessions you may message right now.'
+        : 'You have no sessions you may message.'
     } else if (q.verb === 'INBOX') {
       reply = describeInbox(me)
     } else if (q.verb === 'WHOIS') {
-      reply = whoisAnswer(sessions, edges, me, q.arg)
+      reply = whoisAnswer(peers, q.arg)
     }
     if (reply) {
       pendingParentNotes.push({ to: me, text: `[CC Command Center — fleet] ${reply}`, at: Date.now() })
@@ -2586,11 +2605,10 @@ function answerQueries(sessions: LiveSession[]): void {
   }
 }
 
-function describePeer(s: LiveSession): string {
-  const alias = s.sessionId ? aliasCache.get(s.sessionId) : undefined
-  const nm = displayName(s)
-  const state = s.state === 'unknown' ? 'not running' : s.state
-  return alias && alias !== nm ? `@"${alias}" (also "${nm}") — ${state}` : `@"${nm}" — ${state}`
+function describePeer(p: Peer): string {
+  const [alias, ...rest] = p.handles
+  const also = rest.length ? ` (also "${rest[0]}")` : ''
+  return `@"${alias}"${also} — ${p.live ? 'running' : 'not running'}`
 }
 
 // "Go check your mailbox" becomes a real, executable instruction.
@@ -2612,30 +2630,18 @@ function describeInbox(sessionId: string): string {
 
 // Validate ONE address before sending, including the case the user asked for
 // explicitly: a session that has been removed should say so, not fail obscurely.
-function whoisAnswer(
-  sessions: LiveSession[],
-  edges: Edge[],
-  me: string,
-  raw: string,
-): string {
+function whoisAnswer(peers: Peer[], raw: string): string {
   const wanted = raw.replace(/^@/, '').replace(/^"|"$/g, '').trim()
   if (!wanted) return 'Usage: ?WHOIS <handle>'
-  const reachable: LiveSession[] = []
-  const up = edges.find((e) => e.child_id === me)
-  if (up?.trusted) {
-    const parent = sessions.find((x) => x.sessionId === up.parent_id)
-    if (parent) reachable.push(parent)
+  const hit = peers.find((x) => x.handles.some((h) => h.toLowerCase() === wanted.toLowerCase()))
+  if (hit && hit.allowed) {
+    return (
+      `@"${wanted}" is ${describePeer(hit)}. You may message it` +
+      (hit.live ? '.' : ' — it will be delivered when that session is running again.')
+    )
   }
-  for (const e of edges) {
-    if (e.parent_id !== me || !e.trusted) continue
-    const kid = sessions.find((x) => x.sessionId === e.child_id)
-    if (kid) reachable.push(kid)
-  }
-  const hit = reachable.find((x) => handlesOf(x).some((h) => h.toLowerCase() === wanted.toLowerCase()))
-  if (hit) return `@"${wanted}" is ${describePeer(hit)}. You may message it.`
-  const known = [...getRemovedSet()]
-  const wasRemoved = known.some((id) => aliasCache.get(id)?.toLowerCase() === wanted.toLowerCase())
-  if (wasRemoved) return `@"${wanted}" is no longer valid — that session was removed.`
+  if (hit) return `@"${wanted}" exists but you have not been allowed to message it.`
+  // Uniform for everything else, so this cannot be used to probe which sessions exist.
   return `@"${wanted}" is not a session you may message. Ask ?WHO for the list.`
 }
 
