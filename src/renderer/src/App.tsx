@@ -2149,6 +2149,7 @@ export function App() {
       {archiveOpen && (
         <ArchiveModal
           categories={snap.categories ?? []}
+          home={snap.home ?? ''}
           close={() => {
             setArchiveOpen(false)
             refreshArchiveCount()
@@ -3162,10 +3163,12 @@ const ARCHIVE_WHY: Record<ArchivedSession['reason'], string> = {
 
 function ArchiveModal({
   categories,
+  home,
   close,
   onOpened,
 }: {
   categories: Category[]
+  home: string
   close: () => void
   onOpened: (sessionId: string) => void
 }) {
@@ -3188,7 +3191,7 @@ function ArchiveModal({
   const when = (t: number) => (t ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'unknown')
   return (
     <div className="spawnscrim" onClick={close}>
-      <div className="spawnmodal msglog" onClick={(e) => e.stopPropagation()}>
+      <div className="spawnmodal arcmodal" onClick={(e) => e.stopPropagation()}>
         <div className="spawntitle">
           Archived sessions {rows && <span className="msgbadge">{rows.length}</span>}
         </div>
@@ -3203,7 +3206,7 @@ function ArchiveModal({
           placeholder="Search by name or folder…"
           onChange={(e) => setQ(e.target.value)}
         />
-        <div className="msglist">
+        <div className="msglist arclist">
           {rows === null && <div className="emptycat">reading…</div>}
           {rows !== null && shown.length === 0 && (
             <div className="emptycat">{needle ? 'nothing matches' : 'nothing archived'}</div>
@@ -3215,7 +3218,9 @@ function ArchiveModal({
                 <div className="arcmeta">
                   <span className={`arcwhy arcwhy-${r.reason}`}>{ARCHIVE_WHY[r.reason]}</span>
                   <span className="msgwhen">{when(r.lastSeen)}</span>
-                  <span className="arccwd" title={r.cwd}>{r.cwd}</span>
+                  <span className="arccwd" title={r.cwd}>
+                    {home && r.cwd.startsWith(home) ? `~${r.cwd.slice(home.length)}` : r.cwd}
+                  </span>
                 </div>
               </div>
               <select

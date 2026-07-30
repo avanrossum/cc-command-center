@@ -4120,6 +4120,15 @@ select.cat-in {
 }
 
 /* ---- archived sessions ---- */
+/* Wider and taller than the message log: these rows carry a name, a reason, a date and
+   a path, and at 620px the date wrapped onto three lines while the path collapsed to a
+   four-character stub. */
+.arcmodal {
+  width: min(860px, 92vw);
+}
+.arclist {
+  max-height: min(56vh, 560px);
+}
 .arcsearch {
   width: 100%;
   margin-top: 10px;
@@ -4161,8 +4170,13 @@ select.cat-in {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  direction: rtl; /* keep the tail of a long path, which is the informative end */
-  text-align: left;
+  min-width: 0;
+}
+/* Never let the date wrap — it was breaking onto three lines and dragging the row
+   height with it. */
+.arcmeta .msgwhen {
+  flex: none;
+  white-space: nowrap;
 }
 .arcwhy {
   flex: none;
