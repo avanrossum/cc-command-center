@@ -768,21 +768,92 @@ deliberately named and categorised but has not launched in a week disappears sil
 That gate exists to bound incidental sessions; it should probably exempt deliberate ones
 (user-named, categorised, or in an edge) or use a much longer window for them.
 
-## 6. Built-in digest producers (brainstorm, not scoped)
+## 6. Built-in digest producers (designed 2026-07-30, not built)
 
-Ship a small library of producers with the app — "add an API key, enable" — that read the
-user's own sessions and call Haiku/Sonnet on a **tick while the app is open**, rather than
-via launchd like the reference LinkedIn producer.
+Ship producers WITH the app, so the digests panel is populated on first launch instead
+of requiring an afternoon before it does anything.
 
-Open questions to settle before scoping:
+### The reframe: tier one needs no API key
 
-- **Each built-in needs its own cost tracker, surfaced.** The Arbiter already does
-  per-agent spend with a hard cap, a visible today/cap readout, and fail-closed
-  behaviour — extend that rather than reinvent it. Per-producer cap plus an aggregate
-  ceiling, so six cheap producers cannot quietly add up to one expensive one.
-- **Tick-while-open inverts the pattern's main promise.** A launchd producer notices
-  things while you are not there; one that only runs with the window open leaves a hole
-  in the feed over a closed weekend, and nothing distinguishes a quiet week from a shut
-  laptop. Consider emitting a "last ran" marker so the gap is visible rather than silent.
-- Whether a built-in writes to the same public `feeds/` tree (it should) and keeps its
-  private state in `~/.claude/digests/<source>/` like any other producer.
+The strongest available signals are pure queries over data the app already owns — the
+gate ledger, the edge graph, the message log, session states. No model, no key, no cost
+tracker, no cap, no fail-closed logic. They work on first launch for everyone.
+
+That dissolves the actual complaint. "Requires manual setup" stops being true, and
+model-backed producers become an upgrade rather than the price of entry.
+
+The differentiator is the app's own data, not model calls. Measured on a real registry:
+57 gates had resolved *without ever being seen* — a session asked something and it went
+away before the human looked. Nothing outside this app can compute that.
+
+**Tier one (free, deterministic, ship first):**
+
+| Producer | Signal | Source |
+|---|---|---|
+| You never saw this | a gate resolved while you were elsewhere | `gate` where `resolved_at` set, `seen_at` null |
+| Parked on your turn | unresolved gate, old `first_seen` | `gate` open + age |
+| Abandoned handoff | blocking child finished, parent never resumed | `edge` + node state |
+| Went quiet mid-work | named session, uncommitted work, no activity | node + cwd scan |
+| Always ends up blocked | a project that repeatedly blocks | `gate` kind='blocked' grouped by cwd/category |
+| Cost outlier / drift | see the note below — these are two questions |  |
+
+**Tier two (needs a key):** anything that asks a model to judge. Deferred.
+
+### Three rules the implementer must not discover the hard way
+
+**1. Distinguish "not observed" from "not happening."** Every duration-based signal has
+this failure. After a restart every session is dormant and every gate unresolved, so a
+naive "parked for three days" fires on the entire fleet the first morning the app opens.
+The gate ledger already solved this once with its `liveSessionIds` guard (registry.ts),
+and `peersOf` had to be fixed for the same reason (backlog item 5). Third occurrence.
+The catch-up-on-launch run is exactly when a producer is most exposed to getting it wrong.
+
+**2. Summarise homogeneous instances; never emit one item per instance.** 57 unseen
+gates is ONE item — "57 things resolved while you weren't looking" with the list in the
+body. Per-instance only where each instance deserves its own verdict. Seven producers
+emitting per-instance over months of history floods the panel on first run, which trains
+the human to ignore it, which breaks every other source too. That is the pattern's own
+stated anti-pattern.
+
+**3. Cap the backfill on first enable.** Most recent N, and say so in the item.
+Otherwise enabling a producer is indistinguishable from a flood.
+
+### Cost, and an invariant that has no enforcement yet
+
+Model-backed producers share **the Arbiter's API key and the Arbiter's budget**. One
+number answers "what is this app costing me today"; six producers each with an honest
+little counter is how you get surprised. The Arbiter already has the whole pattern —
+per-agent spend, hard cap, visible today/cap readout, fail-closed before each call.
+
+> **INVARIANT, decided 2026-07-30, currently unenforceable because no producer spends
+> anything yet.** A producer that spends money checks the ARBITER'S cap, and an Arbiter
+> cap breach stops the producers too. One budget, one ceiling, everything stops together.
+> Whoever writes the first spending producer: do not give it its own cap. Note the
+> accepted cost of this — a chatty producer can starve the Arbiter of the thing the user
+> actually enabled it for — and if that becomes real, the answer is a per-producer
+> sub-limit *inside* the shared ceiling, never a second independent budget.
+
+### Scheduling
+
+Tick while the app is open, plus a **catch-up run on launch**: record `last_ran` per
+producer and process the window since then. Open the app on Monday and it handles the
+weekend. This does not match a launchd producer (no notification on Saturday) but it
+removes the real failure, which is a hole in the record — and it keeps "a quiet week"
+distinguishable from "the laptop was shut."
+
+### Settings UI
+
+A list in Settings. Per row: checkbox, name, one-line description, and a flag for
+whether it needs a token — worded as **"uses the Arbiter's key"**, not just "requires a
+token", or the first question is *which key* and the second is *why is my Arbiter spend
+going up*. A token-needing producer cannot be enabled until the Arbiter has a key.
+
+Also per row: **last ran, and items emitted**. A producer that silently stops looks
+exactly like one with nothing to say — the same class of failure as the mailbox holding
+messages in silence.
+
+### Open
+
+- Cost **outlier** (one session unusual against its peers) and cost **drift** (the same
+  work getting more expensive over time) are different questions. One producer with two
+  rules, or two producers? If both, they will fire on the same session and duplicate.
