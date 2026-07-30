@@ -133,7 +133,7 @@ export function setAboutPanel(): void {
 // kept so copy/paste/select-all work inside the terminal panes.
 export function installAppMenu(
   getMain: () => BrowserWindow | null,
-  hooks: { onCheckUpdates: () => void; onSettings: () => void },
+  hooks: { onCheckUpdates: () => void; onSettings: () => void; onArchive: () => void },
 ): void {
   checkUpdatesHook = hooks.onCheckUpdates
   const isMac = process.platform === 'darwin'
@@ -152,6 +152,11 @@ export function installAppMenu(
               { label: 'Check for Updates…', click: () => hooks.onCheckUpdates() },
               { type: 'separator' },
               { label: 'Settings…', accelerator: 'Cmd+,', click: () => hooks.onSettings() },
+              {
+                label: 'Archived Sessions…',
+                accelerator: 'Cmd+Shift+A',
+                click: () => hooks.onArchive(),
+              },
               { type: 'separator' },
               { role: 'services' },
               { type: 'separator' },
@@ -165,6 +170,17 @@ export function installAppMenu(
         ]
       : []),
     { role: 'editMenu' },
+    ...(!isMac
+      ? [
+          {
+            label: 'Session',
+            submenu: [
+              { label: 'Archived Sessions…', accelerator: 'Ctrl+Shift+A', click: () => hooks.onArchive() },
+              { label: 'Settings…', click: () => hooks.onSettings() },
+            ],
+          } as MenuItemConstructorOptions,
+        ]
+      : []),
     { role: 'viewMenu' },
     { role: 'windowMenu' },
     {

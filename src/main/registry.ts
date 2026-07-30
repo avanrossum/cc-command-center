@@ -750,6 +750,13 @@ export function ensureNode(
   }
 }
 
+// Move a node's last_seen forward without pretending its process ran. Used by the
+// archive restore: the recency gate measures when a session was last SEEN, and
+// restoring is the user saying it is current again.
+export function touchNode(sessionId: string, at = Date.now()): void {
+  must().prepare('UPDATE node SET last_seen=? WHERE session_id=?').run(at, sessionId)
+}
+
 export function assignCategory(sessionId: string, categoryId: number | null): void {
   must().prepare('UPDATE node SET category_id=? WHERE session_id=?').run(categoryId, sessionId)
 }

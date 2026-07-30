@@ -1,3 +1,11 @@
+interface ArchivedSession {
+  sessionId: string
+  name: string
+  cwd: string
+  lastSeen: number
+  categoryId: number | null
+  reason: 'removed' | 'aged-out' | 'unfiled'
+}
 export {}
 
 interface ResumeFlags {
@@ -127,6 +135,9 @@ declare global {
         flags?: ResumeFlags,
         categoryId?: number | null,
       ) => Promise<{ pid: number; cwd: string } | null>
+      archiveList: () => Promise<ArchivedSession[]>
+      archiveRestore: (sessionId: string, categoryId: number | null) => Promise<boolean>
+      onMenuArchive: (cb: () => void) => () => void
       digestSetState: (file: string, state: string) => Promise<boolean>
       digestAddDir: () => Promise<{ ok: boolean; reason?: string; name?: string; count?: number }>
       digestRemoveDir: (dir: string) => Promise<boolean>

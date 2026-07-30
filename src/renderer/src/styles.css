@@ -4118,3 +4118,69 @@ select.cat-in {
   flex: none;
   margin: 0 -12px;
 }
+
+/* ---- archived sessions ---- */
+.arcsearch {
+  width: 100%;
+  margin-top: 10px;
+}
+.arcrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--cc-hairline);
+}
+.arcrow:last-child {
+  border-bottom: 0;
+}
+.arcrow:hover {
+  background: var(--cc-fill-hover);
+}
+.arcmain {
+  flex: 1;
+  min-width: 0;
+}
+.arcname {
+  font-size: 12px;
+  color: var(--cc-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.arcmeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+  min-width: 0;
+}
+.arccwd {
+  font: 10px var(--cc-font-mono);
+  color: var(--cc-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl; /* keep the tail of a long path, which is the informative end */
+  text-align: left;
+}
+.arcwhy {
+  flex: none;
+  font: 9.5px var(--cc-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border-radius: 3px;
+  padding: 0 5px;
+  color: var(--cc-bg);
+}
+.arcwhy-unfiled { background: var(--cc-dim); }
+.arcwhy-aged-out { background: var(--cc-edge-blocking); }
+.arcwhy-removed { background: #e0625f; }
+.arccat {
+  flex: 0 0 150px;
+}
+.arcnote {
+  font-size: 11px;
+  color: var(--cc-faint);
+  font-style: italic;
+}

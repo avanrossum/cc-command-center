@@ -99,6 +99,7 @@ import {
   reorderCategories,
   ensureNode,
   assignCategory,
+  touchNode,
   getNodeMap,
   setParent,
   clearParent,
@@ -1393,6 +1394,68 @@ function inferReadReceipts(
   } catch (e) {
     console.error('[mail] receipt inference failed', e)
   }
+}
+
+// ---------- archived sessions ----------
+// Everything with a real transcript that the sidebar does not show, and WHY it does not.
+//
+// The sidebar deliberately shows only sessions you filed — a category or a task-tree
+// edge — and only recently-run ones. Both filters are right for a working list and both
+// are one-way doors: on a real registry they hide roughly seventy percent of the
+// history, and the great majority of that is not aged out at all, it is simply never
+// filed. This makes the filters reversible, which is what lets them stay aggressive.
+export interface ArchivedSession {
+  sessionId: string
+  name: string
+  cwd: string
+  lastSeen: number
+  categoryId: number | null
+  // Why it is not in the sidebar. Ordered by how likely you are to want it back.
+  reason: 'removed' | 'aged-out' | 'unfiled'
+}
+
+function listArchivedSessions(): ArchivedSession[] {
+  const out: ArchivedSession[] = []
+  try {
+    const nodes = getNodeMap()
+    const names = getSessionNames()
+    const removed = getRemovedSet()
+    const known = transcriptIds()
+    const edges = getEdges()
+    const edgeIds = new Set<string>()
+    for (const e of edges) {
+      edgeIds.add(e.child_id)
+      edgeIds.add(e.parent_id)
+    }
+    const live = new Set(scanLiveSessions().filter((x) => x.alive).map((x) => x.sessionId))
+    const now = Date.now()
+    for (const [sid, node] of nodes) {
+      if (live.has(sid)) continue // it is running; the sidebar has it
+      // A session id with no transcript was never a conversation. 69 of those on the
+      // registry that surfaced this — they are not history, they are debris.
+      if (known.size > 0 && !known.has(sid)) continue
+      let reason: ArchivedSession['reason']
+      if (removed.has(sid)) reason = 'removed'
+      else if (node.category_id == null && !edgeIds.has(sid)) reason = 'unfiled'
+      else {
+        const deliberate = !!names[sid] || edgeIds.has(sid)
+        const maxAge = deliberate ? KEPT_MAX_AGE_MS : DORMANT_MAX_AGE_MS
+        if (!(node.last_seen && now - node.last_seen > maxAge)) continue // the sidebar shows it
+        reason = 'aged-out'
+      }
+      out.push({
+        sessionId: sid,
+        name: names[sid] || node.name || sid.slice(0, 8),
+        cwd: node.cwd ?? '',
+        lastSeen: node.last_seen ?? 0,
+        categoryId: node.category_id ?? null,
+        reason,
+      })
+    }
+  } catch (e) {
+    console.error('[archive] list failed', e)
+  }
+  return out.sort((a, b) => b.lastSeen - a.lastSeen)
 }
 
 // ---------- digest feeds ----------
@@ -4515,6 +4578,29 @@ ipcMain.handle('session:send', (_e, sessionId: string, text: string) => {
   }
 })
 
+// ---- archived sessions ----
+ipcMain.handle('archive:list', () => listArchivedSessions())
+
+// Bring one back. Filing it under a category is what makes it visible, so that IS the
+// restore. last_seen is also moved forward: the field means "when we last saw this",
+// and you have just said it is current — without that an old session would be filed
+// and still invisible, which is the most confusing possible outcome of pressing
+// Restore. Un-deny-lists it too, if you had removed it by hand.
+ipcMain.handle('archive:restore', (_e, sessionId: string, categoryId: number | null) => {
+  if (typeof sessionId !== 'string' || !sessionId) return false
+  try {
+    const set = getRemovedSet()
+    if (set.delete(sessionId)) setAppState('removedSessions', JSON.stringify([...set]))
+    assignCategory(sessionId, categoryId)
+    touchNode(sessionId)
+    pushSessions()
+    return true
+  } catch (e) {
+    console.error('[archive] restore failed', e)
+    return false
+  }
+})
+
 // ---- digest feeds ----
 // The human's verdict on one item. This is the only write we make into a feed tree,
 // and engine/digests.ts does it atomically so a producer never reads a half file.
@@ -4879,6 +4965,7 @@ app.whenReady().then(() => {
   installAppMenu(() => win, {
     onCheckUpdates: () => void checkForUpdates(true),
     onSettings: () => sendToWin('menu:settings'),
+    onArchive: () => sendToWin('menu:archive'),
   })
   initRegistry(join(app.getPath('userData'), 'registry.db'))
   // AFTER initRegistry: re-hydration reads the message table, which is where the

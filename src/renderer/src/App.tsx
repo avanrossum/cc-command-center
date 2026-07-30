@@ -153,6 +153,15 @@ interface DigestSource {
   unread: number
   error?: string
 }
+// Mirrors ArchivedSession in the main process (see listArchivedSessions).
+interface ArchivedSession {
+  sessionId: string
+  name: string
+  cwd: string
+  lastSeen: number
+  categoryId: number | null
+  reason: 'removed' | 'aged-out' | 'unfiled'
+}
 interface GrantRow {
   a_id: string
   b_id: string
@@ -545,6 +554,7 @@ export function App() {
   const [newSessionOpen, setNewSessionOpen] = useState(false)
   // The cross-session message log (awareness bus transparency).
   const [logOpen, setLogOpen] = useState(false)
+  const [archiveOpen, setArchiveOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   // Auto-update UI. `updateAvail` drives the "an update is available" modal;
   // `postUpdate` drives the one-time "you've been updated" modal on first launch
@@ -639,6 +649,7 @@ export function App() {
       setUpdateDl({ state: 'error', message: p.message }),
     )
     const offSettings = window.cc.onMenuSettings(() => setSettingsOpen(true))
+    const offArchive = window.cc.onMenuArchive(() => setArchiveOpen(true))
     return () => {
       offAvail()
       offNone()
@@ -647,6 +658,7 @@ export function App() {
       offStaged()
       offError()
       offSettings()
+      offArchive()
     }
   }, [])
 
@@ -2118,6 +2130,18 @@ export function App() {
         />
       )}
       {catEdit && <CategoryEditor edit={catEdit} setEdit={setCatEdit} onCreated={(id) => setSelectedCat(id)} />}
+      {archiveOpen && (
+        <ArchiveModal
+          categories={snap.categories ?? []}
+          close={() => setArchiveOpen(false)}
+          onOpened={(sid) => {
+            // Restoring files it under a category; jump there so the row is visible
+            // rather than leaving the user to hunt for where it landed.
+            const s2 = snap.sessions.find((x) => x.sessionId === sid)
+            if (s2) setSelectedCat(s2.categoryId ?? null)
+          }}
+        />
+      )}
       {logOpen && (
         <MessageLog
           messages={snap.messages ?? []}
@@ -3106,6 +3130,110 @@ const EFFORT_OPTS: { v: string; label: string; ultra?: boolean }[] = [
 // Fleet activity: the subagents every session in scope has spawned, and their
 // status. Arbiter-style — a quiet collapsed line ("N running" / "no subagents"),
 // click to expand into the full list grouped by the session that owns each one.
+// The archive. Everything with a real transcript that the sidebar does not show, and
+// why. The sidebar's filters — filed, and recently run — are right for a working list
+// and wrong as a final answer: on a real registry they hide most of the history, and
+// the bulk of that was never aged out, just never filed. This is what makes those
+// filters reversible, which is what lets them stay aggressive.
+const ARCHIVE_WHY: Record<ArchivedSession['reason'], string> = {
+  removed: 'you removed it',
+  'aged-out': 'not run in a long time',
+  unfiled: 'never filed in a category',
+}
+
+function ArchiveModal({
+  categories,
+  close,
+  onOpened,
+}: {
+  categories: Category[]
+  close: () => void
+  onOpened: (sessionId: string) => void
+}) {
+  const [rows, setRows] = useState<ArchivedSession[] | null>(null)
+  const [q, setQ] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
+  const load = () => void window.cc.archiveList().then(setRows)
+  useEffect(load, [])
+  const restore = async (r: ArchivedSession, categoryId: number | null) => {
+    setBusy(r.sessionId)
+    await window.cc.archiveRestore(r.sessionId, categoryId)
+    setBusy(null)
+    load()
+    onOpened(r.sessionId)
+  }
+  const needle = q.trim().toLowerCase()
+  const shown = (rows ?? []).filter(
+    (r) => !needle || r.name.toLowerCase().includes(needle) || r.cwd.toLowerCase().includes(needle),
+  )
+  const when = (t: number) => (t ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'unknown')
+  return (
+    <div className="spawnscrim" onClick={close}>
+      <div className="spawnmodal msglog" onClick={(e) => e.stopPropagation()}>
+        <div className="spawntitle">
+          Archived sessions {rows && <span className="msgbadge">{rows.length}</span>}
+        </div>
+        <div className="spawnsub">
+          Sessions that still have a transcript but aren’t in the sidebar. Restoring one files it
+          under a category, which is what puts it back in the list.
+        </div>
+        <input
+          className="cat-in arcsearch"
+          autoFocus
+          value={q}
+          placeholder="Search by name or folder…"
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <div className="msglist">
+          {rows === null && <div className="emptycat">reading…</div>}
+          {rows !== null && shown.length === 0 && (
+            <div className="emptycat">{needle ? 'nothing matches' : 'nothing archived'}</div>
+          )}
+          {shown.map((r) => (
+            <div key={r.sessionId} className="arcrow">
+              <div className="arcmain">
+                <div className="arcname">{r.name}</div>
+                <div className="arcmeta">
+                  <span className={`arcwhy arcwhy-${r.reason}`}>{ARCHIVE_WHY[r.reason]}</span>
+                  <span className="msgwhen">{when(r.lastSeen)}</span>
+                  <span className="arccwd" title={r.cwd}>{r.cwd}</span>
+                </div>
+              </div>
+              <select
+                className="cat-in arccat"
+                disabled={busy === r.sessionId}
+                defaultValue=""
+                onChange={(e) => {
+                  const v = e.target.value
+                  if (v === '') return
+                  void restore(r, v === 'uncat' ? null : Number(v))
+                }}
+              >
+                <option value="">Restore to…</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+                <option value="uncat">Uncategorized</option>
+              </select>
+            </div>
+          ))}
+        </div>
+        <div className="spawnactions">
+          <div className="arcnote">
+            Nothing is deleted from here — this is where things are found, not lost.
+          </div>
+          <div className="grow" />
+          <button className="rbtn" onClick={close}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ---------- digests ----------
 // A mailbox for unattended producers. A producer watches something on a schedule,
 // decides what deserves attention, and writes JSON into ~/.claude/ccc/feeds/<source>/.

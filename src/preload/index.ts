@@ -136,6 +136,10 @@ contextBridge.exposeInMainWorld('cc', {
       flags,
       categoryId,
     ),
+  archiveList: () => ipcRenderer.invoke('archive:list'),
+  archiveRestore: (sessionId: string, categoryId: number | null) =>
+    ipcRenderer.invoke('archive:restore', sessionId, categoryId) as Promise<boolean>,
+  onMenuArchive: (cb: () => void) => sub('menu:archive', cb),
   digestSetState: (file: string, state: string) =>
     ipcRenderer.invoke('digest:setState', file, state) as Promise<boolean>,
   digestAddDir: () =>
