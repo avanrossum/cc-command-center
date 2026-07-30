@@ -15,7 +15,10 @@ directories:
 publish:
   provider: github
   owner: avanrossum
-  repo: claude-command-center-releases
+  # Releases live in the main repo from v0.24.0 on. Builds BEFORE this still point at
+  # claude-command-center-releases, so that repo has to keep receiving releases until
+  # everyone has moved past them — see docs/backlog.md.
+  repo: cc-command-center
 
 # Space-free artifact names. The default uses productName ("CC Command Center"),
 # whose spaces GitHub rewrites to dots on upload — which then don't match the

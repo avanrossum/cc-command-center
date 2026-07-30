@@ -31,7 +31,14 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const RELEASES_REPO = 'avanrossum/claude-command-center-releases'
+// Transition: builds up to v0.23.2 have the OLD repo baked into their app-update.yml,
+// so it must keep receiving releases or those installs silently never update again.
+// Builds from v0.24.0 check the main repo. Publishing to BOTH bridges the gap; the old
+// entry can be dropped once nobody is running a build older than v0.24.0.
+const RELEASES_REPOS = ['avanrossum/claude-command-center-releases', 'avanrossum/cc-command-center']
+// Old builds fetch changelog.json from the OLD repo, so it still has to be synced
+// there. New builds read it from the main repo, where it is simply committed.
+const CHANGELOG_REPO = RELEASES_REPOS[0]
 const OUT = join(root, 'release')
 
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
@@ -77,41 +84,45 @@ if (!assets.some((f) => f.endsWith('latest-mac.yml'))) {
   console.error('latest-mac.yml missing from release/ — the updater needs it. Aborting.')
   process.exit(1)
 }
-console.log(`\n▶ Uploading ${assets.length} assets to ${RELEASES_REPO}…`)
 assets.forEach((f) => console.log(`   • ${f.slice(OUT.length + 1)}`))
 
-// 3. Create the release (creates the v<version> tag at main) with all assets,
-//    or upload into it if a release for this tag already exists.
+// 3. Create the release (creates the v<version> tag at main) with all assets, or
+//    upload into it if a release for this tag already exists. Done for EVERY target in
+//    RELEASES_REPOS: an install only ever checks the one repo baked into its own
+//    app-update.yml, so during the transition the release has to exist in both or the
+//    older builds go quiet.
 const tag = `v${version}`
-let exists = false
-try {
-  cap(`gh release view ${tag} --repo ${RELEASES_REPO}`)
-  exists = true
-} catch {
-  exists = false
-}
 const fileArgs = assets.map(q).join(' ')
-if (exists) {
-  console.log(`\n▶ Release ${tag} exists — uploading (clobber) into it…`)
-  sh(`gh release upload ${tag} --repo ${RELEASES_REPO} --clobber ${fileArgs}`)
-  sh(`gh release edit ${tag} --repo ${RELEASES_REPO} --draft=false --latest`)
-} else {
-  console.log(`\n▶ Creating release ${tag}…`)
-  sh(
-    `gh release create ${tag} --repo ${RELEASES_REPO} --target main --latest ` +
-      `--title ${q(`v${version}`)} --notes ${q(`Release v${version}. See changelog.json for details.`)} ` +
-      fileArgs,
-  )
+for (const repo of RELEASES_REPOS) {
+  console.log(`\n▶ Publishing ${tag} to ${repo}…`)
+  let exists = false
+  try {
+    cap(`gh release view ${tag} --repo ${repo}`)
+    exists = true
+  } catch {
+    exists = false
+  }
+  if (exists) {
+    console.log(`   release exists — uploading (clobber) into it`)
+    sh(`gh release upload ${tag} --repo ${repo} --clobber ${fileArgs}`)
+    sh(`gh release edit ${tag} --repo ${repo} --draft=false --latest`)
+  } else {
+    sh(
+      `gh release create ${tag} --repo ${repo} --target main --latest ` +
+        `--title ${q(`v${version}`)} --notes ${q(`Release v${version}. See changelog.json for details.`)} ` +
+        fileArgs,
+    )
+  }
 }
 
 // 4. Sync changelog.json to the releases repo main branch via the contents API.
 //    PUT needs the current blob sha when the file already exists. The body goes
 //    on stdin as JSON — the commit message has a space, which -f flags split on.
-console.log(`\n▶ Syncing changelog.json to ${RELEASES_REPO}…`)
+console.log(`\n▶ Syncing changelog.json to ${CHANGELOG_REPO} (for builds older than v0.24.0)…`)
 const b64 = readFileSync(join(root, 'changelog.json')).toString('base64')
 let sha = ''
 try {
-  sha = JSON.parse(cap(`gh api repos/${RELEASES_REPO}/contents/changelog.json`)).sha ?? ''
+  sha = JSON.parse(cap(`gh api repos/${CHANGELOG_REPO}/contents/changelog.json`)).sha ?? ''
 } catch {
   // First publish — no existing file, no sha.
 }
@@ -119,7 +130,7 @@ const body = { message: `changelog: v${version}`, content: b64, ...(sha ? { sha 
 const bodyPath = join(tmpdir(), `ccc-changelog-${version}.json`)
 writeFileSync(bodyPath, JSON.stringify(body))
 try {
-  sh(`gh api --method PUT repos/${RELEASES_REPO}/contents/changelog.json --input ${q(bodyPath)}`, {
+  sh(`gh api --method PUT repos/${CHANGELOG_REPO}/contents/changelog.json --input ${q(bodyPath)}`, {
     stdio: ['ignore', 'ignore', 'inherit'],
   })
 } finally {

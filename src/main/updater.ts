@@ -20,7 +20,7 @@ import { getAppState, setAppState } from './registry'
 const { autoUpdater } = electronUpdater
 
 const CHANGELOG_URL =
-  'https://raw.githubusercontent.com/avanrossum/claude-command-center-releases/main/changelog.json'
+  'https://raw.githubusercontent.com/avanrossum/cc-command-center/main/changelog.json'
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000 // once a day
 
 export interface ChangelogEntry {
