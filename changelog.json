@@ -4,7 +4,9 @@
       "version": "0.24.1",
       "date": "2026-07-30",
       "critical": false,
-      "features": []
+      "features": [
+        "Right-click menus stay on screen. Opening one near the bottom of the window pushed the lower options \u2014 rename, launch settings, spawn \u2014 off the edge, where they were unreachable with nothing to show they were there. The same fix covers the category editor and the rename popover, and a menu taller than the window now scrolls instead of overflowing."
+      ]
     },
     {
       "version": "0.24.0",
@@ -12,7 +14,7 @@
       "critical": false,
       "features": [
         "CC Command Center is now open source. The repository is public, and releases live alongside the source instead of in a separate distribution repo. This update installs from the old location as usual; from here on the app looks in the new one.",
-        "New: an archive of every session that still exists but isn't in the sidebar, with the reason it isn't — never filed in a category, not run in a long time, or removed by you. Searchable by name and folder, and restoring one files it under a category, which is what puts it back in the list. Reachable from the button under \"New session\", or ⌘⇧A. Nothing is deleted from there; it's where sessions are found, not lost.",
+        "New: an archive of every session that still exists but isn't in the sidebar, with the reason it isn't \u2014 never filed in a category, not run in a long time, or removed by you. Searchable by name and folder, and restoring one files it under a category, which is what puts it back in the list. Reachable from the button under \"New session\", or \u2318\u21e7A. Nothing is deleted from there; it's where sessions are found, not lost.",
         "The update dialog now says which install you chose. \"Install on quit\" looked identical to \"Install now\" while downloading, and the dismiss button read \"Remind me later\" even though it neither stopped the download nor cancelled the update.",
         "\"Install now\" works once an update has finished downloading, instead of being greyed out at exactly the point the update was ready."
       ]
@@ -22,7 +24,7 @@
       "date": "2026-07-29",
       "critical": false,
       "features": [
-        "Sessions you deliberately kept no longer disappear after a week. A stopped session aged out of the resumable list after seven days without being launched — so one you had named and filed into a category simply vanished, with nothing to distinguish it from clutter being cleaned up. Named sessions, and sessions wired into a task tree, are now kept for 90 days. Everything else keeps the shorter window, so the list stays bounded."
+        "Sessions you deliberately kept no longer disappear after a week. A stopped session aged out of the resumable list after seven days without being launched \u2014 so one you had named and filed into a category simply vanished, with nothing to distinguish it from clutter being cleaned up. Named sessions, and sessions wired into a task tree, are now kept for 90 days. Everything else keeps the shorter window, so the list stays bounded."
       ]
     },
     {
@@ -30,8 +32,8 @@
       "date": "2026-07-29",
       "critical": false,
       "features": [
-        "Sessions that were never really sessions no longer clutter the list. Claude Code briefly registers a session id in situations that never become a conversation — cancelling the /resume picker, for one — and those were being adopted as permanent, resumable-looking rows. One could even collect the name you meant for a real session you were creating at that moment. A row is now only offered as resumable if there is actually a conversation to resume.",
-        "Fixed a live session vanishing from the list when \"only show sessions managed here\" is on. If a session's id shifted while it ran, the app stopped recognising it as one of its own and hid it — so the session you were looking at wasn't in the sidebar at all.",
+        "Sessions that were never really sessions no longer clutter the list. Claude Code briefly registers a session id in situations that never become a conversation \u2014 cancelling the /resume picker, for one \u2014 and those were being adopted as permanent, resumable-looking rows. One could even collect the name you meant for a real session you were creating at that moment. A row is now only offered as resumable if there is actually a conversation to resume.",
+        "Fixed a live session vanishing from the list when \"only show sessions managed here\" is on. If a session's id shifted while it ran, the app stopped recognising it as one of its own and hid it \u2014 so the session you were looking at wasn't in the sidebar at all.",
         "The update dialog now says which install you chose. \"Install on quit\" looked identical to \"Install now\" while downloading, and the dismiss button still read \"Remind me later\" even though it neither stopped the download nor cancelled the update. It now reads Hide or Close, and says outright that closing the window won't change anything.",
         "\"Install now\" works once an update has finished downloading. It was greyed out at exactly the point the update was ready, leaving no way to change your mind short of quitting by hand."
       ]
@@ -41,10 +43,10 @@
       "date": "2026-07-29",
       "critical": false,
       "features": [
-        "New: Digests — a panel under the session list for things worth your attention that no session is going to tell you about. Something you write watches whatever you care about on its own schedule and drops a JSON file in a directory; the panel finds it, counts what's unread, and gets out of the way. Sources are discovered rather than configured, so a new one appears without any change to the app.",
-        "Digest items sort by when the thing happened, not when it was noticed — so a source catching up on a week doesn't read as one busy afternoon. Open one to see its full text with a copy button, dismiss it and it stays gone even though the producer keeps running, or keep it as a working set. The panel folds away and pops out into a floating card like Timeline and Activity.",
-        "This one needs setting up before it does anything: the app ships no producers, deliberately, because it doesn't need to know what your signal means. Writing one is a JSON file in a directory, in whatever language you like — see docs/digests.md.",
-        "Fixed Shift+Enter silently breaking after switching to a session. It only happened on sessions that had been running a while, which is why it looked random — the terminal is rebuilt when you switch, and the keyboard mode that makes Shift+Enter a newline had scrolled out of the replayed history. The mode is now restored on every switch.",
+        "New: Digests \u2014 a panel under the session list for things worth your attention that no session is going to tell you about. Something you write watches whatever you care about on its own schedule and drops a JSON file in a directory; the panel finds it, counts what's unread, and gets out of the way. Sources are discovered rather than configured, so a new one appears without any change to the app.",
+        "Digest items sort by when the thing happened, not when it was noticed \u2014 so a source catching up on a week doesn't read as one busy afternoon. Open one to see its full text with a copy button, dismiss it and it stays gone even though the producer keeps running, or keep it as a working set. The panel folds away and pops out into a floating card like Timeline and Activity.",
+        "This one needs setting up before it does anything: the app ships no producers, deliberately, because it doesn't need to know what your signal means. Writing one is a JSON file in a directory, in whatever language you like \u2014 see docs/digests.md.",
+        "Fixed Shift+Enter silently breaking after switching to a session. It only happened on sessions that had been running a while, which is why it looked random \u2014 the terminal is rebuilt when you switch, and the keyboard mode that makes Shift+Enter a newline had scrolled out of the replayed history. The mode is now restored on every switch.",
         "Fixed the same problem for pasting. A paste into an affected session lost its bracketing, so a newline inside pasted text was treated as pressing Enter and submitted early."
       ]
     },
@@ -53,7 +55,7 @@
       "date": "2026-07-29",
       "critical": false,
       "features": [
-        "The dialog that asks permission to pre-authorize mailbox writes now names the rules it actually adds. It described a broader rule than the app has written since v0.20 — so it asked for more than it took, and the two never matched. What gets written is unchanged: two rules scoped to the mail trees, nothing wider, with your settings file backed up first."
+        "The dialog that asks permission to pre-authorize mailbox writes now names the rules it actually adds. It described a broader rule than the app has written since v0.20 \u2014 so it asked for more than it took, and the two never matched. What gets written is unchanged: two rules scoped to the mail trees, nothing wider, with your settings file backed up first."
       ]
     },
     {
@@ -61,16 +63,16 @@
       "date": "2026-07-29",
       "critical": false,
       "features": [
-        "Messages are now a real mailbox. Every message between sessions is recorded the moment it's written, before anything is routed — so one that can't be delivered still exists, in full, with the reason it's stuck, and it survives a restart. Undelivered payloads also stay on disk under ~/.claude/ccc/mail/spool, so nothing is ever unrecoverable.",
+        "Messages are now a real mailbox. Every message between sessions is recorded the moment it's written, before anything is routed \u2014 so one that can't be delivered still exists, in full, with the reason it's stuck, and it survives a restart. Undelivered payloads also stay on disk under ~/.claude/ccc/mail/spool, so nothing is ever unrecoverable.",
         "The Messages panel is now each session's own inbox and outbox, ordered by what needs you, with the full text of every message and a copy button. A message that failed can be resent without retyping it, or cancelled.",
-        "You decide which sessions may message each other. A pair can only talk along a link you opened, or the parent–child link you created by spawning it — no session can open one for itself. Permission is directional and revocable, and revoking stops mail that's already in flight.",
+        "You decide which sessions may message each other. A pair can only talk along a link you opened, or the parent\u2013child link you created by spawning it \u2014 no session can open one for itself. Permission is directional and revocable, and revoking stops mail that's already in flight.",
         "A message no longer interrupts you mid-sentence. It waits until the recipient's input box is empty, so it can't be appended to a half-written prompt and sent along with it.",
         "Delivered and read are now different things. A session acknowledges a message by id; failing that, the app confirms it from that session's own activity. Both are shown, marked differently.",
         "Sessions can ask instead of guessing: who they're allowed to message, what's waiting for them, and whether an address is still valid. Each session also gets a permanent address that keeps working after its title changes, and can write to you directly with @\"user\".",
         "Addressing a session that no longer exists now says so, and says who you can reach instead. It used to quietly reroute the message to the parent, which reported an unrelated problem and lost the thread.",
         "A message sent to a session that isn't running now waits for you to reopen it, instead of failing.",
         "The pause switch survives a restart. Behind it: per-pair and per-session rate limits, and a fleet-wide breaker that pauses everything rather than dropping messages.",
-        "Removing a session archives its mail instead of deleting it — still readable for a retention window you set in Settings (1 to 90 days).",
+        "Removing a session archives its mail instead of deleting it \u2014 still readable for a retention window you set in Settings (1 to 90 days).",
         "The Arbiter stopped re-reading sessions that hadn't changed. A fleet sitting completely still could re-pay for the same explanations every few seconds."
       ]
     },
@@ -79,13 +81,13 @@
       "date": "2026-07-29",
       "critical": false,
       "features": [
-        "Spawning a child now offers the same launch settings as a new session — model, effort, context, and permission mode. A child used to start on whatever the CLI defaults were, which is rarely what you want when the work you're handing off is cheaper or harder than what the parent is doing. The choice is remembered, so a resumed child keeps its model instead of quietly reverting.",
-        "A tangential offshoot now gets a category, preset to its parent's, instead of always landing in Uncategorized. Spawning one from a selection with ⌘K inherits the parent's category too. Blocking children aren't offered the choice — their category is derived from their parent.",
+        "Spawning a child now offers the same launch settings as a new session \u2014 model, effort, context, and permission mode. A child used to start on whatever the CLI defaults were, which is rarely what you want when the work you're handing off is cheaper or harder than what the parent is doing. The choice is remembered, so a resumed child keeps its model instead of quietly reverting.",
+        "A tangential offshoot now gets a category, preset to its parent's, instead of always landing in Uncategorized. Spawning one from a selection with \u2318K inherits the parent's category too. Blocking children aren't offered the choice \u2014 their category is derived from their parent.",
         "The \"Start in auto mode\" checkbox is now the Mode picker, set to Auto by default. Same behaviour, one control instead of two.",
         "Cross-session messages no longer interrupt you mid-sentence. If you had started typing into a session and a message arrived, it was pasted onto the end of your half-written prompt and the whole thing was submitted. The app now waits until the box is empty, and says it is waiting.",
-        "Cross-session messages are no longer lost. A message sent to a session that stayed busy waited forever with nothing to show for it — no delivery, no log entry, and an outbox file the app had already emptied. Every message is now written to disk before anything is routed, and the file is deleted only once it has actually been delivered.",
+        "Cross-session messages are no longer lost. A message sent to a session that stayed busy waited forever with nothing to show for it \u2014 no delivery, no log entry, and an outbox file the app had already emptied. Every message is now written to disk before anything is routed, and the file is deleted only once it has actually been delivered.",
         "Undelivered messages stay readable. Anything that failed, expired, or is still waiting keeps its full text in ~/.claude/ccc/mail/spool, so you can copy it out by hand. Recent ones are picked back up automatically when the app restarts; the rest are kept for seven days.",
-        "The Messages panel now shows why a message is where it is — deferred because the target is busy, held because the link isn't trusted, or failed after thirty minutes of a target that never freed up — instead of showing nothing at all.",
+        "The Messages panel now shows why a message is where it is \u2014 deferred because the target is busy, held because the link isn't trusted, or failed after thirty minutes of a target that never freed up \u2014 instead of showing nothing at all.",
         "Fixed messages stalling permanently when the recipient had been resumed, which left a stale duplicate record the delivery bus picked over the live one.",
         "A session that exits now flushes its last message instead of taking it with it.",
         "Linking two sessions by hand now trusts the link, like spawning a child does. A hand-made link used to silently hold every message until it expired."
@@ -97,7 +99,7 @@
       "critical": false,
       "features": [
         "The Arbiter no longer re-reads sessions it has already explained. It was re-sending every waiting session whenever any one of them appeared or resolved, so the same explanations were paid for repeatedly. Each session is now read once per distinct thing it's waiting on.",
-        "Permission gates stay in the needs-you bar until you actually handle them. A gate could vanish about half a minute after it appeared while the prompt was still on screen — most often when a session wanted to edit a file.",
+        "Permission gates stay in the needs-you bar until you actually handle them. A gate could vanish about half a minute after it appeared while the prompt was still on screen \u2014 most often when a session wanted to edit a file.",
         "The needs-you row shows the real command or filename again instead of the generic \"wants approval\".",
         "Popped-out panels no longer slide behind the right-hand panel.",
         "The 1M context option is hidden for models that don't support it."
@@ -108,10 +110,10 @@
       "date": "2026-07-23",
       "critical": false,
       "features": [
-        "Fleet overview — press ⌘⇧E or click \"Show all\" to zoom out to a grid of every active session at once, each a live thumbnail outlined in its state color and sorted most-urgent-first. Click a tile to dive into that session; toggle \"show idle\" to include idle ones.",
-        "macOS notifications (optional, off by default) — get a system notification when a session needs permission or it's your turn, with a master switch plus per-category overrides. Never fires while the app is focused, and clicking a notification opens that session.",
-        "New session: an \"ultracode\" effort level (on models that support it) and a permission Mode picker (Plan / Accept edits / Auto / …), in a more compact two-column layout.",
-        "Launch settings now survive a resume — a session's model, effort, context, and permission mode no longer reset when you reopen it. Tick \"always use these flags\" when creating it, set them in the resume prompt, or change them later from a session's right-click → Launch settings.",
+        "Fleet overview \u2014 press \u2318\u21e7E or click \"Show all\" to zoom out to a grid of every active session at once, each a live thumbnail outlined in its state color and sorted most-urgent-first. Click a tile to dive into that session; toggle \"show idle\" to include idle ones.",
+        "macOS notifications (optional, off by default) \u2014 get a system notification when a session needs permission or it's your turn, with a master switch plus per-category overrides. Never fires while the app is focused, and clicking a notification opens that session.",
+        "New session: an \"ultracode\" effort level (on models that support it) and a permission Mode picker (Plan / Accept edits / Auto / \u2026), in a more compact two-column layout.",
+        "Launch settings now survive a resume \u2014 a session's model, effort, context, and permission mode no longer reset when you reopen it. Tick \"always use these flags\" when creating it, set them in the resume prompt, or change them later from a session's right-click \u2192 Launch settings.",
         "Steadier status: the working / your-turn / needs-approval indicators no longer flicker, permission gates are detected more reliably (including long ones), and a resumed session no longer shows a stale permission gate it can't actually restore.",
         "Opening a session from the needs-you board, a notification, or the activity view now switches to its category and highlights its row instead of just swapping the terminal. The overview also distinguishes a direct question from a soft \"your turn\".",
         "Switching to a category with no running sessions now clears the terminal pane and says so, instead of leaving a session from another category on screen."
@@ -123,10 +125,10 @@
       "critical": false,
       "features": [
         "Artifact preview now covers much more: audio files play in an in-app player, code renders with syntax highlighting, Markdown renders with a rendered/raw toggle, and RTF renders right in the pane. Word/Excel/PowerPoint and PDF open in your default app.",
-        "The artifact list is now sortable — most-recent or by name — and shows each file's last-modified time, which helps on long-running sessions.",
+        "The artifact list is now sortable \u2014 most-recent or by name \u2014 and shows each file's last-modified time, which helps on long-running sessions.",
         "Settings moved to a tabbed layout (General, Terminal, Arbiter, API keys) at a fixed size, so switching tabs no longer resizes the window.",
         "New option to hide live Claude Code sessions that aren't managed here, so their activity stops adding noise to the needs-you bar.",
-        "Category edits — color, emoji, and name — now apply immediately, with no Save click.",
+        "Category edits \u2014 color, emoji, and name \u2014 now apply immediately, with no Save click.",
         "Reordering categories by drag now takes effect the instant you drop, instead of after a short delay."
       ]
     },
@@ -135,7 +137,7 @@
       "date": "2026-07-22",
       "critical": false,
       "features": [
-        "Categories can now be reordered — drag a category in the rail and drop it where you want.",
+        "Categories can now be reordered \u2014 drag a category in the rail and drop it where you want.",
         "On launch the app reopens the last category you had selected, instead of the largest one.",
         "Window size and position are remembered more reliably across quit and reopen, including a maximized window."
       ]
@@ -145,10 +147,10 @@
       "date": "2026-07-22",
       "critical": false,
       "features": [
-        "Artifact preview drawer: a session's files now open in a fold-down drawer over the terminal — images and SVG render inline, text/CSV/Markdown show as text, and HTML/PDF open in your browser. A clear \"close drawer\" bar sits at the bottom.",
+        "Artifact preview drawer: a session's files now open in a fold-down drawer over the terminal \u2014 images and SVG render inline, text/CSV/Markdown show as text, and HTML/PDF open in your browser. A clear \"close drawer\" bar sits at the bottom.",
         "Artifacts are now scoped to what the session itself produced (from its own writes), so sessions sharing a folder no longer show each other's files.",
         "Artifacts now include plain-text and data files (.txt, .csv, .tsv, .log), not just images and docs.",
-        "Fixed the 5-hour and 7-day usage readouts bouncing between values — they now reconcile every session's snapshot into one stable current number.",
+        "Fixed the 5-hour and 7-day usage readouts bouncing between values \u2014 they now reconcile every session's snapshot into one stable current number.",
         "The collapsible section headers (activity, artifacts, timeline, Arbiter) now have a raised background so they're easy to spot."
       ]
     },
@@ -157,9 +159,9 @@
       "date": "2026-07-22",
       "critical": false,
       "features": [
-        "Artifacts: the companion now surfaces the previewable files the open session produced — images, SVG, PDF, HTML, and Markdown — each with Open (in the default app) and Reveal in Finder. Detected passively from what the session wrote, and only listed while the file still exists.",
+        "Artifacts: the companion now surfaces the previewable files the open session produced \u2014 images, SVG, PDF, HTML, and Markdown \u2014 each with Open (in the default app) and Reveal in Finder. Detected passively from what the session wrote, and only listed while the file still exists.",
         "Renamed the session-timeline pop-out to Timeline (it was Activity, which now belongs to the activity panel).",
-        "Note: in-app preview (rendering images/PDF/HTML inside a drawer) is coming in a follow-up — this release surfaces and opens the files."
+        "Note: in-app preview (rendering images/PDF/HTML inside a drawer) is coming in a follow-up \u2014 this release surfaces and opens the files."
       ]
     },
     {
@@ -167,7 +169,7 @@
       "date": "2026-07-22",
       "critical": false,
       "features": [
-        "Activity view now leads with the session you're looking at — its full ledger sits at the top, while every other session collapses to a one-line rollup chip (running / failed / done counts) you can click to switch to it.",
+        "Activity view now leads with the session you're looking at \u2014 its full ledger sits at the top, while every other session collapses to a one-line rollup chip (running / failed / done counts) you can click to switch to it.",
         "Workflow runs show as a single rich entry (name, description, and agent progress like 8/19) instead of a long list of individual agent rows.",
         "Renamed the pop-out panel from Subagents to Activity, since it now covers shell tasks and workflows too."
       ]
@@ -178,9 +180,9 @@
       "critical": false,
       "features": [
         "Activity view: background shell tasks and workflows now appear alongside agents, each with a type badge, and a failed task shows as a quiet awareness row.",
-        "Rail rows show a \"⚙ N\" count of background work running, so a session churning on a build or dev server no longer looks idle.",
-        "Fixed background agents and tasks being marked done the instant they launched — they now reflect real running / done / failed status.",
-        "A completed turn now surfaces as a \"done — your move\" item for sessions you weren't watching, and clears once you open them."
+        "Rail rows show a \"\u2699 N\" count of background work running, so a session churning on a build or dev server no longer looks idle.",
+        "Fixed background agents and tasks being marked done the instant they launched \u2014 they now reflect real running / done / failed status.",
+        "A completed turn now surfaces as a \"done \u2014 your move\" item for sessions you weren't watching, and clears once you open them."
       ]
     },
     {
@@ -196,7 +198,7 @@
       "date": "2026-07-21",
       "critical": false,
       "features": [
-        "Context-usage bar: a slim bar along the bottom of every session item that fills and shifts from green to amber to red as its context window fills — on the sidebar and the needs-you board.",
+        "Context-usage bar: a slim bar along the bottom of every session item that fills and shifts from green to amber to red as its context window fills \u2014 on the sidebar and the needs-you board.",
         "Configurable terminal font: pick any installed monospace font and size for the terminal in Settings, applied live. Only fonts that will actually render are offered, with a live preview."
       ]
     },
