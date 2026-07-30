@@ -2689,6 +2689,35 @@ function FirstRunMail({
   )
 }
 
+// Keep a popover on screen. These are placed at the raw click point, so opening one
+// low in the window ran it off the bottom and the items down there became unreachable
+// with no indication they were there.
+//
+// Measured rather than estimated: the height depends on how many categories you have
+// and which mode the popover is in, so any fixed guess is wrong for somebody. Runs in a
+// layout effect, so the correction lands before paint with no visible jump. The
+// preferred placement is still down-and-right from the cursor — it only flips or pulls
+// back when that would overflow, so the common case opens where you clicked.
+function useClampedToWindow(
+  x: number,
+  y: number,
+  deps: unknown[] = [],
+): [React.RefObject<HTMLDivElement | null>, { left: number; top: number }] {
+  const ref = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState({ left: x, top: y })
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const M = 8 // breathing room from the window edge
+    const { width, height } = el.getBoundingClientRect()
+    const top = y + height > window.innerHeight - M ? Math.max(M, window.innerHeight - height - M) : y
+    const left = x + width > window.innerWidth - M ? Math.max(M, x - width) : x
+    setPos((cur) => (cur.left === left && cur.top === top ? cur : { left, top }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [x, y, ...deps])
+  return [ref, pos]
+}
+
 function ContextMenu({
   menu,
   snap,
@@ -2724,6 +2753,11 @@ function ContextMenu({
   const hasParent = edgeByChild.has(s.sessionId)
   const isBlockingChild = edgeByChild.get(s.sessionId)?.type === 'blocking'
   const candidates = live.filter((x) => x.categoryId === s.categoryId && x.sessionId !== s.sessionId)
+  const [menuRef, pos] = useClampedToWindow(menu.x, menu.y, [
+    menu.mode,
+    snap.categories.length,
+    candidates.length,
+  ])
   return (
     <>
       <div
@@ -2734,7 +2768,7 @@ function ContextMenu({
           setMenu(null)
         }}
       />
-      <div className="menu" style={{ left: menu.x, top: menu.y }}>
+      <div className="menu" ref={menuRef} style={{ left: pos.left, top: pos.top }}>
         {menu.mode === 'root' ? (
           <>
             {isBlockingChild ? (
@@ -5110,6 +5144,7 @@ function CategoryEditor({
 }) {
   const isCreate = edit.id === null
   const [name, setName] = useState(edit.name)
+  const [popRef, popPos] = useClampedToWindow(edit.x, edit.y)
   const [tag, setTag] = useState(edit.label ?? '')
   const [emoji, setEmoji] = useState(edit.emoji ?? '')
   const [color, setColor] = useState(edit.color)
@@ -5183,7 +5218,7 @@ function CategoryEditor({
           close()
         }}
       />
-      <div className="menu cateditor" style={{ left: edit.x, top: edit.y }}>
+      <div className="menu cateditor" ref={popRef} style={{ left: popPos.left, top: popPos.top }}>
         <div className="menuhead">{isCreate ? 'New category' : 'Category'}</div>
         <input
           className="cat-in"
@@ -5355,6 +5390,7 @@ function SessionNameEditor({
   onSaved: (sessionId: string, name: string) => void
 }) {
   const [name, setName] = useState(edit.name)
+  const [popRef, popPos] = useClampedToWindow(edit.x, edit.y)
   const close = () => setEdit(null)
   const save = () => {
     const nm = name.trim()
@@ -5372,7 +5408,7 @@ function SessionNameEditor({
           close()
         }}
       />
-      <div className="menu cateditor" style={{ left: edit.x, top: edit.y }}>
+      <div className="menu cateditor" ref={popRef} style={{ left: popPos.left, top: popPos.top }}>
         <div className="menuhead">Rename session</div>
         <input
           className="cat-in"

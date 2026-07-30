@@ -1969,6 +1969,11 @@ body {
   border-radius: 9px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
   padding: 5px;
+  /* Clamping repositions the menu, but with enough categories it can still be taller
+     than the window — then it has to scroll, or the same options go unreachable by a
+     different route. */
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
 }
 .menuhead {
   color: var(--dim2);
