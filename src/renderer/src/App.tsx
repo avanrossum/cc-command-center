@@ -555,6 +555,13 @@ export function App() {
   // The cross-session message log (awareness bus transparency).
   const [logOpen, setLogOpen] = useState(false)
   const [archiveOpen, setArchiveOpen] = useState(false)
+  // Count only, so the entry point can say how much is back there. Fetched on mount and
+  // after the modal closes — never on the 1.5s scan, where it would walk the whole tree.
+  const [archiveCount, setArchiveCount] = useState(0)
+  const refreshArchiveCount = (): void => {
+    void window.cc.archiveList().then((r) => setArchiveCount(r.length))
+  }
+  useEffect(refreshArchiveCount, [])
   const [settingsOpen, setSettingsOpen] = useState(false)
   // Auto-update UI. `updateAvail` drives the "an update is available" modal;
   // `postUpdate` drives the one-time "you've been updated" modal on first launch
@@ -1483,6 +1490,15 @@ export function App() {
           <button className="newsession" onClick={() => setNewSessionOpen(true)}>
             ＋ New session…
           </button>
+          {archiveCount > 0 && (
+            <button
+              className="archivelink"
+              onClick={() => setArchiveOpen(true)}
+              title="Sessions that still exist but aren’t in the sidebar (⌘⇧A)"
+            >
+              {archiveCount} archived
+            </button>
+          )}
           <div className="treehead">
             <span className="cdot" style={{ background: selectedGroup.color }} />
             <span className="cname">{selectedGroup.name}</span>
@@ -2133,7 +2149,10 @@ export function App() {
       {archiveOpen && (
         <ArchiveModal
           categories={snap.categories ?? []}
-          close={() => setArchiveOpen(false)}
+          close={() => {
+            setArchiveOpen(false)
+            refreshArchiveCount()
+          }}
           onOpened={(sid) => {
             // Restoring files it under a category; jump there so the row is visible
             // rather than leaving the user to hunt for where it landed.

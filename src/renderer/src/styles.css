@@ -4184,3 +4184,22 @@ select.cat-in {
   color: var(--cc-faint);
   font-style: italic;
 }
+
+/* Quiet entry point to the archive, under New session — the sessions area, where you
+   would look for a session you cannot find. The menu item and ⌘⇧A still work. */
+.archivelink {
+  -webkit-app-region: no-drag;
+  width: 100%;
+  margin-top: 5px;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid var(--cc-hairline);
+  border-radius: var(--cc-r-sm);
+  color: var(--cc-faint);
+  font: 10.5px var(--cc-font-mono);
+  cursor: pointer;
+}
+.archivelink:hover {
+  color: var(--cc-text);
+  border-color: var(--cc-border);
+}
