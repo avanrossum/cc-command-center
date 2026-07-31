@@ -4211,9 +4211,21 @@ function readHookStates(): Map<string, { state: string; at: number; kind?: strin
 // rate_limits.{five_hour,seven_day}. The ONLY way to read it is to BE that
 // command, so the app injects its own statusLine per session via the additive
 // `--settings` (app-spawned sessions only — never a global install that would
-// clobber the user's own statusLine, and never the user's personal usage cache
-// which wouldn't ship to anyone else). The script captures the payload to a
+// clobber the user's own statusLine). The script captures the payload to a
 // per-session file the app reads each scan, and prints a compact terminal line.
+//
+// It also CHAINS to whatever statusLine you had configured globally. A statusLine
+// is not only a thing that draws — people use it to maintain state, and the app
+// silently replacing it stops that state ever being written. In practice: a
+// usage cache that other tooling reads went 39 hours stale while the app's own
+// capture updated every five seconds, because every session was app-spawned and
+// none of them was running the user's script any more. Nothing errored; the data
+// just stopped.
+//
+// Your command runs with the same payload on stdin. Its OUTPUT is discarded and
+// the app's line is printed, so the terminal looks the same as it does today —
+// only the side effects come back. Resolved at launch, so changing your global
+// statusLine takes effect on the next app start.
 const USAGE_DIR = join(os.homedir(), '.claude', 'ccc', 'usage')
 const USAGE_LINE_PATH = join(os.homedir(), '.claude', 'ccc', 'usage-line.sh')
 const USAGE_MAX_AGE_MS = 10 * 60 * 1000 // rate-limit numbers go stale fast; drop old files
@@ -4221,11 +4233,37 @@ const USAGE_MAX_AGE_MS = 10 * 60 * 1000 // rate-limit numbers go stale fast; dro
 // Extraction mirrors the status hook: grep -o emits matches in document order,
 // so a scoped object grab (`"context_window":{[^}]*}`) then the numeric field is
 // robust even though `used_percentage` also appears under the rate limits.
-const USAGE_LINE_SCRIPT = `#!/bin/bash
+function userStatusLineCommand(): string {
+  // Whatever the user had configured globally, so the app can chain to it instead of
+  // silently replacing it. Guarded against pointing at our own script, which would
+  // recurse on every refresh.
+  try {
+    const raw = readFileSync(join(os.homedir(), '.claude', 'settings.json'), 'utf8')
+    const sl = (JSON.parse(raw) as Record<string, unknown>)?.statusLine
+    if (!sl || typeof sl !== 'object') return ''
+    const cmd = (sl as Record<string, unknown>).command
+    if (typeof cmd !== 'string' || !cmd.trim()) return ''
+    if (cmd.includes('ccc/usage-line.sh')) return '' // that is us
+    return cmd.trim()
+  } catch {
+    return '' // no settings, unreadable, or malformed — chain to nothing
+  }
+}
+
+function buildUsageLineScript(): string {
+  const userCmd = userStatusLineCommand()
+  return `#!/bin/bash
 # CC Command Center usage statusLine — written by the app; do not edit by hand.
 # stdin: the statusLine JSON payload. Captures it for the app UI (per-session
 # context % + account 5h/7d) and prints a compact line for the terminal.
 IN=$(cat 2>/dev/null) || IN=""
+# Chain to the statusLine you had configured, with the same payload, so anything it
+# maintains keeps being maintained. Output discarded (the app prints its own line);
+# failures ignored, so a broken script of yours cannot take the status line down.
+USER_SL=${JSON.stringify(userCmd)}
+if [ -n "$USER_SL" ]; then
+  printf '%s' "$IN" | eval "$USER_SL" >/dev/null 2>&1 || true
+fi
 SID=$(printf '%s' "$IN" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\\([^"]*\\)"$/\\1/')
 if [ -n "$SID" ]; then
   DIR="$HOME/.claude/ccc/usage"
@@ -4244,11 +4282,12 @@ LINE="CC"
 printf '%s' "$LINE"
 exit 0
 `
+}
 
 function ensureUsageLineScript(): void {
   try {
     mkdirSync(USAGE_DIR, { recursive: true })
-    writeFileSync(USAGE_LINE_PATH, USAGE_LINE_SCRIPT, { mode: 0o755 })
+    writeFileSync(USAGE_LINE_PATH, buildUsageLineScript(), { mode: 0o755 })
     chmodSync(USAGE_LINE_PATH, 0o755) // mode ignored on an existing file
   } catch (e) {
     console.error('[main] write usage-line script failed', e)
