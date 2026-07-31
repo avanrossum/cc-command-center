@@ -186,13 +186,20 @@ function sendToWin(channel: string, payload?: unknown): void {
 let pollTimer: NodeJS.Timeout | null = null
 let winFocused = true // OS window focus — a gate is auto-"seen" only while you're actually looking
 let lastUnhandled = new Set<string>() // last good unhandled set, retained if a scan's ledger sync throws
-// Per session, the transcript mtime at the moment you last VIEWED it (focused +
-// attached). A completed turn surfaces as 'done' only if it finished AFTER this
-// watermark — so the session you're watching never stacks up dones (clear-on-
-// seen), and a completion you already looked at doesn't re-surface. In-memory:
-// after a restart everything is dormant (dones don't show for dormant), so no
-// spurious dones on launch.
-const lastViewedMtime = new Map<string, number>()
+// Sessions whose completion you have already looked at. A 'done' is suppressed while
+// the session is in here, and it leaves the moment the session starts a NEW turn —
+// so the next completion surfaces, and nothing else does.
+//
+// This used to compare the transcript's MTIME against a watermark taken when you last
+// viewed the session, which cannot tell a new completion from the file merely being
+// written to. Opening a done session is precisely when that goes wrong: resuming it
+// appends to the transcript, the mtime jumps past the watermark, and the entry you just
+// cleared comes back on the next scan. Whether a turn happened is a question about the
+// session, not about a file's timestamp.
+//
+// In-memory: after a restart everything is dormant and dones don't show for dormant
+// sessions, so there are no spurious dones on launch.
+const doneSeen = new Set<string>()
 // How long a stopped session keeps offering to resume. Two tiers, because the gate
 // exists to bound CLUTTER and must not discard INTENT.
 //
@@ -936,16 +943,18 @@ function snapshot(): Snapshot {
         // promote to 'waiting' — and promoting would make a done blocking-child keep
         // its parent flagged blocked (blockedSet keys on working/waiting).
         const viewingNow = s.sessionId === seenSid
-        const finishedAt = s.transcriptMtimeMs ?? 0
-        if (!viewingNow && finishedAt > (lastViewedMtime.get(s.sessionId) ?? 0)) {
+        if (!viewingNow && !doneSeen.has(s.sessionId)) {
           whyKind = 'done'
           why = 'done'
         }
       }
     }
-    // Advance the last-viewed watermark for the session you're looking at, so its
-    // completions never surface as 'done' and stay cleared after you switch away.
-    if (s.sessionId === seenSid) lastViewedMtime.set(s.sessionId, s.transcriptMtimeMs ?? 0)
+    // Looking at it counts as having seen its completion, and keeps counting after you
+    // switch away. A new turn starting is the only thing that re-arms it — checked on
+    // the live state rather than the transcript, so a write that is not a turn (a
+    // resume appending to the file, say) cannot resurrect a done you already cleared.
+    if (s.state === 'working') doneSeen.delete(s.sessionId)
+    if (s.sessionId === seenSid) doneSeen.add(s.sessionId)
     return {
       ...s,
       state,
