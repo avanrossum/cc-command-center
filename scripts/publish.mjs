@@ -92,7 +92,14 @@ assets.forEach((f) => console.log(`   • ${f.slice(OUT.length + 1)}`))
 //    app-update.yml, so during the transition the release has to exist in both or the
 //    older builds go quiet.
 const tag = `v${version}`
+// A prerelease is marked as such on GitHub and NEVER as `latest`. That single flag is
+// what keeps betas invisible to stable installs: electron-updater resolves a stable
+// app's update through /releases/latest, which excludes prereleases by definition. Mark
+// a beta latest and every stable user is offered it immediately.
+const isBeta = /-beta\./.test(version)
+const releaseFlags = isBeta ? '--prerelease' : '--latest'
 const fileArgs = assets.map(q).join(' ')
+if (isBeta) console.log(`\n  ${tag} is a PRERELEASE — published as beta, not marked latest.`)
 for (const repo of RELEASES_REPOS) {
   console.log(`\n▶ Publishing ${tag} to ${repo}…`)
   let exists = false
@@ -105,10 +112,10 @@ for (const repo of RELEASES_REPOS) {
   if (exists) {
     console.log(`   release exists — uploading (clobber) into it`)
     sh(`gh release upload ${tag} --repo ${repo} --clobber ${fileArgs}`)
-    sh(`gh release edit ${tag} --repo ${repo} --draft=false --latest`)
+    sh(`gh release edit ${tag} --repo ${repo} --draft=false ${releaseFlags}`)
   } else {
     sh(
-      `gh release create ${tag} --repo ${repo} --target main --latest ` +
+      `gh release create ${tag} --repo ${repo} --target main ${releaseFlags} ` +
         `--title ${q(`v${version}`)} --notes ${q(`Release v${version}. See changelog.json for details.`)} ` +
         fileArgs,
     )

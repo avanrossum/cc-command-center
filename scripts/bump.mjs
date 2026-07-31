@@ -1,8 +1,21 @@
-// Deliberate version bump: node scripts/bump.mjs <major|minor|patch>
+// Deliberate version bump:
+//   node scripts/bump.mjs <major|minor|patch> [--beta]
+//   node scripts/bump.mjs beta        next beta (starts one on the next patch if stable)
+//   node scripts/bump.mjs promote     drop the -beta suffix, shipping what you tested
 //
 // Bumps package.json, regenerates src/shared/version.ts, commits the release,
 // and tags it vX.Y.Z. The per-commit build hash changes on its own with every
 // commit; this script is only for the semver part, which is a human decision.
+//
+// BETA TRACK. A prerelease version is the whole opt-in mechanism: electron-updater
+// derives allowPrerelease from the running app's OWN version (AppUpdater.js), and a
+// stable install resolves updates through GitHub's /releases/latest, which excludes
+// prereleases by definition. So a stable user cannot see a beta even in principle —
+// provided publish.mjs never marks a prerelease as `latest`, which is the one line
+// holding the whole separation up.
+//
+// A beta install still accepts a HIGHER stable version, so promote is the exit: run
+// 0.25.0-beta.3, promote to 0.25.0, and the beta installs update onto it normally.
 //
 // Requires a clean working tree so the tag points at a reproducible commit.
 import { execSync } from 'node:child_process'
@@ -12,9 +25,10 @@ import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const kind = process.argv[2]
+const wantBeta = process.argv.includes('--beta')
 
-if (!['major', 'minor', 'patch'].includes(kind)) {
-  console.error('usage: node scripts/bump.mjs <major|minor|patch>')
+if (!['major', 'minor', 'patch', 'beta', 'promote'].includes(kind)) {
+  console.error('usage: node scripts/bump.mjs <major|minor|patch> [--beta] | beta | promote')
   process.exit(1)
 }
 
@@ -29,13 +43,36 @@ if (run('git status --porcelain')) {
 
 const pkgPath = join(root, 'package.json')
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
-const [maj, min, pat] = pkg.version.split('.').map((n) => parseInt(n, 10))
-const next =
-  kind === 'major'
-    ? `${maj + 1}.0.0`
-    : kind === 'minor'
-      ? `${maj}.${min + 1}.0`
-      : `${maj}.${min}.${pat + 1}`
+// Split X.Y.Z[-beta.N]. The old parse ran parseInt over the raw parts, which turns
+// "2-beta" into 2 and silently loses the suffix.
+const m = /^(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?$/.exec(pkg.version)
+if (!m) {
+  console.error(`cannot parse current version "${pkg.version}" — expected X.Y.Z or X.Y.Z-beta.N`)
+  process.exit(1)
+}
+const [maj, min, pat] = [m[1], m[2], m[3]].map((n) => parseInt(n, 10))
+const betaNum = m[4] ? parseInt(m[4], 10) : null
+
+let next
+if (kind === 'promote') {
+  if (betaNum === null) {
+    console.error(`${pkg.version} is not a beta — nothing to promote`)
+    process.exit(1)
+  }
+  next = `${maj}.${min}.${pat}` // ship exactly what was tested, minus the suffix
+} else if (kind === 'beta') {
+  // Another round on the same base if already testing one; otherwise open a beta on
+  // the next patch. A beta on a minor/major base is `bump minor --beta`.
+  next = betaNum === null ? `${maj}.${min}.${pat + 1}-beta.1` : `${maj}.${min}.${pat}-beta.${betaNum + 1}`
+} else {
+  const base =
+    kind === 'major'
+      ? `${maj + 1}.0.0`
+      : kind === 'minor'
+        ? `${maj}.${min + 1}.0`
+        : `${maj}.${min}.${pat + 1}`
+  next = wantBeta ? `${base}-beta.1` : base
+}
 
 pkg.version = next
 writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')

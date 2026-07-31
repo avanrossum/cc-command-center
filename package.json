@@ -20,7 +20,9 @@
     "bump": "node scripts/bump.mjs",
     "release": "node scripts/publish.mjs",
     "fresh": "CCC_USERDATA=\"$HOME/.cccc-shoot\" CCC_MAIL_DIR=\"$HOME/.cccc-shoot/mail\" CCC_SCAN_ONLY=\"$HOME/demo-shoot\" electron-vite dev",
-    "mail-probe": "tsx scripts/mail-probe.ts"
+    "mail-probe": "tsx scripts/mail-probe.ts",
+    "bump:beta": "node scripts/bump.mjs beta",
+    "bump:promote": "node scripts/bump.mjs promote"
   },
   "devDependencies": {
     "@electron/rebuild": "4.1.0",
