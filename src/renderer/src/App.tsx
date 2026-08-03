@@ -153,6 +153,15 @@ interface DigestSource {
   unread: number
   error?: string
 }
+interface FailedResume {
+  oldId: string
+  newId: string
+  cwd: string
+  name: string
+  transcript: string
+  sizeMb: number
+  compactions: number
+}
 // Mirrors ArchivedSession in the main process (see listArchivedSessions).
 interface ArchivedSession {
   sessionId: string
@@ -221,6 +230,7 @@ interface Snapshot {
   messages?: MsgLogEntry[]
   grants?: GrantRow[]
   digests?: DigestSource[]
+  failedResume?: FailedResume | null
   awarenessPaused?: boolean
   settings?: AppSettings
   recentFolders?: string[]
@@ -2146,6 +2156,14 @@ export function App() {
         />
       )}
       {catEdit && <CategoryEditor edit={catEdit} setEdit={setCatEdit} onCreated={(id) => setSelectedCat(id)} />}
+      {snap.failedResume && (
+        <FailedResumeModal
+          info={snap.failedResume}
+          onDone={() => {
+            /* the snapshot clears it; nothing to hold locally */
+          }}
+        />
+      )}
       {archiveOpen && (
         <ArchiveModal
           categories={snap.categories ?? []}
@@ -3184,6 +3202,60 @@ const EFFORT_OPTS: { v: string; label: string; ultra?: boolean }[] = [
 // Fleet activity: the subagents every session in scope has spawned, and their
 // status. Arbiter-style — a quiet collapsed line ("N running" / "no subagents"),
 // click to expand into the full list grouped by the session that owns each one.
+// `claude --resume` does not fail loudly: when it cannot load a transcript it starts a
+// fresh session and records a /clear as that session's origin. Left unexplained that
+// reads as the app wiping your work — so say what happened, say the work is intact, and
+// offer to carry it across.
+function FailedResumeModal({
+  info,
+  onDone,
+}: {
+  info: FailedResume
+  onDone: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const act = async (preload: boolean) => {
+    setBusy(true)
+    await window.cc.resumeRecover(preload)
+    onDone()
+  }
+  return (
+    <div className="spawnscrim">
+      <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
+        <div className="spawntitle">Claude Code couldn’t resume “{info.name}”</div>
+        <div className="spawnsub">
+          It started a cleared session instead of reporting an error — that’s a CLI behaviour,
+          not something the app did. <b>Nothing was lost.</b> The previous transcript is intact
+          ({info.sizeMb} MB
+          {info.compactions > 0
+            ? `, ${info.compactions} compaction${info.compactions === 1 ? '' : 's'}`
+            : ''}
+          ), and this app is now tracking the session that’s actually running as{' '}
+          <code>{info.newId.slice(0, 8)}</code>. Your name and category move with it; the old one
+          stays in the archive.
+        </div>
+        <div className="frpath" title={info.transcript}>
+          {info.transcript}
+        </div>
+        <div className="spawnhint">
+          <b>Preload context</b> tells the new session where that transcript is and asks it to read
+          the tail to rebuild what you were working on. It doesn’t paste the file in — at this size
+          that would spend the context it’s trying to restore.
+        </div>
+        <div className="spawnactions">
+          <button className="rbtn ghost" disabled={busy} onClick={() => void act(false)}>
+            Continue cleared
+          </button>
+          <div className="grow" />
+          <button className="rbtn primary" disabled={busy} onClick={() => void act(true)}>
+            Preload context
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // The archive. Everything with a real transcript that the sidebar does not show, and
 // why. The sidebar's filters — filed, and recently run — are right for a working list
 // and wrong as a final answer: on a real registry they hide most of the history, and

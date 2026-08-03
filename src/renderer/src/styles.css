@@ -4222,3 +4222,16 @@ select.cat-in {
   color: var(--cc-text);
   border-color: var(--cc-border);
 }
+
+/* The intact transcript's path — the reassuring detail, so make it selectable. */
+.frpath {
+  margin: 10px 0;
+  padding: 7px 9px;
+  font: 10.5px var(--cc-font-mono);
+  color: var(--cc-dim);
+  background: var(--cc-surface-2);
+  border: 1px solid var(--cc-hairline);
+  border-radius: var(--cc-r-sm);
+  word-break: break-all;
+  user-select: text;
+}

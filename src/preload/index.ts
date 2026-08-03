@@ -136,6 +136,8 @@ contextBridge.exposeInMainWorld('cc', {
       flags,
       categoryId,
     ),
+  resumeRecover: (preload: boolean) =>
+    ipcRenderer.invoke('resume:recover', preload) as Promise<boolean>,
   archiveList: () => ipcRenderer.invoke('archive:list'),
   archiveRestore: (sessionId: string, categoryId: number | null) =>
     ipcRenderer.invoke('archive:restore', sessionId, categoryId) as Promise<boolean>,

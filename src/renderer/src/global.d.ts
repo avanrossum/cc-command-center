@@ -135,6 +135,7 @@ declare global {
         flags?: ResumeFlags,
         categoryId?: number | null,
       ) => Promise<{ pid: number; cwd: string } | null>
+      resumeRecover: (preload: boolean) => Promise<boolean>
       archiveList: () => Promise<ArchivedSession[]>
       archiveRestore: (sessionId: string, categoryId: number | null) => Promise<boolean>
       onMenuArchive: (cb: () => void) => () => void

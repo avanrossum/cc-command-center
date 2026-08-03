@@ -295,6 +295,7 @@ interface Snapshot {
   apiKeys: ApiKeyRow[]
   arbiter: ArbiterPanel
   digests: DigestSource[] // ingestion feeds — see engine/digests.ts
+  failedResume: FailedResume | null // a --resume that silently started a fresh session
   usage: UsageAccount // account-wide rate limits for the header readout
 }
 // Account-wide 5h / 7d usage, from the freshest session's statusLine payload.
@@ -988,6 +989,7 @@ function snapshot(): Snapshot {
     if (t) noteSessionState(t, e.state)
   }
   inferReadReceipts(hookStates, now)
+  detectFailedResume(sessions)
 
   // Dormant nodes: sessions the user gave meaning to (categorized or placed in a
   // task tree) that aren't currently running. Keep them in the list so they
@@ -1176,6 +1178,7 @@ function snapshot(): Snapshot {
     apiKeys: listApiKeys(),
     arbiter: { status: arbiterStatus, spend: getArbiterSpend(), log: getArbiterLog(40) },
     digests: digestCache,
+    failedResume: pendingFailedResume,
     usage: { fiveHour: usage.fiveHour, sevenDay: usage.sevenDay },
   }
 }
@@ -1405,6 +1408,105 @@ function inferReadReceipts(
   }
 }
 
+// ---------- failed resume detection ----------
+// `claude --resume <id>` does not fail loudly. When it cannot load a transcript it
+// starts a FRESH session and records a `/clear` as that session's origin — written at
+// birth, in the same millisecond as the session's first record, with no human
+// involved. Measured across a real machine: 52 of these, median transcript span 1ms,
+// not one longer than a second.
+//
+// From the user's side that reads as "the app cleared my session", the old session
+// sits in the sidebar still offering to resume (it will fail again), and the work
+// looks gone. It is not gone: the original transcript is untouched. This detects the
+// case so the app can say what happened and offer to carry the context across.
+export interface FailedResume {
+  oldId: string
+  newId: string
+  cwd: string
+  name: string
+  transcript: string // the ORIGINAL transcript — intact, and the whole point
+  sizeMb: number
+  compactions: number
+}
+let pendingFailedResume: FailedResume | null = null
+
+// The signature, verified rather than assumed: a tiny transcript whose only command is
+// /clear. Anything larger is a real session and must never be treated as a failure.
+function looksAutoCleared(sessionId: string, cwd: string): boolean {
+  try {
+    const f = findTranscript(sessionId, cwd)
+    if (!f || statSync(f).size > 20_000) return false
+    const raw = readFileSync(f, 'utf8')
+    return raw.includes('<command-name>/clear') && raw.split('\n').filter(Boolean).length <= 8
+  } catch {
+    return false
+  }
+}
+
+function describeTranscript(sessionId: string, cwd: string): { path: string; mb: number; compactions: number } {
+  try {
+    const f = findTranscript(sessionId, cwd)
+    if (!f) return { path: '', mb: 0, compactions: 0 }
+    const raw = readFileSync(f, 'utf8')
+    return {
+      path: f,
+      mb: Math.round((statSync(f).size / 1048576) * 10) / 10,
+      compactions: (raw.match(/compact_boundary/g) ?? []).length,
+    }
+  } catch {
+    return { path: '', mb: 0, compactions: 0 }
+  }
+}
+
+// Runs in the scan. A terminal that asked to resume X, but whose pid now reports a
+// DIFFERENT session that carries the auto-clear signature, resumed and failed.
+function detectFailedResume(sessions: LiveSession[]): void {
+  if (pendingFailedResume) return // one at a time; the user has to answer it
+  const byPid = new Map<number, LiveSession>()
+  for (const x of sessions) if (x.sessionId && x.alive) byPid.set(x.pid, x)
+  for (const t of terminals.values()) {
+    if (t.exited || t.resumeChecked || !t.resumeTarget) continue
+    const live = byPid.get(t.pty.pid)
+    if (!live?.sessionId) continue // not adopted yet — look again next scan
+    t.resumeChecked = true
+    if (live.sessionId === t.resumeTarget) continue // resumed fine, which is the norm
+    if (!looksAutoCleared(live.sessionId, live.cwd)) continue // changed id for another reason
+    const d = describeTranscript(t.resumeTarget, t.cwd)
+    if (!d.path) continue // nothing to offer, so nothing worth interrupting for
+    pendingFailedResume = {
+      oldId: t.resumeTarget,
+      newId: live.sessionId,
+      cwd: t.cwd,
+      name: getSessionNames()[t.resumeTarget] || getNodeMap().get(t.resumeTarget)?.name || t.resumeTarget.slice(0, 8),
+      transcript: d.path,
+      sizeMb: d.mb,
+      compactions: d.compactions,
+    }
+    console.log(`[resume] ${t.resumeTarget.slice(0, 8)} failed to resume — running as ${live.sessionId.slice(0, 8)}`)
+    break
+  }
+}
+
+// Carry the user's intent onto the session that is ACTUALLY running. The old node keeps
+// its transcript and falls out of the sidebar (no category), so it stays reachable in
+// the archive rather than sitting there offering a resume that will fail again.
+function adoptFailedResume(f: FailedResume): void {
+  try {
+    const names = getSessionNames()
+    const label = names[f.oldId]
+    const cat = getNodeMap().get(f.oldId)?.category_id ?? null
+    ensureNode(f.newId, { cwd: f.cwd, name: f.name, skipAutoCategory: true })
+    if (label) {
+      setSessionName(f.newId, label)
+      setSessionName(f.oldId, `${label} (before auto-clear)`)
+    }
+    assignCategory(f.newId, cat)
+    assignCategory(f.oldId, null)
+  } catch (e) {
+    console.error('[resume] adopting the replacement session failed', e)
+  }
+}
+
 // ---------- archived sessions ----------
 // Everything with a real transcript that the sidebar does not show, and WHY it does not.
 //
@@ -1566,6 +1668,12 @@ interface Term {
   // rebuilds its xterm. See engine/vt.ts — without this, Shift+Enter silently stopped
   // working on any session that had outgrown the replay buffer.
   modes: VtModes
+  // What this terminal was asked to resume, if anything. Kept so a resume that fails
+  // SILENTLY can be recognised: Claude Code does not error, it starts a fresh session
+  // and records a /clear as its origin, so without remembering the target there is
+  // nothing to compare the running session against.
+  resumeTarget?: string
+  resumeChecked?: boolean // detect once per terminal, not once per scan
 }
 // Managed terminals keyed by a STABLE string key: the Claude session id for a
 // scanned session, or `new:<pid>` for a freshly-launched one not yet adopted.
@@ -1646,7 +1754,11 @@ interface OpenOpts {
   resumeFlags?: ResumeFlags
 }
 
-function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: string }): Term {
+function wireTerm(
+  key: string,
+  p: pty.IPty,
+  meta: { sessionId?: string; cwd: string; resumeTarget?: string },
+): Term {
   // Handlers read term.key (mutable) rather than the captured key, so a terminal
   // rehomed from new:<pid> to its session id keeps routing correctly.
   const term: Term = {
@@ -1660,6 +1772,7 @@ function wireTerm(key: string, p: pty.IPty, meta: { sessionId?: string; cwd: str
     draft: 0,
     lastInputAt: 0,
     modes: NO_MODES,
+    resumeTarget: meta.resumeTarget,
   }
   terminals.set(key, term)
   p.onData((data) => {
@@ -1808,7 +1921,11 @@ function openTerminal(key: string, opts: OpenOpts): void {
       }
     }
     console.log(`[main] terminal ${key}: spawned ${cmd} ${resumeArgs.join(' ')} in ${opts.cwd}`)
-    term = wireTerm(key, p, { sessionId: opts.sessionId, cwd: opts.cwd })
+    term = wireTerm(key, p, {
+      sessionId: opts.sessionId,
+      cwd: opts.cwd,
+      resumeTarget: resumeArgs.length ? opts.sessionId : undefined,
+    })
   }
   if (opts.background) return // live PTY + outbox, but the user stays where they are
   attachedKey = key
@@ -4624,6 +4741,37 @@ ipcMain.handle('session:send', (_e, sessionId: string, text: string) => {
     noteMsg(id, 'failed', 'could not write to that session')
     return { ok: false, reason: 'write-failed' }
   }
+})
+
+// ---- a resume that silently failed ----
+// Both paths adopt the running session, so the user's name and category follow the
+// work rather than staying on a session that can no longer be opened.
+ipcMain.handle('resume:recover', (_e, preload: boolean) => {
+  const f = pendingFailedResume
+  if (!f) return false
+  pendingFailedResume = null
+  adoptFailedResume(f)
+  if (preload) {
+    const t = findManagedTerm(f.newId)
+    if (t && !t.exited) {
+      // A pointer, not a paste. The transcript can be tens of megabytes — handing it
+      // over whole would blow the context this is trying to rebuild. Say where it is,
+      // how to read it, and what to do with it.
+      injectPrompt(
+        t,
+        `[CC Command Center] This session is an auto-cleared resume: Claude Code could not ` +
+          `load the previous session's context (transcript ${f.sizeMb}MB, ${f.compactions} compaction${f.compactions === 1 ? '' : 's'}), ` +
+          `so it started fresh. Nothing was lost — the previous transcript is intact at:\n` +
+          `${f.transcript}\n` +
+          `It is JSONL, one record per line, oldest first. Do NOT read it whole; read the ` +
+          `TAIL (the last few hundred lines) and any compact_boundary summaries, which carry ` +
+          `the working state. Use it to restore your working knowledge of what the user was ` +
+          `doing, then tell them in a few lines where things stood and what was next.`,
+      )
+    }
+  }
+  pushSessions()
+  return true
 })
 
 // ---- archived sessions ----
