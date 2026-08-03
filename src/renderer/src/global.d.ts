@@ -1,3 +1,14 @@
+interface AgentRow {
+  id?: string
+  sessionId: string
+  kind: 'background' | 'interactive'
+  cwd: string
+  name: string
+  startedAt: number
+  state?: string
+  status?: string
+  pid?: number
+}
 interface ArchivedSession {
   sessionId: string
   name: string
@@ -135,6 +146,8 @@ declare global {
         flags?: ResumeFlags,
         categoryId?: number | null,
       ) => Promise<{ pid: number; cwd: string } | null>
+      agentsRefresh: () => Promise<AgentRow[]>
+      agentsTakeOver: (cwd: string) => Promise<{ ok: boolean; pid?: number }>
       resumeRecover: (preload: boolean) => Promise<boolean>
       archiveList: () => Promise<ArchivedSession[]>
       archiveRestore: (sessionId: string, categoryId: number | null) => Promise<boolean>

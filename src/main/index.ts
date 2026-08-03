@@ -36,6 +36,7 @@ import {
 import { readLastAssistantText } from './engine/transcript'
 import { parseDialogCommand, questionFromText } from './engine/dialog'
 import { nextModes, modePrelude, NO_MODES, type VtModes } from './engine/vt'
+import { listAgents, backgroundAgents, type AgentRow } from './engine/agents'
 import {
   readAllSources,
   writeItemState,
@@ -280,6 +281,10 @@ type EnrichedSession = LiveSession & {
   workflows?: WorkflowInfo[] // Workflow-tool runs this session started, one entry each
   artifacts?: ArtifactInfo[] // previewable files this session produced (Write + cwd)
   contextPct?: number | null // context window used %, from the session's statusLine payload
+  // This session is running as a BACKGROUND AGENT under Claude Code's daemon. Resuming
+  // it here will be refused, and the app cannot host it — so say so on the row instead
+  // of letting the click be the thing that finds out.
+  bgAgent?: boolean
 }
 interface Snapshot {
   home: string
@@ -296,6 +301,7 @@ interface Snapshot {
   arbiter: ArbiterPanel
   digests: DigestSource[] // ingestion feeds — see engine/digests.ts
   failedResume: FailedResume | null // a --resume that silently started a fresh session
+  agents: AgentRow[] // background agents — sessions this app does not host
   usage: UsageAccount // account-wide rate limits for the header readout
 }
 // Account-wide 5h / 7d usage, from the freshest session's statusLine payload.
@@ -990,6 +996,7 @@ function snapshot(): Snapshot {
   }
   inferReadReceipts(hookStates, now)
   detectFailedResume(sessions)
+  if (agentIds.size) for (const e of enriched) if (agentIds.has(e.sessionId)) e.bgAgent = true
 
   // Dormant nodes: sessions the user gave meaning to (categorized or placed in a
   // task tree) that aren't currently running. Keep them in the list so they
@@ -1034,7 +1041,10 @@ function snapshot(): Snapshot {
       alive: false,
       isSpare: false,
       state: 'idle',
-      stateReason: 'not running — click to resume',
+      stateReason: agentIds.has(sid)
+        ? 'running as a background agent — resume is refused here'
+        : 'not running — click to resume',
+      bgAgent: agentIds.has(sid),
       categoryId: categoryOf(sid),
       theme: node.theme ?? null,
       dormant: true,
@@ -1179,6 +1189,7 @@ function snapshot(): Snapshot {
     arbiter: { status: arbiterStatus, spend: getArbiterSpend(), log: getArbiterLog(40) },
     digests: digestCache,
     failedResume: pendingFailedResume,
+    agents: agentCache,
     usage: { fiveHour: usage.fiveHour, sevenDay: usage.sevenDay },
   }
 }
@@ -1406,6 +1417,33 @@ function inferReadReceipts(
   } catch (e) {
     console.error('[mail] receipt inference failed', e)
   }
+}
+
+// ---------- background agents ----------
+// Sessions Claude Code runs under its own daemon. This app does not host them and
+// cannot show their output, but it CAN stop them being invisible: a session that became
+// a background agent still sits in the sidebar looking resumable, and only says
+// otherwise after you click. See engine/agents.ts for why this reads a documented
+// command rather than the daemon's roster file.
+//
+// Cached on a slow timer: the command spawns a process (~0.3s), which is nothing on its
+// own and far too much to do on a 1.5s scan.
+let agentCache: AgentRow[] = []
+let agentIds = new Set<string>() // session ids currently running as a background agent
+
+function refreshAgents(push = true): void {
+  try {
+    const rows = listAgents(resolveClaude())
+    // An empty result usually means "none", but it is also what a failed call returns.
+    // Keeping the previous list on empty would strand a stale badge forever, so trust
+    // it — the cost of being wrong is one polling interval.
+    agentCache = backgroundAgents(rows)
+    agentIds = new Set(agentCache.map((a) => a.sessionId))
+  } catch (e) {
+    console.error('[agents] refresh failed', e)
+    return
+  }
+  if (push) pushSessions()
 }
 
 // ---------- failed resume detection ----------
@@ -4743,6 +4781,30 @@ ipcMain.handle('session:send', (_e, sessionId: string, text: string) => {
   }
 })
 
+// ---- background agents ----
+ipcMain.handle('agents:refresh', () => {
+  refreshAgents()
+  return agentCache
+})
+
+// Take over: open Claude Code's OWN agent view in a terminal this app hosts.
+//
+// The daemon exposes each worker's pty over a socket, with an auth token, in
+// roster.json — driving that directly would mean reimplementing an undocumented
+// protocol against a live agent, where getting the framing wrong corrupts someone's
+// running work. `claude agents` is the supported attach UI, and hosting `claude` in a
+// pty is the one thing this app already does, so it uses the front door.
+ipcMain.handle('agents:takeOver', (_e, cwd: string) => {
+  try {
+    const dir = typeof cwd === 'string' && cwd ? cwd : os.homedir()
+    const pid = launchSession(dir, ['agents'])
+    return { ok: true, pid }
+  } catch (e) {
+    console.error('[agents] take over failed', e)
+    return { ok: false }
+  }
+})
+
 // ---- a resume that silently failed ----
 // Both paths adopt the running session, so the user's name and category follow the
 // work rather than staying on a session that can no longer be opened.
@@ -5168,6 +5230,8 @@ app.whenReady().then(() => {
   // record of what was in flight lives.
   restoreAwarenessPaused() // a kill switch has to survive a restart to be one
   refreshDigests(false) // feeds are read from disk, not owned by us — see engine/digests.ts
+  refreshAgents(false)
+  setInterval(() => refreshAgents(), 20_000)
   watchDigests()
   // Slow floor, in case a watcher misses an event (network volumes, editors that
   // replace a directory). Cheap: a few readdirs.

@@ -136,6 +136,9 @@ contextBridge.exposeInMainWorld('cc', {
       flags,
       categoryId,
     ),
+  agentsRefresh: () => ipcRenderer.invoke('agents:refresh'),
+  agentsTakeOver: (cwd: string) =>
+    ipcRenderer.invoke('agents:takeOver', cwd) as Promise<{ ok: boolean; pid?: number }>,
   resumeRecover: (preload: boolean) =>
     ipcRenderer.invoke('resume:recover', preload) as Promise<boolean>,
   archiveList: () => ipcRenderer.invoke('archive:list'),

@@ -77,7 +77,8 @@ interface Session {
     mtimeMs: number
   }[]
   unhandled?: boolean // open gate you haven't looked at yet — shows a pip until seen
-  contextPct?: number | null // context window used %, from the session's statusLine
+  contextPct?: number | null
+  bgAgent?: boolean // context window used %, from the session's statusLine
 }
 interface Category {
   id: number
@@ -152,6 +153,17 @@ interface DigestSource {
   items: DigestItem[]
   unread: number
   error?: string
+}
+interface AgentRow {
+  id?: string
+  sessionId: string
+  kind: 'background' | 'interactive'
+  cwd: string
+  name: string
+  startedAt: number
+  state?: string
+  status?: string
+  pid?: number
 }
 interface FailedResume {
   oldId: string
@@ -231,6 +243,7 @@ interface Snapshot {
   grants?: GrantRow[]
   digests?: DigestSource[]
   failedResume?: FailedResume | null
+  agents?: AgentRow[]
   awarenessPaused?: boolean
   settings?: AppSettings
   recentFolders?: string[]
@@ -1593,7 +1606,11 @@ export function App() {
                     </span>
                   )}
                 </span>
-                {s.dormant ? (
+                {s.bgAgent ? (
+                  <span className="meta bgagent" title="running as a background agent — resume is refused here">
+                    agent
+                  </span>
+                ) : s.dormant ? (
                   <span className="meta resume">resume</span>
                 ) : (
                   <span className="meta">
@@ -1624,6 +1641,7 @@ export function App() {
               )
             })}
           </ul>
+          <AgentsPanel agents={snap.agents ?? []} />
           {popped.has('digests') ? (
             <PopStub title="Digests" onReturn={() => setPop('digests', false)} />
           ) : (
@@ -3360,6 +3378,60 @@ function ArchiveModal({
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// Background agents — sessions Claude Code runs under its own daemon, which this app
+// does not host and cannot show the output of. Surfacing them is most of the value:
+// one of these still appears in the sidebar as an ordinary resumable row, and only
+// says otherwise AFTER you click resume.
+function AgentsPanel({ agents }: { agents: AgentRow[] }): React.ReactElement | null {
+  const [open, setOpen] = useState(false)
+  if (agents.length === 0) return null // nothing to explain, so no chrome
+  const active = agents.filter((a) => a.state !== 'done').length
+  const age = (ms: number) => {
+    if (!ms) return ''
+    const d = Math.floor((Date.now() - ms) / 86400000)
+    if (d > 0) return `${d}d`
+    const h = Math.floor((Date.now() - ms) / 3600000)
+    return h > 0 ? `${h}h` : `${Math.max(1, Math.floor((Date.now() - ms) / 60000))}m`
+  }
+  return (
+    <div className={`dg${open ? ' open' : ''}`}>
+      <button className="dg-head" onClick={() => setOpen(!open)} title="Background agents">
+        <span className={`dg-dot${active > 0 ? ' on' : ''}`} />
+        <span className="dg-name">Background agents</span>
+        <span className="dg-badge">{agents.length}</span>
+        <span className="dg-chev">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div className="dg-body agentbody">
+          <div className="dg-view agentview">
+            {agents.map((a) => (
+              <div key={a.sessionId} className="agentrow">
+                <div className="agentmain">
+                  <div className="agentname">{a.name}</div>
+                  <div className="agentmeta">
+                    {a.state && <span className={`agentstate st-${a.state}`}>{a.state}</span>}
+                    <span className="dg-when">{age(a.startedAt)}</span>
+                    <span className="arccwd" title={a.cwd}>
+                      {a.cwd.split('/').slice(-2).join('/')}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            ))}
+            <button
+              className="dg-add"
+              title="Opens Claude Code's own agent view in a terminal here"
+              onClick={() => void window.cc.agentsTakeOver(agents[0]?.cwd ?? '')}
+            >
+              ⇱ Open the agent view…
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
