@@ -78,7 +78,8 @@ interface Session {
   }[]
   unhandled?: boolean // open gate you haven't looked at yet — shows a pip until seen
   contextPct?: number | null
-  bgAgent?: boolean // context window used %, from the session's statusLine
+  bgAgent?: boolean
+  utility?: boolean // context window used %, from the session's statusLine
 }
 interface Category {
   id: number
@@ -1068,6 +1069,21 @@ export function App() {
   // — adopted, pre-feature, or created without ticking the box — gets asked.
   const needsResumeGate = (s: Session): boolean => !s.managed && !s.resumeSticky
   const openSession = (s: Session): void => {
+    // A utility terminal (the agent view) has no session id — its "id" IS the terminal
+    // key. Attach to what is already running; resuming it would ask Claude Code to
+    // resume a session that never existed.
+    if (s.utility) {
+      window.cc.termAttach(s.sessionId)
+      setSelected({
+        key: s.sessionId,
+        pid: s.pid,
+        cwd: s.cwd,
+        name: s.name ?? 'terminal',
+        resume: false,
+        hadLiveOriginal: false,
+      })
+      return
+    }
     if (needsResumeGate(s)) {
       setResumeGate({ session: s, edit: false }) // reallyOpen runs from the modal's confirm
       return
@@ -1606,7 +1622,11 @@ export function App() {
                     </span>
                   )}
                 </span>
-                {s.bgAgent ? (
+                {s.utility ? (
+                  <span className="meta bgagent" title="a terminal this app is hosting">
+                    terminal
+                  </span>
+                ) : s.bgAgent ? (
                   <span className="meta bgagent" title="running as a background agent — resume is refused here">
                     agent
                   </span>

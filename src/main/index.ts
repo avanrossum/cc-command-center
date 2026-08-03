@@ -281,6 +281,9 @@ type EnrichedSession = LiveSession & {
   workflows?: WorkflowInfo[] // Workflow-tool runs this session started, one entry each
   artifacts?: ArtifactInfo[] // previewable files this session produced (Write + cwd)
   contextPct?: number | null // context window used %, from the session's statusLine payload
+  // Not a Claude session at all — a terminal the app hosts (the agent view). Clicking
+  // it must ATTACH, never try to resume a session id that does not exist.
+  utility?: boolean
   // This session is running as a BACKGROUND AGENT under Claude Code's daemon. Resuming
   // it here will be refused, and the app cannot host it — so say so on the row instead
   // of letting the click be the thing that finds out.
@@ -997,6 +1000,25 @@ function snapshot(): Snapshot {
   inferReadReceipts(hookStates, now)
   detectFailedResume(sessions)
   if (agentIds.size) for (const e of enriched) if (agentIds.has(e.sessionId)) e.bgAgent = true
+  // Utility terminals: app-hosted, not Claude sessions, so nothing else in the scan
+  // will ever produce a row for them. Listed only while the process is alive — when it
+  // exits the row goes with it, which is the whole lifecycle.
+  for (const t of terminals.values()) {
+    if (!t.utility || t.exited) continue
+    enriched.push({
+      pid: t.pty.pid,
+      sessionId: t.key, // the terminal key IS its identity; there is no session id
+      cwd: t.cwd,
+      name: t.utility,
+      alive: true,
+      isSpare: false,
+      state: 'idle',
+      stateReason: 'a terminal this app is hosting',
+      categoryId: null,
+      theme: null,
+      utility: true,
+    } as EnrichedSession)
+  }
 
   // Dormant nodes: sessions the user gave meaning to (categorized or placed in a
   // task tree) that aren't currently running. Keep them in the list so they
@@ -1712,6 +1734,11 @@ interface Term {
   // nothing to compare the running session against.
   resumeTarget?: string
   resumeChecked?: boolean // detect once per terminal, not once per scan
+  // A terminal this app hosts that is NOT a Claude session — the agent view, say.
+  // It never registers a session id, so every mechanism keyed on one (adoption, the
+  // pending-new reconcile, the sidebar) skips it and the process ends up running with
+  // no way back to it. Labelled so it can be listed for as long as it is alive.
+  utility?: string
 }
 // Managed terminals keyed by a STABLE string key: the Claude session id for a
 // scanned session, or `new:<pid>` for a freshly-launched one not yet adopted.
@@ -4798,6 +4825,9 @@ ipcMain.handle('agents:takeOver', (_e, cwd: string) => {
   try {
     const dir = typeof cwd === 'string' && cwd ? cwd : os.homedir()
     const pid = launchSession(dir, ['agents'])
+    const t = findTermByPid(pid)
+    if (t) t.utility = 'Agent view' // so it gets a row and can be returned to
+    pushSessions()
     return { ok: true, pid }
   } catch (e) {
     console.error('[agents] take over failed', e)
