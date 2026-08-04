@@ -857,3 +857,49 @@ messages in silence.
 - Cost **outlier** (one session unusual against its peers) and cost **drift** (the same
   work getting more expensive over time) are different questions. One producer with two
   rules, or two producers? If both, they will fire on the same session and duplicate.
+
+## 7. Dictation does nothing (diagnosed 2026-08-03, not fixed)
+
+Pressing the system dictation key while focused in the composer or the terminal does
+nothing at all — no error, no indicator.
+
+**Almost certainly the missing microphone entitlement.** The build runs with
+`hardenedRuntime: true` (electron-builder.yml), and under hardened runtime an
+entitlement is what actually grants a capability. The signed app declares only three:
+
+    com.apple.security.cs.allow-jit
+    com.apple.security.cs.allow-unsigned-executable-memory
+    com.apple.security.cs.disable-library-validation
+
+There is no `com.apple.security.device.audio-input`. Verified against the signed
+bundle with `codesign -d --entitlements -`, not just the source plist.
+
+Confusingly, `NSMicrophoneUsageDescription` IS present in Info.plist ("This app needs
+access to the microphone") — an Electron default. That is only the PROMPT TEXT. Without
+the entitlement the capability is denied before any prompt happens, which is exactly why
+the failure is silent rather than a refusal dialog.
+
+**The likely fix**, in `build/entitlements.mac.plist`:
+
+```xml
+<key>com.apple.security.device.audio-input</key>
+<true/>
+```
+
+Then rebuild and re-sign — the entitlement is baked at signing time, so this cannot be
+tested from a dev run against the installed app.
+
+**Necessary, possibly not sufficient.** Two surfaces, and they are not the same problem:
+
+- **The composer** is a plain `<textarea>`. Once the microphone is permitted, dictation
+  should insert normally.
+- **The terminal** is xterm.js, which takes input through a hidden textarea and handles
+  IME/composition events itself. Dictation arrives as composition, not keystrokes, so it
+  may still not land even with the entitlement. Test the composer first to confirm the
+  entitlement was the blocker, then treat xterm as a separate question — the answer
+  there may be dictating into the composer and sending, rather than into the terminal.
+
+**Worth being deliberate about:** this grants a signed, notarized, publicly distributed
+app access to the microphone. macOS will still ask for consent on first use, and the app
+never records anything itself — but it is a real capability expansion and should be
+stated in the release notes rather than slipped in.
