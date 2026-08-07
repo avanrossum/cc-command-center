@@ -903,3 +903,50 @@ tested from a dev run against the installed app.
 app access to the microphone. macOS will still ask for consent on first use, and the app
 never records anything itself — but it is a real capability expansion and should be
 stated in the release notes rather than slipped in.
+
+## 8. Hook drift check — flag hooks in `~/.claude/settings.json` the app didn't write (2026-08-07)
+
+**Why this app specifically.** The ChainDrop worm (Microsoft, 2026-08-04) established
+`.claude/settings.json` as a persistence target: inject a hook, and the next Claude
+session re-runs the payload. For most users an unexplained hook appearing in that file is
+conspicuous. For a CCCC user it is not — this app *writes hooks there itself*, so their
+`settings.json` legitimately contains several command entries. We supply the camouflage,
+which makes surfacing drift our problem to solve.
+
+Audited this machine on 2026-08-07 and it was clean, so this is hardening, not incident
+response.
+
+**The app is unusually well placed to do this.** It knows exactly which entries it wrote
+(`status-hook.sh` across five events, the `usage-line.sh` statusLine, `keyhelper.sh` as
+`apiKeyHelper`) because it wrote them. Everything else is either the user's own or
+something to ask about.
+
+**Shape: baseline-and-diff, never a verdict.**
+
+- On first run, record the current hook set as acknowledged. Report nothing.
+- Afterwards, surface only what *changed* — a new hook, a changed command string for an
+  existing one, a new `statusLine` / `apiKeyHelper`, a new `permissions.allow` entry.
+- Dismissing an item adds it to the baseline. That is the whole interaction.
+- **Never auto-remove and never label anything malicious.** This machine has three
+  legitimate user hooks (`dirty-tree-guard`, `usage-governor`, `acl-assignment-guard`).
+  The signal is "this appeared and you didn't put it there this session", not "this is
+  bad". An app that cries wolf about a user's own tooling gets muted, and then it is
+  worth nothing on the day it matters.
+
+**Scope beyond the global file:** project-level `.claude/settings.json` /
+`settings.local.json` in each managed session's cwd — a per-repo injection is the more
+likely delivery, since it rides in with a clone or an npm install. Also worth a plain
+existence check for `.claude/setup.mjs`, which is a filename with no legitimate use.
+
+**Where it surfaces: this is a tier-one digest producer** (item 6). It is deterministic,
+reads only files the app already touches, needs no API key and costs nothing — it fits
+that table exactly, and it inherits the panel's read/dismiss/keep states, which are
+precisely the interaction this needs. It should not be a needs-you gate: drift is
+notice-tier, not action-tier, in the same sense as a failed background task (item C).
+
+**The trap, for the fourth time.** A first run must not report the entire existing state
+as new. Same class as the gate ledger's `liveSessionIds` guard, `peersOf` on a cold
+fleet, and item 6's catch-up-on-launch note: *a check that judges change has to
+distinguish "not observed before" from "did not exist before."* Here it is unusually
+sharp, because the false-positive flood on day one is every hook the user has ever
+legitimately configured.
