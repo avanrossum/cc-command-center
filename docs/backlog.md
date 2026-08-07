@@ -858,51 +858,157 @@ messages in silence.
   work getting more expensive over time) are different questions. One producer with two
   rules, or two producers? If both, they will fire on the same session and duplicate.
 
-## 7. Dictation does nothing (diagnosed 2026-08-03, not fixed)
+## 7. Dictation does nothing (2026-08-03; diagnosis CORRECTED 2026-08-07)
 
 Pressing the system dictation key while focused in the composer or the terminal does
 nothing at all — no error, no indicator.
 
-**Almost certainly the missing microphone entitlement.** The build runs with
-`hardenedRuntime: true` (electron-builder.yml), and under hardened runtime an
-entitlement is what actually grants a capability. The signed app declares only three:
+> ### ⚠️ The original diagnosis in this item was WRONG. Do not act on it.
+>
+> It claimed the cause was the missing `com.apple.security.device.audio-input`
+> entitlement and that adding it was "the likely fix." Both halves are wrong, and the
+> proposed fix is a security regression in this app's current state. Corrected below.
+> Kept rather than deleted because the reasoning error is instructive: the entitlement
+> genuinely IS required for anything where the app opens the microphone, so the claim
+> was plausible — it just does not describe system dictation.
 
-    com.apple.security.cs.allow-jit
-    com.apple.security.cs.allow-unsigned-executable-memory
-    com.apple.security.cs.disable-library-validation
+**Why the entitlement is irrelevant to system dictation.** The app never opens the
+microphone. macOS captures and transcribes in its own processes:
 
-There is no `com.apple.security.device.audio-input`. Verified against the signed
-bundle with `codesign -d --entitlements -`, not just the source plist.
+- `/System/Library/Input Methods/DictationIM.app` (`com.apple.inputmethod.ironwood`) is
+  signed with `com.apple.private.tcc.allow` containing `kTCCServiceMicrophone`.
+- `CoreSpeech.framework/corespeechd` holds the same private grant plus
+  `com.apple.private.attribution.implicitly-assumed-identity` pointing at its own path.
+  The OS explicitly attributes the microphone use to `corespeechd`, not to the app.
+- Text arrives as **marked text over IMK / `NSTextInputClient`**
+  (`imkxpc_setMarkedText:selectionRange:replacementRange:validFlags:reply:`), not as
+  synthetic keystrokes and not through `getUserMedia`.
 
-Confusingly, `NSMicrophoneUsageDescription` IS present in Info.plist ("This app needs
-access to the microphone") — an Electron default. That is only the PROMPT TEXT. Without
-the entitlement the capability is denied before any prompt happens, which is exactly why
-the failure is silent rather than a refusal dialog.
+Supporting negative evidence: four days of `tccd` logs (785,048 lines) contain no denial
+naming `com.mipyip.cc-command-center` and no `requires entitlement …audio-input` line
+for it.
 
-**The likely fix**, in `build/entitlements.mac.plist`:
+**Also wrong: "no indicator" was never a symptom.** Both `DictationIM` and `corespeechd`
+hold `com.apple.private.audio.suppress-mic-indicator`. The orange dot is *supposed* to be
+absent during system dictation.
 
-```xml
-<key>com.apple.security.device.audio-input</key>
-<true/>
-```
+### The real cause is still not established
 
-Then rebuild and re-sign — the entitlement is baked at signing time, so this cannot be
-tested from a dev run against the installed app.
+Nobody has reproduced the failure under observation. Checked on this machine 2026-08-07:
 
-**Necessary, possibly not sufficient.** Two surfaces, and they are not the same problem:
+- ✅ **Key interceptors are not running.** BetterTouchTool, KeyboardCleanTool and
+  Keychron-Assistant are all installed but none were running. Not the cause.
+- ✅ **Secure input is held by `loginwindow` (pid 404)** — benign. Worth re-checking if
+  the symptom recurs, because any process calling `EnableSecureEventInput` disables
+  dictation system-wide and silently, and this app hosts PTYs where `sudo` / `ssh` /
+  `gpg` routinely take secure input. A child that dies without releasing it wedges the
+  whole system.
+- ⚠️ **`AppleSymbolicHotKeys` entry 164 reads `enabled = 0` with parameters
+  `(65535, 65535, 0)`** — 65535 means unassigned. **If 164 is the dictation binding, the
+  key is unbound and "nothing happens" is true in every application on this machine.**
+  Unconfirmed that 164 is dictation on macOS 26.
+- Untested: `DictationIMUseOnlyOfflineDictation = 0`, so dictation here may depend on
+  Apple's servers and a downloaded language asset — two more silent-failure paths.
 
-- **The composer** is a plain `<textarea>`. Once the microphone is permitted, dictation
-  should insert normally.
-- **The terminal** is xterm.js, which takes input through a hidden textarea and handles
-  IME/composition events itself. Dictation arrives as composition, not keystrokes, so it
-  may still not land even with the entitlement. Test the composer first to confirm the
-  entitlement was the blocker, then treat xterm as a separate question — the answer
-  there may be dictating into the composer and sending, rather than into the terminal.
+**Test the hotkey out of the loop first:** open the new-session modal, click into the
+initial-instructions textarea, and use **Edit ▸ Start Dictation…** from the menu bar.
+That tests the exact surface the feature request names, with no hotkey involved. Then
+repeat it in Linear.app or GitHub Desktop.app — both third-party, both hardened runtime,
+both without the entitlement. If it works there and not here, the problem is inside this
+app.
 
-**Worth being deliberate about:** this grants a signed, notarized, publicly distributed
-app access to the microphone. macOS will still ask for consent on first use, and the app
-never records anything itself — but it is a real capability expansion and should be
-stated in the release notes rather than slipped in.
+### 🚨 Precondition: do NOT add the microphone entitlement yet
+
+This applies to *any* path where the app captures audio itself, so it gates the whole
+feature and not just the discarded fix.
+
+- The app registers **no `setPermissionRequestHandler` and no
+  `setPermissionCheckHandler`**, and has **no CSP anywhere**. Electron's documented
+  default with no handler is to **grant every permission request silently**.
+- The app renders model- and agent-produced HTML through `dangerouslySetInnerHTML`
+  (`App.tsx:4069, 4078, 4088`), DOMPurify-sanitized.
+- Today that combination is inert only because macOS denies the microphone at the process
+  level. Adding the entitlement converts a sanitizer bypass into a silent hot mic with no
+  indicator.
+- `electron-builder.yml` points `entitlements` and `entitlementsInherit` at the same
+  plist, so the grant reaches the Renderer, GPU and Plugin helpers too — and the Renderer
+  helper is what hosts the sandboxed HTML artifact previews.
+
+**Order of operations: deny-by-default permission handler + CSP first, entitlement
+second.** Also author a real `NSMicrophoneUsageDescription` (currently Electron's generic
+default) and strip the unused `NSCameraUsageDescription` / Bluetooth keys. If anything
+touches the Speech framework, add `NSSpeechRecognitionUsageDescription` — a missing usage
+string does not fail quietly, TCC terminates the process
+(`__TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__`), and it only reproduces in packaged builds.
+
+### Test `/voice` before building anything
+
+Claude Code **2.1.224 (installed) ships `/voice`** — confirmed by `strings` on the binary
+(`/voice`, `Voice mode`, `dictation`). It streams to Anthropic, is tuned for coding
+vocabulary, and inserts straight into the Ink prompt: no xterm textarea, no IME, no
+`injectPrompt`. **If it works inside a CCCC session, surface 3 (the terminal) is already
+solved** and the remaining scope is just the two textareas.
+
+Three CCCC-specific interactions to check while testing it:
+- The footer hint is suppressed by any custom statusline, and CCCC injects one into every
+  spawned session (`index.ts:654-656`).
+- Voice is documented as unavailable when Claude Code uses an API key directly — which is
+  exactly what per-session `apiKeyHelper` billing does (`index.ts:640-666`).
+- Hold-mode detects key-repeat from the terminal, which may interact with the kitty
+  protocol CCCC enables (`index.ts:1781-1786`). Tap mode has no key-repeat dependency.
+
+### If an owned voice path is built, use Apple's, not Whisper
+
+The architectural argument for owning the text holds: `injectPrompt`
+(`index.ts:3268-3277`, bracketed paste + delayed CR) and `term:input`
+(`index.ts:3528-3533`, raw write, no CR) both run in **main**, never touch the DOM, and
+never need focus. xterm is on the input path only via `Terminal.tsx:122`. So a string the
+app already holds reaches Claude by a route xterm is not on, and the hard surface becomes
+the easy one.
+
+Three limits on that:
+- Owning the text does **nothing** about capture. `getUserMedia` still needs the
+  entitlement, so this is a strict superset of the entitlement work, not an alternative.
+- It is **not** "zero new IPC" — audio APIs live in the renderer, a native engine lives in
+  main, and a WASM engine would need a protocol handler to read weights out of
+  `Contents/Resources` (Chromium blocks `fetch` on `file://`).
+- It **does not reach adopted / monitor-only sessions** at all. `session:send` returns
+  `{ ok: false, reason: 'monitor-only' }` (`index.ts:4785-4786`); `term:input` no-ops
+  silently. Adopting external sessions is a headline capability, so this is a real gap.
+
+**Prefer `DictationTranscriber`** (macOS 26+, `.shortDictation` preset, with
+`.customizedLanguage(modelConfiguration:)` for a code-vocabulary hint): capture in the
+renderer, resample to mono/16 kHz/Int16 via `AudioWorklet`, pipe PCM over stdin to a small
+Swift helper (a probe compiled at ~62 KB linking only OS dylibs). No weights to bundle,
+license or mirror; no DMG growth; no deployment-target trap; no hallucination-on-silence
+gate; Apple maintains the model. The signed-nested-helper precedent already exists —
+node-pty's `spawn-helper` ships in Resources correctly signed.
+
+Gate it on macOS 26 and do not offer it below. **Do not build an `SFSpeechRecognizer`
+fallback ladder:** `supportsOnDeviceRecognition` is declared
+`API_AVAILABLE(ios(13), tvos(18))` with no macOS entry; setting
+`requiresOnDeviceRecognition = true` fails rather than degrading, and leaving it off ships
+audio to Apple.
+
+**Choose Whisper only if macOS 12–25 coverage AND guaranteed-offline are both required.**
+That pairing is the only thing it buys. Costs: whisper.cpp and OpenAI's weights are both
+MIT (clean for closed-source redistribution, with an attribution notice this app has no
+surface for yet), but `onnx-community/whisper-*` declares **no license** — avoid. Weights
+run 57 MB (`base.en-q5_1`) to 1549 MB (`large-v3-turbo`), with Core ML encoders *additive*
+on top and a first-run ANE compile the user experiences as a hang. Downloading weights on
+first use sidesteps both the DMG growth and the redistribution question. Anything compiled
+must be checked with `vtool -show-build-version` for `minos ≤ 12.0` — a plain CMake build
+on a macOS 26 machine stamps `minos 26.x` and refuses to launch for every user below 26.
+
+### Related latent bug, independent of this decision
+
+`session:send` hard-refuses when `t.draft > 0` (`index.ts:4787`), and `term.draft` is
+approximate — derived only from bytes arriving through `term:input`. Claude Code's
+`/voice` breaks it in both directions: dictated text the child inserts never increments
+`draft`, so a trailing CR would submit the user's in-progress draft; and hold-mode warmup
+spaces do increment it and are removed internally without backspace bytes, so `draft`
+sticks above zero and blocks delivery until Enter or Esc. **This is live today for any
+user who runs `/voice` inside CCCC**, regardless of what gets built here.
 
 ## 8. Hook drift check — flag hooks in `~/.claude/settings.json` the app didn't write (2026-08-07)
 
