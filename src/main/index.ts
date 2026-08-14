@@ -3777,6 +3777,75 @@ function persistBounds(): void {
   }
 }
 
+// Deny-by-default permission gate for the renderer.
+//
+// Electron's default WITH NO HANDLER INSTALLED is to GRANT every permission a page
+// asks for, silently. That has been survivable only because the app holds no
+// capability worth taking: macOS itself refuses the microphone, because the bundle
+// carries no com.apple.security.device.audio-input entitlement (docs/backlog.md
+// item 7). The renderer DOES render agent-produced content as HTML — three
+// dangerouslySetInnerHTML sites in the artifact drawer, covering markdown, RTF and
+// syntax-highlighted code — so the day that entitlement is added for dictation, the
+// default would turn a sanitizer bypass into a silent hot mic with no recording
+// indicator. The gate goes in FIRST; the entitlement comes second, if ever.
+//
+// Note what the origin check can and cannot do. Injected content lives INSIDE the
+// app's own document, so it shares the origin and no origin test will separate it
+// from real app code. The origin check only rejects some OTHER frame or window
+// asking. The actual defense is the allowlist holding nothing dangerous, plus the
+// CSP injected at build time (electron.vite.config.ts).
+const ALLOWED_PERMISSIONS = new Set<string>([
+  // navigator.clipboard.writeText — the digest item "copy" button (App.tsx:3633)
+  // and copy-terminal-output (App.tsx:4879). Write-only and sanitized by Chromium;
+  // the app never READS the clipboard from the renderer, so 'clipboard-read' stays
+  // denied. Ordinary Cmd+V paste is an input event rather than a permission, and is
+  // unaffected by any of this.
+  'clipboard-sanitized-write',
+])
+
+// True only for the app's own renderer: the packaged file:// document, or the Vite
+// dev server when running under `npm run dev`.
+function isOwnOrigin(url: string): boolean {
+  if (!url) return false
+  const dev = process.env.ELECTRON_RENDERER_URL
+  if (dev) {
+    try {
+      return new URL(url).origin === new URL(dev).origin
+    } catch {
+      return false
+    }
+  }
+  return url.startsWith('file://')
+}
+
+function lockDownPermissions(): void {
+  const ses = session.defaultSession
+  const allow = (permission: string, url: string): boolean =>
+    isOwnOrigin(url) && ALLOWED_PERMISSIONS.has(permission)
+
+  ses.setPermissionRequestHandler((wc, permission, callback, details) => {
+    const url = details?.requestingUrl || wc?.getURL() || ''
+    const granted = allow(permission, url)
+    // Log denials. A silently refused permission is indistinguishable from a broken
+    // feature, and a handler like this one gets blamed last.
+    if (!granted) {
+      console.warn(`[security] denied permission "${permission}" from ${url || 'unknown origin'}`)
+    }
+    callback(granted)
+  })
+
+  // The synchronous counterpart, consulted by navigator.permissions.query and by
+  // device enumeration. It must agree with the handler above, or a capability reads
+  // as available and then fails at the point of use.
+  ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) =>
+    allow(permission, requestingOrigin || ''),
+  )
+
+  // WebUSB / Web Serial / WebHID / Web Bluetooth device pickers. Nothing in this app
+  // talks to hardware, so there is no version of that request worth honouring.
+  ses.setDevicePermissionHandler(() => false)
+}
+
 function createWindow(): void {
   const b = savedBounds()
   win = new BrowserWindow({
@@ -5279,6 +5348,7 @@ app.whenReady().then(() => {
   syncStatusHooksFlag() // flag mirrors what's ACTUALLY in ~/.claude/settings.json
   migrateMailRuleAtStartup() // one-time Write()→mail-scoped-Edit() rewrite for old grants
   maybeSeed()
+  lockDownPermissions() // must precede any window; Electron's no-handler default GRANTS
   createWindow()
   initUpdater(() => win) // auto-update: first check ~8s after launch, then daily
   pollTimer = setInterval(pushSessions, 1500)
