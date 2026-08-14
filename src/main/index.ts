@@ -8,6 +8,7 @@ import {
   shell,
   safeStorage,
   screen,
+  session,
 } from 'electron'
 import { join, isAbsolute, dirname, extname, basename } from 'node:path'
 import os from 'node:os'
