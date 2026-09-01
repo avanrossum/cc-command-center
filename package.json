@@ -11,8 +11,8 @@
     "dev": "electron-vite dev",
     "prebuild": "node scripts/gen-version.mjs",
     "build": "electron-vite build",
-    "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder",
+    "pack": "npm run build && npm run build:speech && electron-builder --dir",
+    "dist": "npm run build && npm run build:speech && electron-builder",
     "preview": "electron-vite preview",
     "probe": "tsx scripts/engine-probe.ts",
     "pretypecheck": "node scripts/gen-version.mjs",
@@ -22,7 +22,8 @@
     "fresh": "CCC_USERDATA=\"$HOME/.cccc-shoot\" CCC_MAIL_DIR=\"$HOME/.cccc-shoot/mail\" CCC_SCAN_ONLY=\"$HOME/demo-shoot\" electron-vite dev",
     "mail-probe": "tsx scripts/mail-probe.ts",
     "bump:beta": "node scripts/bump.mjs beta",
-    "bump:promote": "node scripts/bump.mjs promote"
+    "bump:promote": "node scripts/bump.mjs promote",
+    "build:speech": "node scripts/build-speech.mjs"
   },
   "devDependencies": {
     "@electron/rebuild": "4.1.0",

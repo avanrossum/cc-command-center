@@ -36,6 +36,15 @@ files:
 extraResources:
   - from: resources/icon.png
     to: icon.png
+  # The on-device speech helper (see native/ccc-speech). Built by
+  # scripts/build-speech.mjs before packaging; @electron/osx-sign walks Contents/
+  # and signs it with the rest of the bundle, so it needs no separate step.
+  # Optional: if the build machine has no Swift toolchain the file is absent and
+  # the Apple engine reports itself unavailable at runtime.
+  - from: native/ccc-speech/ccc-speech
+    to: ccc-speech
+    # Do not fail packaging when the helper was not built.
+    filter: ["**/*"]
 
 # Native .node addons must live outside the asar so they can be dlopen'd.
 asarUnpack:
@@ -60,6 +69,18 @@ mac:
   entitlementsInherit: build/entitlements.mac.plist
   # Notarize via APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID (env).
   notarize: true
+  extendInfo:
+    # Electron ships a generic default ("This app needs access to the microphone"),
+    # which is what the user reads in the consent dialog. Say what it is actually for.
+    NSMicrophoneUsageDescription: >-
+      CC Command Center uses the microphone only while you hold the dictation
+      button, to turn speech into text for the session you are typing into.
+      Audio is transcribed on this Mac and is never uploaded.
+    # Required if anything touches the Speech framework. A MISSING usage string does
+    # not fail quietly — TCC terminates the process
+    # (__TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__), and only in packaged builds.
+    NSSpeechRecognitionUsageDescription: >-
+      Speech recognition runs on this Mac to convert your dictation into text.
 
 dmg:
   title: ${productName}

@@ -3843,12 +3843,20 @@ function isOwnOrigin(url: string): boolean {
 
 function lockDownPermissions(): void {
   const ses = session.defaultSession
-  const allow = (permission: string, url: string): boolean =>
-    isOwnOrigin(url) && ALLOWED_PERMISSIONS.has(permission)
+  // Electron folds microphone and camera into a single 'media' permission, so the
+  // name alone cannot express "mic yes, camera never". Decide on the REQUESTED
+  // media types instead, and require every one of them to be audio — a request for
+  // {audio, video} is a camera request wearing a microphone as a hat.
+  const allow = (permission: string, url: string, kinds: string[]): boolean => {
+    if (!isOwnOrigin(url)) return false
+    if (permission === 'media') return kinds.length > 0 && kinds.every((k) => k === 'audio')
+    return ALLOWED_PERMISSIONS.has(permission)
+  }
 
   ses.setPermissionRequestHandler((wc, permission, callback, details) => {
     const url = details?.requestingUrl || wc?.getURL() || ''
-    const granted = allow(permission, url)
+    const kinds = (details as { mediaTypes?: string[] } | undefined)?.mediaTypes ?? []
+    const granted = allow(permission, url, kinds)
     // Log denials. A silently refused permission is indistinguishable from a broken
     // feature, and a handler like this one gets blamed last.
     if (!granted) {
@@ -3860,9 +3868,15 @@ function lockDownPermissions(): void {
   // The synchronous counterpart, consulted by navigator.permissions.query and by
   // device enumeration. It must agree with the handler above, or a capability reads
   // as available and then fails at the point of use.
-  ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) =>
-    allow(permission, requestingOrigin || ''),
-  )
+  ses.setPermissionCheckHandler((_wc, permission, requestingOrigin, details) => {
+    // The check handler reports ONE media type where the request handler reports a
+    // list; normalise so both sides answer identically. 'unknown' stays denied —
+    // a capability that reads as available and then fails at use is worse than one
+    // that reads as unavailable.
+    const one = (details as { mediaType?: string } | undefined)?.mediaType
+    const kinds = one && one !== 'unknown' ? [one] : []
+    return allow(permission, requestingOrigin || '', kinds)
+  })
 
   // WebUSB / Web Serial / WebHID / Web Bluetooth device pickers. Nothing in this app
   // talks to hardware, so there is no version of that request worth honouring.

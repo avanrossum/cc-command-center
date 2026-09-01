@@ -11,5 +11,22 @@
     <!-- Allow loading dylibs not signed by Apple (better-sqlite3, node-pty) -->
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <!--
+      Microphone, for voice input (the Start/Stop dictation control).
+
+      ORDER MATTERS, and this entitlement was deliberately NOT added until the
+      renderer had a permission gate. Electron's default with no handler installed
+      is to GRANT every permission request silently, and the renderer displays
+      agent-produced HTML through dangerouslySetInnerHTML. Without the gate this
+      key turns a sanitizer bypass into a silent hot mic. See lockDownPermissions()
+      in src/main/index.ts, which denies everything except an explicit allowlist,
+      and the build-time CSP in electron.vite.config.ts.
+
+      Note entitlementsInherit points at this same file, so the grant also reaches
+      the Renderer/GPU/Plugin helpers. That is required — Chromium's audio service
+      runs in a helper — and it is precisely why the gate has to carry the weight.
+    -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
 </dict>
 </plist>
