@@ -7,6 +7,7 @@ import {
   useState,
   type CSSProperties,
   type ReactNode,
+  type MouseEvent as ReactMouseEvent,
 } from 'react'
 import { insertablePath } from './util'
 import { TerminalView } from './Terminal'
@@ -2418,7 +2419,7 @@ function SettingsModal({
     } else showFlash(`couldn’t store: ${r.reason}`)
   }
   return (
-    <div className="spawnscrim" onClick={close}>
+    <div className="spawnscrim" {...scrimClose(close)}>
       <div className="spawnmodal settings-modal" onClick={(e) => e.stopPropagation()}>
         <div className="spawntitle">Settings</div>
         <div className="settabs">
@@ -3196,8 +3197,14 @@ function SpawnComposer({
     )
     setSpawn(null)
   }
+  const closeSpawn = (): void => {
+    // The handoff note is the whole point of this dialog and is not recoverable.
+    if (spawn.note.trim() && !window.confirm('Discard this spawn? The handoff note will be lost.'))
+      return
+    setSpawn(null)
+  }
   return (
-    <div className="spawnscrim" onClick={() => setSpawn(null)}>
+    <div className="spawnscrim" {...scrimClose(closeSpawn)}>
       <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
         <div className="spawntitle">Spawn {isBlocking ? 'blocking child' : 'tangential offshoot'}</div>
         <div className="spawnsub">
@@ -3448,7 +3455,7 @@ function ArchiveModal({
   )
   const when = (t: number) => (t ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'unknown')
   return (
-    <div className="spawnscrim" onClick={close}>
+    <div className="spawnscrim" {...scrimClose(close)}>
       <div className="spawnmodal arcmodal" onClick={(e) => e.stopPropagation()}>
         <div className="spawntitle">
           Archived sessions {rows && <span className="msgbadge">{rows.length}</span>}
@@ -4731,6 +4738,35 @@ function ResumeParamsComposer({
   )
 }
 
+// A click-away scrim that closes only when the interaction BOTH started and ended on
+// the scrim itself.
+//
+// Without the mousedown half, `click` fires on the common ancestor of mousedown and
+// mouseup — so dragging inside the dialog and releasing outside it (resizing the
+// instructions textarea by its corner grip, or swiping a text selection past the edge)
+// lands the click on the scrim and throws the dialog away mid-edit. That is a real way
+// to lose several paragraphs, and it looks like the app closing at random.
+//
+// Deliberately NOT a hook. Several of these scrims sit after an early return in their
+// component, where a conditional hook call would break the rules of hooks. Parking the
+// one bit of state on the scrim element itself keeps it callable from anywhere.
+function scrimClose(onClose: () => void): {
+  onMouseDown: (e: ReactMouseEvent) => void
+  onClick: (e: ReactMouseEvent) => void
+} {
+  return {
+    onMouseDown: (e) => {
+      ;(e.currentTarget as HTMLElement).dataset.scrimDown = String(e.target === e.currentTarget)
+    },
+    onClick: (e) => {
+      const el = e.currentTarget as HTMLElement
+      const ok = e.target === e.currentTarget && el.dataset.scrimDown === 'true'
+      el.dataset.scrimDown = 'false'
+      if (ok) onClose()
+    },
+  }
+}
+
 function NewSessionComposer({
   categories,
   defaultCat,
@@ -4773,6 +4809,14 @@ function NewSessionComposer({
   // do ultracode never leaks a flag the CLI would silently ignore.
   const { ctxOk, effortVal } = launchDerived(model, customModel, effort)
   const [remember, setRemember] = useState(lastResumeSticky)
+  // Anything TYPED here is unrecoverable once the dialog closes — the pickers all
+  // restore from last-used, but these do not.
+  const dirty = !!(name.trim() || instructions.trim() || flags.trim() || customModel.trim())
+  const tryClose = (): void => {
+    if (dirty && !window.confirm('Discard this new session? What you typed will be lost.')) return
+    close()
+  }
+  const scrim = scrimClose(tryClose)
   const pick = async () => {
     const p = await window.cc.pickFolder()
     if (p) setCwd(p)
@@ -4819,7 +4863,7 @@ function NewSessionComposer({
   }
   const shortCwd = home && cwd.startsWith(home) ? cwd.replace(home, '~') : cwd
   return (
-    <div className="spawnscrim" onClick={close}>
+    <div className="spawnscrim" {...scrim}>
       {/* Wider, two-column layout: this form has many more fields than the other
           modals, and one-per-row made it taller than short viewports. Pairing the
           short fields keeps everything on one page without scrolling. */}
@@ -4935,7 +4979,7 @@ function NewSessionComposer({
         />
 
         <div className="spawnactions">
-          <button className="rbtn" onClick={close}>
+          <button className="rbtn" onClick={tryClose}>
             Cancel
           </button>
           <button className="rbtn primary" onClick={create} disabled={!cwd}>
@@ -5098,7 +5142,7 @@ function MessageLog({
 
   const live = sessions.filter((s) => s.sessionId && !s.dormant)
   return (
-    <div className="spawnscrim" onClick={close}>
+    <div className="spawnscrim" {...scrimClose(close)}>
       <div className="spawnmodal msglog" onClick={(e) => e.stopPropagation()}>
         <div className="msgloghead">
           <div>
@@ -5347,7 +5391,7 @@ function SendComposer({
   // origin first, then the other managed sessions you could also fan out to
   const list = [origin, ...managed.filter((m) => m.sessionId !== origin.sessionId)]
   return (
-    <div className="spawnscrim" onClick={close}>
+    <div className="spawnscrim" {...scrimClose(close)}>
       <div className="spawnmodal" onClick={(e) => e.stopPropagation()}>
         <div className="spawntitle">Send a prompt</div>
         <div className="spawnsub">
