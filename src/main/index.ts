@@ -141,6 +141,8 @@ import {
   getOpenMessages,
   getSpooledPaths,
   pruneMessages,
+  archiveNodes,
+  unarchiveNode,
   type Category,
   type Edge,
   type OpenGate,
@@ -1191,10 +1193,18 @@ function snapshot(): Snapshot {
     console.error('[main] arbiter scheduling failed', err)
   }
 
+  // Soft-archived sessions are hidden HERE rather than at each producer. The live
+  // scan, the dormant sweep and utility terminals all funnel into `enriched`, so one
+  // filter at the join cannot drift out of step the way three separate ones would.
+  const archivedIds = new Set<string>()
+  for (const [sid, n] of nodes) if (n.archived_at) archivedIds.add(sid)
+
   return {
     home: os.homedir(),
     scannedAt: Date.now(),
-    sessions: enriched.map((e) => (unhandled.has(e.sessionId) ? { ...e, unhandled: true } : e)),
+    sessions: enriched
+      .filter((e) => !archivedIds.has(e.sessionId))
+      .map((e) => (unhandled.has(e.sessionId) ? { ...e, unhandled: true } : e)),
     categories: cats,
     edges,
     messages: messageLogEntries(),
@@ -1583,7 +1593,7 @@ export interface ArchivedSession {
   lastSeen: number
   categoryId: number | null
   // Why it is not in the sidebar. Ordered by how likely you are to want it back.
-  reason: 'removed' | 'aged-out' | 'unfiled'
+  reason: 'removed' | 'aged-out' | 'unfiled' | 'archived'
 }
 
 function listArchivedSessions(): ArchivedSession[] {
@@ -1607,7 +1617,10 @@ function listArchivedSessions(): ArchivedSession[] {
       // registry that surfaced this — they are not history, they are debris.
       if (known.size > 0 && !known.has(sid)) continue
       let reason: ArchivedSession['reason']
-      if (removed.has(sid)) reason = 'removed'
+      // Checked first: an explicit archive is a decision the user made, and it must
+      // not be reported as "unfiled" just because it also happens to have no category.
+      if (node.archived_at) reason = 'archived'
+      else if (removed.has(sid)) reason = 'removed'
       else if (node.category_id == null && !edgeIds.has(sid)) reason = 'unfiled'
       else {
         const deliberate = !!names[sid] || edgeIds.has(sid)
@@ -4949,6 +4962,7 @@ ipcMain.handle('archive:restore', (_e, sessionId: string, categoryId: number | n
   try {
     const set = getRemovedSet()
     if (set.delete(sessionId)) setAppState('removedSessions', JSON.stringify([...set]))
+    unarchiveNode(sessionId) // clears a soft archive; a no-op for the other reasons
     assignCategory(sessionId, categoryId)
     touchNode(sessionId)
     pushSessions()
@@ -5232,6 +5246,54 @@ ipcMain.handle('session:remove', (_e, sessionId: string) => {
   const ids = removeSessionsHard([sessionId, ...descendantsOf(sessionId)])
   pushSessions()
   return { removed: ids }
+})
+
+// ---- bulk cleanup ----
+//
+// Headless tooling (The Adversary and friends) mints a fresh session per run, so a
+// sidebar accrues dozens of near-identical dead rows and the only fast way to clear
+// them was the permanent one. These two are the bulk verbs.
+
+// The default. Reversible: node, name, category and edges all survive, and Restore
+// from the archive is one write. A managed terminal is killed first — a row that
+// keeps running after you archived it is the wrong answer to "get this out of my
+// way" — but nothing on disk is touched, so the session is still resumable later.
+ipcMain.handle('session:archiveMany', (_e, ids: string[]) => {
+  if (!Array.isArray(ids) || !ids.length) return { archived: 0 }
+  const wanted = [...new Set(ids.filter((x): x is string => typeof x === 'string' && !!x))]
+  for (const id of wanted) {
+    const t = findManagedTerm(id)
+    if (t) {
+      appHandledKills.add(t.key) // deliberate — don't let onExit remove it as a crash
+      try {
+        t.pty.kill()
+      } catch {
+        /* already gone */
+      }
+      terminals.delete(t.key)
+      if (attachedKey === t.key) attachedKey = null
+    }
+    if (attachedKey === id) attachedKey = null
+  }
+  const archived = archiveNodes(wanted, Date.now())
+  pushSessions()
+  return { archived }
+})
+
+// The permanent one, for debris you never want to see again. Same semantics as the
+// single-session remove, including taking descendants with it, so a bulk remove
+// cannot leave a child stranded with a parent that no longer exists.
+ipcMain.handle('session:removeMany', (_e, ids: string[]) => {
+  if (!Array.isArray(ids) || !ids.length) return { removed: [] as string[] }
+  const all = new Set<string>()
+  for (const id of ids) {
+    if (typeof id !== 'string' || !id) continue
+    all.add(id)
+    for (const d of descendantsOf(id)) all.add(d)
+  }
+  const removed = removeSessionsHard([...all])
+  pushSessions()
+  return { removed }
 })
 // Workspace state (last-active session for restore-on-launch, etc.)
 ipcMain.handle('state:get', (_e, key: string) => getAppState(key))

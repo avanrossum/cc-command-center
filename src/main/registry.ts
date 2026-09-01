@@ -37,6 +37,9 @@ export interface NodeRow {
   first_seen: number
   last_seen: number
   theme: string | null
+  // Set → the session is soft-archived: hidden from the sidebar, still fully intact
+  // and restorable. Distinct from removal, which deletes the node.
+  archived_at?: number | null
   // Scrollback is stored but intentionally NOT loaded by getNodeMap (it is large
   // and the scan runs every ~1.5s); fetch it on demand with getScrollback.
   scrollback?: string | null
@@ -349,6 +352,15 @@ export function initRegistry(dbPath: string): void {
       );
     `)
     db.pragma('user_version = 17')
+  }
+  if (v < 18) {
+    // Soft archive. Removal deletes the node outright, which is correct for debris but
+    // wrong for "just get this out of my sidebar" — and there was no third option, so
+    // the only fast way to clear a pile-up was the permanent one. archived_at keeps the
+    // node, its name, its category and its edges intact while hiding it from the rail,
+    // which makes restoring one write with nothing to re-decide.
+    db.exec(`ALTER TABLE node ADD COLUMN archived_at INTEGER`)
+    db.pragma('user_version = 18')
   }
 }
 
@@ -772,13 +784,38 @@ export function getNodeMap(): Map<string, NodeRow> {
   const rows = must()
     .prepare(
       `SELECT session_id, cwd, name, category_id, origin, first_seen, last_seen, theme,
-              resume_flags, resume_flags_sticky, alias
+              resume_flags, resume_flags_sticky, alias, archived_at
        FROM node`,
     )
     .all() as NodeRow[]
   const m = new Map<string, NodeRow>()
   for (const r of rows) m.set(r.session_id, r)
   return m
+}
+
+// ---------- soft archive ----------
+
+// Hide sessions from the sidebar without destroying them. Everything the user decided
+// — name, category, edges, grants, remembered launch flags — stays put, so restoring
+// is a single write rather than a set of decisions to make again.
+//
+// Contrast removeSessionsHard (index.ts), which deletes the node, purges the session
+// files and denylists the id. That is right for debris and wrong for a pile-up you
+// merely want out of the way, which is why this exists as a separate verb.
+export function archiveNodes(ids: string[], at: number): number {
+  if (!ids.length) return 0
+  const db = must()
+  const stmt = db.prepare(`UPDATE node SET archived_at = ? WHERE session_id = ?`)
+  const run = db.transaction((list: string[]) => {
+    let n = 0
+    for (const id of list) n += stmt.run(at, id).changes
+    return n
+  })
+  return run(ids)
+}
+
+export function unarchiveNode(id: string): void {
+  must().prepare(`UPDATE node SET archived_at = NULL WHERE session_id = ?`).run(id)
 }
 
 // ---------- gate ledger: the "did I handle that?" memory ----------
