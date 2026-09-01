@@ -17,6 +17,7 @@ import { highlightCode } from './highlight'
 import { renderMarkdown } from './markdown'
 import { rtfToHtml } from './rtf'
 import { OverviewGrid, type OverviewSession } from './Overview'
+import { VoiceButton } from './Voice'
 
 type CoarseState = 'working' | 'waiting' | 'idle' | 'unknown'
 // 'blocked' and 'permission' are DERIVED display states, not coarse engine states.
@@ -594,6 +595,17 @@ export function App() {
   }
   useEffect(refreshArchiveCount, [])
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Whether a usable engine (and, for Whisper, a model) is configured. Re-read when
+  // the settings modal closes, so downloading a model lights the buttons up without
+  // a restart.
+  const [voiceReady, setVoiceReady] = useState(false)
+  useEffect(() => {
+    if (settingsOpen) return
+    void window.cc.voiceState().then((v) => {
+      const engine = v.engines.find((e) => e.kind === (v.engine || v.engines.find((x) => x.available)?.kind))
+      setVoiceReady(!!engine?.available && (!engine.needsModel || !!v.modelPath))
+    })
+  }, [settingsOpen])
   // Auto-update UI. `updateAvail` drives the "an update is available" modal;
   // `postUpdate` drives the one-time "you've been updated" modal on first launch
   // after an install. Download progress and terminal states feed the former.
@@ -1794,6 +1806,17 @@ export function App() {
                   ) : null
                 })()}
                 <span className="grow" />
+                <VoiceButton
+                  ready={voiceReady}
+                  onNeedsSetup={() => setSettingsOpen(true)}
+                  title="Dictate into this session — the text is inserted, not sent"
+                  onText={(t) => {
+                    // term:input is a raw write with NO carriage return, so the words
+                    // land in Claude's prompt and you press Enter yourself. Speech
+                    // recognition misfires, and an auto-sent wrong prompt costs a turn.
+                    if (selected) window.cc.termInput(selected.key, t)
+                  }}
+                />
                 <ThemePicker current={selThemeName} onPick={pickTheme} />
                 <button className="tclose" onClick={closeTerminal} title="Close terminal">
                   ✕
@@ -2274,6 +2297,11 @@ export function App() {
           lastResumeSticky={snap.settings?.lastResumeSticky ?? false}
           apiKeys={snap.apiKeys ?? []}
           close={() => setNewSessionOpen(false)}
+          voiceReady={voiceReady}
+          onNeedsSetup={() => {
+            setNewSessionOpen(false)
+            setSettingsOpen(true)
+          }}
         />
       )}
       {resumeGate && (
@@ -2369,6 +2397,175 @@ export function App() {
 
 // Settings menu. Backed by app_state via settingsSet; the mail-permission grant
 // edits ~/.claude/settings.json (see main). Grows as more settings are added.
+// Voice engines and models.
+//
+// Nothing here is bundled. Apple's engine is whatever the OS already has; Whisper is
+// whatever the user installed; models are downloaded on request or linked from where
+// they already sit. The pane's job is to make that state legible — which engine will
+// actually be used, and why the other one will not.
+function VoiceSettings(): React.ReactElement {
+  type State = Awaited<ReturnType<typeof window.cc.voiceState>>
+  const [st, setSt] = useState<State | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [pct, setPct] = useState(0)
+  // Local rather than the app-wide flash: this pane is inside a modal, and a toast
+  // behind it is a message nobody reads.
+  const [err, setErr] = useState<string | null>(null)
+
+  const refresh = (): void => {
+    void window.cc.voiceState().then(setSt)
+  }
+  useEffect(refresh, [])
+  useEffect(
+    () =>
+      window.cc.onVoiceProgress((p) => {
+        if (p.done) {
+          setBusy(null)
+          setPct(0)
+          refresh()
+          return
+        }
+        setPct(p.total ? Math.round((p.received / p.total) * 100) : 0)
+      }),
+    [],
+  )
+
+  if (!st) return <div className="setrow">loading voice settings…</div>
+
+  const apple = st.engines.find((e) => e.kind === 'apple')
+  const whisper = st.engines.find((e) => e.kind === 'whisper')
+  // '' means the user has not chosen; fall back to whatever actually works so the
+  // pane shows the engine that WILL be used rather than an empty box.
+  const active = st.engine || st.engines.find((e) => e.available)?.kind || ''
+  const set = (k: string, v: string): void => {
+    void window.cc.voiceSet(k, v).then(refresh)
+  }
+
+  return (
+    <>
+      <div className="setrow">
+        <span>
+          <b>Voice engine</b>
+          <span className="setsub">
+            Used by the dictate buttons. Your keyboard’s dictation key still works
+            anywhere and needs none of this — it is Apple’s older engine, and it is
+            noticeably weaker on identifiers, paths and CLI flags.
+          </span>
+        </span>
+        <select
+          className="cat-in setnarrow"
+          value={active}
+          onChange={(e) => set('voiceEngine', e.target.value)}
+        >
+          {st.engines.map((e) => (
+            <option key={e.kind} value={e.kind} disabled={!e.available}>
+              {e.label}
+              {e.available ? '' : ' — unavailable'}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="setrow">
+        <span>
+          <span className="setsub">
+            <b>Apple:</b> {apple?.available ? `ready — ${apple.detail}` : (apple?.detail ?? 'unavailable')}
+            <br />
+            <b>Whisper:</b>{' '}
+            {whisper?.available ? (
+              whisper.detail
+            ) : (
+              <>
+                not found. Install it with <code>brew install whisper-cpp</code>, then reopen this
+                pane.
+              </>
+            )}
+          </span>
+        </span>
+        <button className="rbtn" onClick={refresh}>
+          Re-scan
+        </button>
+      </div>
+
+      <div className="setrow vmodels">
+        <span>
+          <b>Whisper models</b>
+          <span className="setsub">
+            Only needed for the Whisper engine. Nothing is bundled — models are large
+            and their licensing is a moving target, so they are downloaded here or
+            linked from wherever you already keep them.
+          </span>
+          <div className="vmodel-list">
+            {st.models.map((m) => {
+              const chosen = st.modelPath === m.path
+              return (
+                <div key={m.path} className={`vmodel${chosen ? ' on' : ''}`}>
+                  <button
+                    className="vmodel-pick"
+                    disabled={!m.installed}
+                    onClick={() => set('voiceModelPath', m.path)}
+                    title={m.installed ? 'Use this model' : 'Download it first'}
+                  >
+                    {chosen ? '◉' : m.installed ? '○' : '·'} {m.label}
+                  </button>
+                  <span className="vmodel-size">{m.sizeMb} MB</span>
+                  {m.note && <span className="vmodel-note">{m.note}</span>}
+                  {m.installed ? (
+                    m.url ? (
+                      <button
+                        className="vmodel-act"
+                        onClick={async () => {
+                          if (!window.confirm(`Delete ${m.label}? You can download it again.`)) return
+                          await window.cc.voiceRemoveModel(m.path)
+                          refresh()
+                        }}
+                      >
+                        delete
+                      </button>
+                    ) : (
+                      <span className="vmodel-act dim">linked</span>
+                    )
+                  ) : (
+                    <button
+                      className="vmodel-act"
+                      disabled={!!busy}
+                      onClick={async () => {
+                        setBusy(m.id)
+                        setErr(null)
+                        const r = await window.cc.voiceDownload(m.id)
+                        if (!r.ok) setErr(`download failed: ${r.error ?? 'unknown'}`)
+                      }}
+                    >
+                      {busy === m.id ? `${pct}%` : 'download'}
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </span>
+        <div className="vmodel-side">
+          {err && <span className="vmodel-err">{err}</span>}
+          <button
+            className="rbtn"
+            onClick={async () => {
+              const r = await window.cc.voiceLinkModel()
+              if (r.ok) refresh()
+            }}
+          >
+            Use a local model…
+          </button>
+          {busy && (
+            <button className="rbtn" onClick={() => void window.cc.voiceCancelDownload()}>
+              Cancel
+            </button>
+          )}
+        </div>
+      </div>
+    </>
+  )
+}
+
 function SettingsModal({
   settings,
   apiKeys,
@@ -2498,6 +2695,8 @@ function SettingsModal({
             ))}
           </select>
         </div>
+
+        <VoiceSettings />
 
         <div className="setrow">
           <span>
@@ -4779,6 +4978,8 @@ function NewSessionComposer({
   lastResumeSticky,
   apiKeys,
   close,
+  voiceReady,
+  onNeedsSetup,
 }: {
   categories: Category[]
   defaultCat: number | null
@@ -4791,6 +4992,8 @@ function NewSessionComposer({
   lastResumeSticky: boolean
   apiKeys: ApiKey[]
   close: () => void
+  voiceReady: boolean
+  onNeedsSetup: () => void
 }) {
   const [name, setName] = useState('')
   const [cat, setCat] = useState<number | null>(defaultCat)
@@ -4968,8 +5171,16 @@ function NewSessionComposer({
           </div>
         </div>
 
-        <div className="spawnlabel">
-          Initial instructions <span className="spawnopt">optional — sent as the first message</span>
+        <div className="spawnlabel spawnlabel-row">
+          <span>
+            Initial instructions <span className="spawnopt">optional — sent as the first message</span>
+          </span>
+          <VoiceButton
+            ready={voiceReady}
+            onNeedsSetup={onNeedsSetup}
+            title="Dictate the instructions"
+            onText={(t) => setInstructions((prev) => (prev ? `${prev} ${t}` : t))}
+          />
         </div>
         <textarea
           className="spawnnote"

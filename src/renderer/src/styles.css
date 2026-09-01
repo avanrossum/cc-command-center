@@ -4362,3 +4362,128 @@ select.cat-in {
   text-transform: uppercase;
   letter-spacing: 0.4px;
 }
+
+
+/* ---------- voice input ---------- */
+
+.spawnlabel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.vbtn {
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--cc-border);
+  background: transparent;
+  color: var(--cc-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.vbtn:hover:not(:disabled) {
+  color: var(--cc-text);
+  border-color: var(--cc-dim);
+}
+.vbtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+/* Recording is the one state that must be unmistakable from across the room — the
+   microphone is live and the user is the only one who can end it. */
+.vbtn.rec {
+  color: #ff6b6b;
+  border-color: rgba(255, 107, 107, 0.55);
+  background: rgba(255, 107, 107, 0.1);
+  animation: vpulse 1.6s ease-in-out infinite;
+}
+@keyframes vpulse {
+  50% {
+    border-color: rgba(255, 107, 107, 0.95);
+  }
+}
+.vbtn.err {
+  color: #f0b429;
+  border-color: rgba(240, 180, 41, 0.5);
+}
+.vbtn-setup {
+  color: var(--cc-dim);
+  border-style: dashed;
+}
+
+.vmodels .vmodel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 8px;
+}
+.vmodel {
+  display: grid;
+  grid-template-columns: minmax(140px, auto) 62px 1fr auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: var(--cc-r-sm);
+  border: 1px solid transparent;
+}
+.vmodel.on {
+  border-color: var(--cc-border);
+  background: var(--cc-fill-hover);
+}
+.vmodel-pick {
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--cc-text);
+  cursor: pointer;
+  padding: 0;
+}
+.vmodel-pick:disabled {
+  color: var(--cc-dim);
+  cursor: default;
+}
+.vmodel-size {
+  font-size: 10px;
+  color: var(--cc-dim);
+  font-variant-numeric: tabular-nums;
+}
+.vmodel-note {
+  font-size: 10px;
+  color: var(--cc-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vmodel-act {
+  font: inherit;
+  font-size: 10px;
+  background: transparent;
+  border: 0;
+  color: var(--cc-pick);
+  cursor: pointer;
+  padding: 0;
+}
+.vmodel-act:disabled {
+  color: var(--cc-dim);
+  cursor: default;
+}
+.vmodel-act.dim {
+  color: var(--cc-dim);
+}
+.vmodel-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+}
+.vmodel-err {
+  font-size: 10px;
+  color: #f0b429;
+  max-width: 200px;
+  text-align: right;
+}

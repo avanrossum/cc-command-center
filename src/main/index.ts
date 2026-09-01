@@ -3105,7 +3105,7 @@ function tryDeliveries(sessions: LiveSession[]): void {
     // waited forever with no log line and no file, indistinguishable from never
     // having been sent. Now it says why, once, and gives up out loud.
     const busy = target.state !== 'idle' && target.state !== 'waiting'
-    if (busy || term.draft > 0) {
+    if (busy || hasLiveDraft(term)) {
       const reason = busy ? `busy:${target.state}` : 'typing'
       if (d.logged !== reason) {
         noteMsg(
@@ -3297,6 +3297,44 @@ function noteUserInput(term: Term, data: string): void {
 function noteSessionState(term: Term, state: CoarseState): void {
   if (state === 'working' && term.lastSeenState !== 'working') term.draft = 0
   term.lastSeenState = state
+}
+
+// How long an untouched draft stays believed.
+//
+// The counter can only ever be approximate: it sees bytes the human sends through
+// term:input and nothing else. Two real ways it drifts, in opposite directions:
+//
+//   - Text the CHILD inserts never passes through here. Claude Code's own `/voice`
+//     writes into its prompt directly, so the box can hold a sentence while the count
+//     says zero. Nothing in this process can observe that, so it is not fixable by
+//     counting — only by reading the screen, which the differential-repaint problem
+//     makes its own project.
+//   - `/voice` hold mode types warmup spaces (counted here) and then removes them
+//     internally WITHOUT emitting backspaces (not counted). The count sticks above
+//     zero and never comes down.
+//
+// The second is the damaging one, because its failure is silent and permanent: every
+// message to that session is held forever with no error and no visible cause. So a
+// draft nobody has touched in a long time, in a session that is not mid-turn, is
+// treated as drift rather than as a prompt someone is still composing. Ten minutes is
+// deliberately generous — a real half-written prompt is usually seconds old, and the
+// cost of being wrong here is one message landing under text the user abandoned.
+const DRAFT_STALE_MS = 10 * 60_000
+
+/** True when the box is believed to hold unsent text the human typed. */
+function hasLiveDraft(term: Term, now = Date.now()): boolean {
+  if (term.draft <= 0) return false
+  if (term.lastInputAt && now - term.lastInputAt > DRAFT_STALE_MS) {
+    // Log it: a draft evaporating on its own is exactly the kind of quiet correction
+    // that is impossible to diagnose later if it leaves no trace.
+    console.warn(
+      `[mail] discarding a stale draft of ${term.draft} char(s) on ${term.sessionId ?? term.key} ` +
+        `(untouched for ${Math.round((now - term.lastInputAt) / 60000)}m) — treating as counter drift`,
+    )
+    term.draft = 0
+    return false
+  }
+  return true
 }
 
 function injectPrompt(term: Term, text: string, crDelay = 150): void {
@@ -4730,7 +4768,7 @@ function deliverPendingNotes(sessions: LiveSession[]): void {
     const term = findManagedTerm(n.to)
     if (!target || !term || term.exited) continue // parent not open yet — wait
     if (target.state !== 'idle' && target.state !== 'waiting') continue // busy — wait
-    if (term.draft > 0) continue // unsent draft in the box — pasting would send it
+    if (hasLiveDraft(term)) continue // unsent draft in the box — pasting would send it
     injectPrompt(term, n.text, 400)
     pendingParentNotes.splice(i, 1)
   }
@@ -4901,7 +4939,7 @@ ipcMain.handle('session:send', (_e, sessionId: string, text: string) => {
   if (!sessionId || !body) return { ok: false, reason: 'empty' }
   const t = findManagedTerm(sessionId)
   if (!t) return { ok: false, reason: 'monitor-only' } // not open under management here
-  if (t.draft > 0) return { ok: false, reason: 'that session has an unsent draft in its box' }
+  if (hasLiveDraft(t)) return { ok: false, reason: 'that session has an unsent draft in its box' }
   const id = mintMessageId()
   try {
     insertMessage({
@@ -4990,9 +5028,16 @@ ipcMain.handle('resume:recover', (_e, preload: boolean) => {
 // during development. Resolved once per call rather than cached, so a build that did
 // not include it reports unavailable instead of throwing.
 function speechHelperPath(): string {
-  return app.isPackaged
-    ? join(process.resourcesPath, 'ccc-speech')
-    : join(app.getAppPath(), 'native', 'ccc-speech', 'ccc-speech')
+  if (app.isPackaged) return join(process.resourcesPath, 'ccc-speech')
+  // Development. getAppPath() points at the bundled output rather than the repo root
+  // depending on how electron was launched, so try the plausible roots instead of
+  // trusting one — getting this wrong reports the engine as "not bundled" on a
+  // machine where it is sitting right there, which is a confusing lie.
+  for (const root of [app.getAppPath(), join(app.getAppPath(), '..'), join(app.getAppPath(), '..', '..'), process.cwd()]) {
+    const p = join(root, 'native', 'ccc-speech', 'ccc-speech')
+    if (existsSync(p)) return p
+  }
+  return ''
 }
 function voiceModelsDir(): string {
   return modelsDir(app.getPath('userData'))
