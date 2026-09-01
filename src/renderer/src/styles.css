@@ -1868,7 +1868,10 @@ body {
   flex-direction: column;
   gap: 2px;
   margin-bottom: 6px;
-  max-height: 108px;
+  /* The column below FOLDER is otherwise empty, so capping this at three rows spent
+     none of that space and hid recents behind a scrollbar. Grow into what the left
+     column actually has, and only scroll past that. */
+  max-height: 340px;
   overflow-y: auto;
 }
 .recentfolder {
@@ -1925,7 +1928,9 @@ body {
   margin-top: 0;
 }
 .nswide .recentfolders {
-  max-height: 66px;
+  /* Wide layout puts the pickers beside this column rather than under it, so there is
+     less vertical room here than in the narrow one — but still far more than two rows. */
+  max-height: 220px;
 }
 .nswide .spawnnote {
   min-height: 56px;
