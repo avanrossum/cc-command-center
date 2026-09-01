@@ -113,6 +113,11 @@ contextBridge.exposeInMainWorld('cc', {
   }) => ipcRenderer.invoke('session:create', opts),
   sessionStartFresh: (cwd: string) => ipcRenderer.invoke('session:startFresh', cwd),
   sessionRemove: (sessionId: string) => ipcRenderer.invoke('session:remove', sessionId),
+  // Bulk cleanup. Archive is reversible (see the archive view); removeMany is not.
+  sessionArchiveMany: (ids: string[]) =>
+    ipcRenderer.invoke('session:archiveMany', ids) as Promise<{ archived: number }>,
+  sessionRemoveMany: (ids: string[]) =>
+    ipcRenderer.invoke('session:removeMany', ids) as Promise<{ removed: string[] }>,
   sessionSpawnChild: (
     parentSessionId: string,
     cwd: string,

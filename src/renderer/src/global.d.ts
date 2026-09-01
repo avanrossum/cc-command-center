@@ -135,6 +135,8 @@ declare global {
       }) => Promise<{ pid: number; cwd: string } | null>
       sessionStartFresh: (cwd: string) => Promise<{ pid: number; cwd: string } | null>
       sessionRemove: (sessionId: string) => Promise<{ removed: string[] }>
+      sessionArchiveMany: (ids: string[]) => Promise<{ archived: number }>
+      sessionRemoveMany: (ids: string[]) => Promise<{ removed: string[] }>
       sessionSpawnChild: (
         parentSessionId: string,
         cwd: string,

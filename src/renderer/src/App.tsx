@@ -519,6 +519,12 @@ export function App() {
   // Companion panels the user has popped out into floating cards. Persisted, so
   // a popped layout survives a restart.
   const [popped, setPopped] = useState<Set<string>>(new Set())
+  // Bulk cleanup selection. Deliberately NOT the same thing as `selected` (the session
+  // whose terminal is open): you pick rows to act on WITHOUT opening any of them, which
+  // is the whole point when clearing a pile of dead ones. `pickAnchor` is the row a
+  // shift-range measures from.
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [pickAnchor, setPickAnchor] = useState<string | null>(null)
   const setPop = (id: string, on: boolean): void => {
     setPopped((cur) => {
       const n = new Set(cur)
@@ -1543,6 +1549,58 @@ export function App() {
             <span className="cname">{selectedGroup.name}</span>
             <span className="gcount">{selectedGroup.rows.length}</span>
           </div>
+          {picked.size > 0 && (
+            <div className="pickbar">
+              <span className="pickcount">{picked.size} selected</span>
+              <button
+                className="pickbtn"
+                title="Hides them and ends any running terminal. Name, category and edges survive; restore from the archive."
+                onClick={async () => {
+                  const ids = [...picked]
+                  const r = await window.cc.sessionArchiveMany(ids)
+                  if (selected?.sessionId && picked.has(selected.sessionId)) {
+                    setSelected(null)
+                    window.cc.stateSet('activeSessionId', '')
+                  }
+                  setPicked(new Set())
+                  setPickAnchor(null)
+                  showFlash(`archived ${r?.archived ?? ids.length}`)
+                }}
+              >
+                Archive
+              </button>
+              <button
+                className="pickbtn danger"
+                title="Permanent. Deletes the sessions and their descendants."
+                onClick={async () => {
+                  const ids = [...picked]
+                  const kids = new Set<string>()
+                  for (const id of ids) for (const k of descendantIds(id, snap.edges)) kids.add(k)
+                  const also = kids.size ? ` and ${kids.size} descendant session${kids.size > 1 ? 's' : ''}` : ''
+                  if (
+                    !window.confirm(
+                      `Permanently remove ${ids.length} session${ids.length > 1 ? 's' : ''}${also}? This cannot be undone — use Archive if you might want them back.`,
+                    )
+                  )
+                    return
+                  const r = await window.cc.sessionRemoveMany(ids)
+                  const removed = new Set(r?.removed ?? ids)
+                  if (selected?.sessionId && removed.has(selected.sessionId)) {
+                    setSelected(null)
+                    window.cc.stateSet('activeSessionId', '')
+                  }
+                  setPicked(new Set())
+                  setPickAnchor(null)
+                  showFlash(`removed ${removed.size}`)
+                }}
+              >
+                Remove…
+              </button>
+              <button className="pickbtn ghost" onClick={() => setPicked(new Set())}>
+                Cancel
+              </button>
+            </div>
+          )}
           <ul className="rows">
             {selectedGroup.rows.length === 0 && (
               <li className="emptycat">right-click a session to move it here</li>
@@ -1562,10 +1620,40 @@ export function App() {
                 // key `new:<pid>` until the scan adopts it, and FleetActivity
                 // already compares sessionId — one concept, one field.
                 ref={selected?.sessionId === s.sessionId ? selRowRef : null}
-                className={`row state-${dstate(s)}${s.dormant ? ' dormant' : ''}${selected?.sessionId === s.sessionId ? ' sel' : ''}${why ? ' has-why' : ''}${s.unhandled ? ' unhandled' : ''}`}
+                className={`row state-${dstate(s)}${s.dormant ? ' dormant' : ''}${selected?.sessionId === s.sessionId ? ' sel' : ''}${why ? ' has-why' : ''}${s.unhandled ? ' unhandled' : ''}${picked.has(s.sessionId) ? ' picked' : ''}`}
                 style={{ paddingLeft: 10 + depth * 16 }}
                 title={s.stateReason}
-                onClick={() => openSession(s)}
+                onClick={(e) => {
+                  // Cmd/Ctrl toggles one row; Shift takes the range from the anchor.
+                  // A plain click still just opens the session, so nothing about the
+                  // normal path changed.
+                  if (e.metaKey || e.ctrlKey) {
+                    setPicked((prev) => {
+                      const next = new Set(prev)
+                      if (next.has(s.sessionId)) next.delete(s.sessionId)
+                      else next.add(s.sessionId)
+                      return next
+                    })
+                    setPickAnchor(s.sessionId)
+                    return
+                  }
+                  if (e.shiftKey && pickAnchor) {
+                    const ids = selectedGroup.rows.map((r) => r.s.sessionId)
+                    const a = ids.indexOf(pickAnchor)
+                    const b = ids.indexOf(s.sessionId)
+                    if (a >= 0 && b >= 0) {
+                      const [lo, hi] = a < b ? [a, b] : [b, a]
+                      setPicked((prev) => {
+                        const next = new Set(prev)
+                        for (let i = lo; i <= hi; i++) next.add(ids[i])
+                        return next
+                      })
+                      return
+                    }
+                  }
+                  if (picked.size) setPicked(new Set())
+                  openSession(s)
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault()
                   setMenu({ x: e.clientX, y: e.clientY, session: s, mode: 'root' })
@@ -2118,6 +2206,19 @@ export function App() {
               setSelected(null)
               window.cc.stateSet('activeSessionId', '')
             }
+          }}
+          onSelectLike={(s) => {
+            // "Like this" = same folder, not currently running. That is the exact shape
+            // a headless tool leaves behind (one dead session per run, all in the repo it
+            // was pointed at), and it is a rule that can be stated in the menu, which a
+            // cleverer heuristic could not be. Scoped to the rows on screen, so the
+            // selection never reaches into a category you are not looking at.
+            const like = selectedGroup.rows
+              .map((r) => r.s)
+              .filter((x) => x.cwd === s.cwd && x.dormant && x.sessionId)
+            setPicked(new Set(like.map((x) => x.sessionId)))
+            setPickAnchor(s.sessionId)
+            if (like.length < 2) showFlash('nothing else like this here')
           }}
           onLaunchParams={(s) => {
             setMenu(null)
@@ -2789,6 +2890,7 @@ function ContextMenu({
   onRemove,
   onRename,
   onLaunchParams,
+  onSelectLike,
 }: {
   menu: Menu
   snap: Snapshot
@@ -2804,6 +2906,7 @@ function ContextMenu({
   onRemove: (s: Session) => void
   onRename: (s: Session) => void
   onLaunchParams: (s: Session) => void
+  onSelectLike: (s: Session) => void
 }) {
   const s = menu.session
   const hasParent = edgeByChild.has(s.sessionId)
@@ -2901,6 +3004,17 @@ function ContextMenu({
                 Clear parent
               </button>
             )}
+            <div className="menusep" />
+            <button
+              className="menuitem"
+              onClick={() => {
+                onSelectLike(s)
+                setMenu(null)
+              }}
+              title="Same folder, not running — the shape a headless tool leaves behind"
+            >
+              Select all like this
+            </button>
             <div className="menusep" />
             <button className="menuitem danger" onClick={() => onRemove(s)}>
               Remove from list{s.dormant ? '' : ' (ends terminal)'}

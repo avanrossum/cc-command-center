@@ -1612,14 +1612,24 @@ function listArchivedSessions(): ArchivedSession[] {
     const live = new Set(scanLiveSessions().filter((x) => x.alive).map((x) => x.sessionId))
     const now = Date.now()
     for (const [sid, node] of nodes) {
-      if (live.has(sid)) continue // it is running; the sidebar has it
-      // A session id with no transcript was never a conversation. 69 of those on the
-      // registry that surfaced this — they are not history, they are debris.
-      if (known.size > 0 && !known.has(sid)) continue
+      // An explicit archive is listed UNCONDITIONALLY — ahead of both guards below.
+      // Those guards keep debris out of the list, but an archive is a decision the
+      // user made, and the sidebar hides archived rows whether or not they are still
+      // running. Skipping one here because the scanner still sees it alive (an adopted
+      // session, which archiveMany has no terminal to kill) would leave it absent from
+      // the sidebar AND the archive: hidden with no way back. Caught by driving the
+      // real round-trip, not by reading the code.
+      const archived = !!node.archived_at
+      if (!archived) {
+        if (live.has(sid)) continue // it is running; the sidebar has it
+        // A session id with no transcript was never a conversation. 69 of those on the
+        // registry that surfaced this — they are not history, they are debris.
+        if (known.size > 0 && !known.has(sid)) continue
+      }
       let reason: ArchivedSession['reason']
-      // Checked first: an explicit archive is a decision the user made, and it must
-      // not be reported as "unfiled" just because it also happens to have no category.
-      if (node.archived_at) reason = 'archived'
+      // Checked first: an explicit archive must not be reported as "unfiled" merely
+      // because it also happens to have no category.
+      if (archived) reason = 'archived'
       else if (removed.has(sid)) reason = 'removed'
       else if (node.category_id == null && !edgeIds.has(sid)) reason = 'unfiled'
       else {

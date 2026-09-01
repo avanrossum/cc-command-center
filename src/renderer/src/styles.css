@@ -13,6 +13,9 @@
   --cc-border: #2a2824;
   --cc-hairline: #201e1a;
   --cc-fill-sel: rgba(255, 255, 255, 0.055);
+  /* Bulk-selection channel. Deliberately NOT --cc-accent (green), which already means
+     status here — a picked row must not read as a healthy one. */
+  --cc-pick: #5dbcfc;
   --cc-fill-hover: rgba(255, 255, 255, 0.03);
   /* Raised bar for foldable/accordion headers (activity, artifacts, timeline,
      Arbiter) so they read as distinct, clickable section headers instead of
@@ -789,6 +792,68 @@ body {
 }
 .row.sel .name {
   color: #fff;
+}
+
+/* Bulk-cleanup selection. A THIRD channel, distinct from both status (the inset left
+   bar) and "currently open" (.sel's neutral fill): an outline plus a check gutter, so
+   a picked row that is also open, or also blocked, still reads as all three. */
+.row.picked {
+  background: rgba(93, 188, 252, 0.09);
+  box-shadow: inset 2.5px 0 0 var(--cc-pick);
+}
+.row.picked::after {
+  content: '✓';
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--cc-pick);
+  pointer-events: none;
+}
+
+.pickbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--cc-hairline);
+  background: rgba(93, 188, 252, 0.07);
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+.pickcount {
+  flex: 1;
+  font-size: 11px;
+  color: var(--cc-dim);
+  white-space: nowrap;
+}
+.pickbtn {
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 5px;
+  border: 1px solid var(--cc-hairline);
+  background: var(--cc-fill-hover);
+  color: var(--cc-text);
+  cursor: pointer;
+}
+.pickbtn:hover {
+  background: var(--cc-fill-sel);
+}
+.pickbtn.danger {
+  color: #f08a8a;
+  border-color: rgba(240, 138, 138, 0.35);
+}
+.pickbtn.danger:hover {
+  background: rgba(240, 138, 138, 0.12);
+}
+.pickbtn.ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--cc-dim);
 }
 
 /* status dot — SHAPE carries state, not just hue */
