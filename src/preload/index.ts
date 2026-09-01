@@ -146,6 +146,23 @@ contextBridge.exposeInMainWorld('cc', {
     ipcRenderer.invoke('agents:takeOver', cwd) as Promise<{ ok: boolean; pid?: number }>,
   resumeRecover: (preload: boolean) =>
     ipcRenderer.invoke('resume:recover', preload) as Promise<boolean>,
+  // voice input
+  voiceState: () => ipcRenderer.invoke('voice:state'),
+  voiceSet: (key: string, value: string) => ipcRenderer.invoke('voice:set', key, value),
+  voiceDownload: (id: string) =>
+    ipcRenderer.invoke('voice:download', id) as Promise<{ ok: boolean; error?: string }>,
+  voiceCancelDownload: () => ipcRenderer.invoke('voice:cancelDownload'),
+  voiceRemoveModel: (path: string) => ipcRenderer.invoke('voice:removeModel', path) as Promise<boolean>,
+  voiceLinkModel: () =>
+    ipcRenderer.invoke('voice:linkModel') as Promise<{ ok: boolean; path?: string }>,
+  // Audio crosses as a transferable ArrayBuffer; the main process writes it to a
+  // 0600 temp file, transcribes, and deletes it in a finally.
+  voiceTranscribe: (bytes: ArrayBuffer) =>
+    ipcRenderer.invoke('voice:transcribe', bytes) as Promise<{ text?: string; error?: string }>,
+  onVoiceProgress: (
+    cb: (p: { id: string; received: number; total: number; done?: boolean }) => void,
+  ) => sub('voice:progress', cb),
+
   archiveList: () => ipcRenderer.invoke('archive:list'),
   archiveRestore: (sessionId: string, categoryId: number | null) =>
     ipcRenderer.invoke('archive:restore', sessionId, categoryId) as Promise<boolean>,

@@ -39,6 +39,16 @@ import { parseDialogCommand, questionFromText } from './engine/dialog'
 import { nextModes, modePrelude, NO_MODES, type VtModes } from './engine/vt'
 import { listAgents, backgroundAgents, type AgentRow } from './engine/agents'
 import {
+  detectEngines,
+  listModels,
+  downloadModel,
+  removeModel,
+  modelsDir,
+  transcribeApple,
+  transcribeWhisper,
+  type VoiceEngine,
+} from './engine/voice'
+import {
   readAllSources,
   writeItemState,
   defaultFeedsRoot,
@@ -4974,6 +4984,127 @@ ipcMain.handle('resume:recover', (_e, preload: boolean) => {
 })
 
 // ---- archived sessions ----
+// ---- voice input ----
+//
+// The helper ships in Contents/Resources when packaged and sits in the source tree
+// during development. Resolved once per call rather than cached, so a build that did
+// not include it reports unavailable instead of throwing.
+function speechHelperPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'ccc-speech')
+    : join(app.getAppPath(), 'native', 'ccc-speech', 'ccc-speech')
+}
+function voiceModelsDir(): string {
+  return modelsDir(app.getPath('userData'))
+}
+/** Models the user pointed at outside our directory. */
+function linkedModels(): string[] {
+  try {
+    const raw = getAppState('voiceLinkedModels')
+    const arr = raw ? (JSON.parse(raw) as unknown) : []
+    return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+ipcMain.handle('voice:state', () => {
+  const engines: VoiceEngine[] = detectEngines(speechHelperPath(), getAppState('voiceWhisperPath') || undefined)
+  const dir = voiceModelsDir()
+  return {
+    engines,
+    models: listModels(dir, linkedModels()),
+    modelsDir: dir,
+    // '' means "not chosen yet" — the UI decides the default from what is available
+    // rather than this guessing, so a newly-installed engine can change the answer.
+    engine: getAppState('voiceEngine') ?? '',
+    modelPath: getAppState('voiceModelPath') ?? '',
+    locale: getAppState('voiceLocale') || 'en-US',
+  }
+})
+
+ipcMain.handle('voice:set', (_e, key: string, value: string) => {
+  const allowed = new Set(['voiceEngine', 'voiceModelPath', 'voiceLocale', 'voiceWhisperPath'])
+  if (!allowed.has(key)) return false
+  setAppState(key, value)
+  return true
+})
+
+// One download at a time. Two concurrent pulls of a 1.5GB model is never what was
+// meant, and a single slot keeps the progress channel unambiguous.
+let voiceDownload: AbortController | null = null
+ipcMain.handle('voice:download', async (_e, id: string) => {
+  if (voiceDownload) return { ok: false, error: 'a download is already running' }
+  voiceDownload = new AbortController()
+  try {
+    const r = await downloadModel(
+      id,
+      voiceModelsDir(),
+      (received, total) => sendToWin('voice:progress', { id, received, total }),
+      voiceDownload.signal,
+    )
+    return r
+  } finally {
+    voiceDownload = null
+    sendToWin('voice:progress', { id, received: 0, total: 0, done: true })
+  }
+})
+
+ipcMain.handle('voice:cancelDownload', () => {
+  voiceDownload?.abort()
+  return true
+})
+
+ipcMain.handle('voice:removeModel', (_e, path: string) => removeModel(path, voiceModelsDir()))
+
+ipcMain.handle('voice:linkModel', async () => {
+  const r = await dialog.showOpenDialog({
+    title: 'Choose a Whisper model',
+    properties: ['openFile'],
+    filters: [{ name: 'Whisper model', extensions: ['bin'] }],
+  })
+  const p = r.filePaths?.[0]
+  if (!p) return { ok: false }
+  const links = new Set(linkedModels())
+  links.add(p)
+  setAppState('voiceLinkedModels', JSON.stringify([...links]))
+  setAppState('voiceModelPath', p)
+  return { ok: true, path: p }
+})
+
+/**
+ * Transcribe one utterance. The renderer records and hands over WAV bytes; the file
+ * exists only for as long as the engine needs it and is removed in a finally, so a
+ * failed transcription cannot leave recorded audio on disk.
+ */
+ipcMain.handle('voice:transcribe', async (_e, bytes: ArrayBuffer) => {
+  const buf = Buffer.from(bytes)
+  if (!buf.length) return { error: 'no audio captured' }
+  const engines = detectEngines(speechHelperPath(), getAppState('voiceWhisperPath') || undefined)
+  const wantKind = getAppState('voiceEngine') || engines.find((x) => x.available)?.kind || ''
+  const engine = engines.find((x) => x.kind === wantKind && x.available)
+  if (!engine) return { error: 'no voice engine is available — open Settings › Voice' }
+
+  const tmp = join(app.getPath('temp'), `ccc-voice-${Date.now()}-${randomBytes(4).toString('hex')}.wav`)
+  try {
+    writeFileSync(tmp, buf, { mode: 0o600 })
+    if (engine.kind === 'apple') {
+      return await transcribeApple(engine.path, tmp, getAppState('voiceLocale') || 'en-US')
+    }
+    const model = getAppState('voiceModelPath') || ''
+    if (!model) return { error: 'choose a Whisper model in Settings › Voice' }
+    return await transcribeWhisper(engine.path, model, tmp)
+  } catch (e) {
+    return { error: (e as Error).message }
+  } finally {
+    try {
+      unlinkSync(tmp)
+    } catch {
+      /* already gone */
+    }
+  }
+})
+
 ipcMain.handle('archive:list', () => listArchivedSessions())
 
 // Bring one back. Filing it under a category is what makes it visible, so that IS the

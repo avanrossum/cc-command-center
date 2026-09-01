@@ -151,6 +151,21 @@ declare global {
       agentsRefresh: () => Promise<AgentRow[]>
       agentsTakeOver: (cwd: string) => Promise<{ ok: boolean; pid?: number }>
       resumeRecover: (preload: boolean) => Promise<boolean>
+      voiceState: () => Promise<{
+        engines: { kind: 'apple' | 'whisper'; path: string; label: string; available: boolean; detail?: string; needsModel: boolean }[]
+        models: { id: string; label: string; path: string; sizeMb: number; installed: boolean; url?: string; note?: string }[]
+        modelsDir: string
+        engine: string
+        modelPath: string
+        locale: string
+      }>
+      voiceSet: (key: string, value: string) => Promise<boolean>
+      voiceDownload: (id: string) => Promise<{ ok: boolean; error?: string }>
+      voiceCancelDownload: () => Promise<boolean>
+      voiceRemoveModel: (path: string) => Promise<boolean>
+      voiceLinkModel: () => Promise<{ ok: boolean; path?: string }>
+      voiceTranscribe: (bytes: ArrayBuffer) => Promise<{ text?: string; error?: string }>
+      onVoiceProgress: (cb: (p: { id: string; received: number; total: number; done?: boolean }) => void) => () => void
       archiveList: () => Promise<ArchivedSession[]>
       archiveRestore: (sessionId: string, categoryId: number | null) => Promise<boolean>
       onMenuArchive: (cb: () => void) => () => void
