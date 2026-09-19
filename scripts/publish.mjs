@@ -68,6 +68,11 @@ if (cap('git status --porcelain')) {
 //    crucially, latest-mac.yml under release/.
 console.log(`\n▶ Building v${version}…`)
 sh('npm run build')
+// The Apple speech helper is an extraResource, so electron-builder copies whatever
+// is on disk. Building it here rather than relying on a leftover from a previous
+// `pack` keeps a release deterministic — a clean checkout would otherwise ship
+// without the helper and report the engine as unavailable for no visible reason.
+sh('npm run build:speech')
 // --publish never: electron-builder auto-publishes when GH_TOKEN is present,
 // and its parallel uploaders race into duplicate draft releases. We only want
 // the local build + latest-mac.yml; gh (below) does all the uploading.
