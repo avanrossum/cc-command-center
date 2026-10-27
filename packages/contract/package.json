@@ -1,0 +1,10 @@
+{
+  "name": "@ccc/contract",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SessionSnapshot v1: the typed contract between the coupling package and the UI.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

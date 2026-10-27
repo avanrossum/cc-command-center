@@ -1,0 +1,62 @@
+[
+  {
+    "pid": 60893,
+    "cwd": "/Users/example/repo-a",
+    "kind": "interactive",
+    "startedAt": 1792606301998,
+    "sessionId": "c0ffee02-0000-4000-8000-000000000002",
+    "name": "repo-a-1d",
+    "status": "busy"
+  },
+  {
+    "pid": 28707,
+    "cwd": "/Users/example/repo-b",
+    "kind": "interactive",
+    "startedAt": 1792897913173,
+    "sessionId": "c0ffee04-0000-4000-8000-000000000004",
+    "name": "repo-b-2e",
+    "status": "idle"
+  },
+  {
+    "pid": 27163,
+    "id": "c0ffee01",
+    "cwd": "/Users/example/repo-c",
+    "kind": "background",
+    "startedAt": 1793064825237,
+    "sessionId": "c0ffee01-0000-4000-8000-000000000001",
+    "name": "probe-question",
+    "status": "waiting",
+    "waitingFor": "input needed",
+    "state": "blocked"
+  },
+  {
+    "pid": 27158,
+    "id": "c0ffee03",
+    "cwd": "/Users/example/repo-c",
+    "kind": "background",
+    "startedAt": 1793064828343,
+    "sessionId": "c0ffee03-0000-4000-8000-000000000003",
+    "name": "probe-permission",
+    "status": "waiting",
+    "waitingFor": "permission prompt",
+    "state": "blocked"
+  },
+  {
+    "id": "79afc2a6",
+    "cwd": "/Users/example/repo-d",
+    "kind": "background",
+    "startedAt": 1783453870689,
+    "sessionId": "79afc2a6-dc1e-452e-8eda-ffba39174a7d",
+    "name": "exited while blocked",
+    "state": "blocked"
+  },
+  {
+    "id": "4d1e2a90",
+    "cwd": "/Users/example/repo-e",
+    "kind": "background",
+    "startedAt": 1793000000000,
+    "sessionId": "4d1e2a90-0000-4000-8000-000000000001",
+    "name": "finished",
+    "state": "done"
+  }
+]

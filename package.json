@@ -1,0 +1,96 @@
+{
+  "name": "cc-command-center-app",
+  "productName": "CC Command Center App",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A command center for every Claude Code session at once.",
+  "type": "module",
+  "main": "dist/main.cjs",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "npm run build && electron .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test",
+    "setup": "node node_modules/electron/install.js && electron-rebuild -f -w node-pty",
+    "typecheck:mod": "tsc -p mod/tsconfig.json",
+    "check:claude-env": "esbuild tools/check-claude-env.ts --bundle --platform=node --format=esm --log-level=warning --outfile=${TMPDIR:-/tmp}/ccc-check-claude-env.mjs && node ${TMPDIR:-/tmp}/ccc-check-claude-env.mjs",
+    "package": "npm run build && electron-builder --mac dir --publish never && node scripts/check-fuses.mjs \"release/mac-arm64/CC Command Center App.app\""
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.3.0",
+    "@ccc/contract": "*",
+    "@ccc/coupling": "*",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
+    "node-pty": "1.1.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@electron/fuses": "1.8.0",
+    "@electron/rebuild": "4.2.1",
+    "@types/node": "26.6.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "electron": "44.9.3",
+    "electron-builder": "26.17.0",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  },
+  "build": {
+    "appId": "com.mipyip.cc-command-center-app",
+    "productName": "CC Command Center App",
+    "copyright": "© 2026 MipYip, LLC",
+    "artifactName": "cc-command-center-app-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/**/*.map",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "dist/mod/**",
+      "dist/mod/.claude-plugin/**",
+      "**/node_modules/node-pty/**"
+    ],
+    "publish": null,
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "resources/icon.icns",
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "darkModeSupport": true,
+      "identity": "-",
+      "hardenedRuntime": false
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "grantFileProtocolExtraPrivileges": false
+    },
+    "extraResources": [
+      {
+        "from": "resources/icon.png",
+        "to": "icon.png"
+      }
+    ]
+  }
+}

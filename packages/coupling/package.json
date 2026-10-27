@@ -1,0 +1,13 @@
+{
+  "name": "@ccc/coupling",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The only code that runs or reads Claude Code. Publishes SessionSnapshot v1 from @ccc/contract.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@ccc/contract": "*"
+  }
+}

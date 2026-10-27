@@ -1,0 +1,55 @@
+/* Copied from the UX design tokens, color.css (MIP2-1370 draft 2, approved by Alex 2026-10-26).
+   UX owns these values; change them there and copy them here. --cc-sel comes from the
+   MIP2-1370 wireframe, where the selected fill is defined. */
+:root {
+  /* surfaces: the center is darkest, chrome and cards step up from it */
+  --cc-bg:        #0a0907;  /* center (was #0e0d0b) */
+  --cc-surface:   #1d1a16;  /* top bar, session header (was #14120f) */
+  --cc-surface-2: #181612;  /* sidebar, right rail (was #100f0d) */
+  --cc-card:      #26221c;  /* cards (Electron used --cc-surface-2) */
+  --cc-term-bg:   #0b0d12;  /* the session pane; never themed */
+  --cc-border:    #48433a;  /* card edges, region edges (was #2a2824) */
+  --cc-hairline:  #322e28;  /* rules inside a card (was #201e1a) */
+
+  /* text, four tiers */
+  --cc-text:  #fcf9f3;
+  --cc-dim:   #b6afa1;
+  --cc-meta:  #a59d8e;
+  --cc-faint: #857c6c;  /* non-text only */
+
+  /* session states. Each pairs with a shape (spec §3); color is never the only cue.
+     Active-state cards take a 45% mix of their color into the card edge (spec §9). */
+  --cc-needs:    #ffc04a;  /* needs you: approval. Ringed square, slow pulse */
+  --cc-question: #8cc4ff;  /* needs you: question. Square with glow */
+  --cc-working:  #62f1b7;  /* working. Circle, 2.4 s pulse */
+  --cc-turn:     #8cc4ff;  /* your turn. Square, still */
+  --cc-blocked:  #f69de2;  /* asked another session, no reply yet. Diamond */
+  --cc-idle:     #8a919d;  /* idle. Circle, still */
+  --cc-ended:    #80796a;  /* ended. Hollow ring, card at 60% opacity */
+  --cc-dead:     #857c6c;  /* assumed dead. Flat bar, row at 45% opacity */
+  --cc-stale:    #c2b0ff;  /* stale data. Dashed outline on the field or card */
+  --cc-alert:    #ff7a6b;  /* security alerts, Fleet bands and the Focus strip (spec MIP2-1379 §7.3) */
+
+  /* meters (usage, context): warm at 65%, hot at 85% */
+  --cc-meter:      #62f1b7;
+  --cc-meter-warm: #f0c25a;
+  --cc-meter-hot:  #ff7a6b;
+
+  /* focus ring and the Arbiter's pick */
+  --cc-focus:   #8cc4ff;
+  --cc-arbiter: #f0c25a;
+
+  /* category palette (10), unchanged from Electron. Never used as a status color. */
+  --cc-cat-gold:       #e2b34a;
+  --cc-cat-sky:        #4ac0e2;
+  --cc-cat-terracotta: #e2724a;
+  --cc-cat-violet:     #9b6ff0;
+  --cc-cat-raspberry:  #d14a9b;
+  --cc-cat-teal:       #2fb8a0;
+  --cc-cat-coral:      #e0625f;
+  --cc-cat-lime:       #9bbf4a;
+  --cc-cat-indigo:     #6d7cf0;
+  --cc-cat-none:       #857c6c;  /* Uncategorized */
+  --cc-sel:       #2e2a23;  /* selected row and chip fill (wireframe) */
+  --tint: 45%;
+}

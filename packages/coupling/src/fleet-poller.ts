@@ -1,0 +1,257 @@
+// Polls a SessionHost and the reporter mod's telemetry, and publishes
+// FleetSnapshots. When a poll fails, the last sessions stay listed with that
+// source's fields marked stale, and the source-health line says why, so a
+// broken source degrades the view instead of emptying it (D-004).
+
+import {
+  CONTRACT_VERSION,
+  field,
+  markStale,
+  type Field,
+  type FleetSnapshot,
+  type PendingRequest,
+  type RateLimits,
+  type SessionSnapshot,
+  type SourceHealth,
+} from '@ccc/contract'
+import { reporterFields, type ReporterFields, type ReporterRead } from './reporter.ts'
+import type { ReporterFile } from '../../../mod/hooks/wire.ts'
+import type { ChannelHealth, SelfCheck } from './self-check.ts'
+import type { SessionHost } from './session-host.ts'
+
+/** A mod that hasn't been heard from this long has its fields marked stale (spec MIP2-1370 §4, Stale). */
+export const MOD_SILENCE_MS = 60_000
+
+export type FleetListener = (snapshot: FleetSnapshot) => void
+
+export interface FleetPollerOptions {
+  host: SessionHost
+  /** Reads the reporter mod's telemetry. Absent, sessions carry agents-json fields only. */
+  readReporter?: () => Promise<ReporterRead> | ReporterRead
+  /** Prompts the mods have offered to the app, by session. */
+  readPending?: () => Map<string, PendingRequest[]>
+  /** The usage governor's files, for the meter when no mod has a fresher reading. */
+  readUsage?: () => Promise<Field<RateLimits> | null>
+  /** The detect-and-degrade self-check (DECISION item 4). */
+  selfCheck?: SelfCheck
+  /** What the self-check reads about each channel. */
+  readChannels?: () => ChannelHealth[]
+  /** `claude --version`, read at start and every VERSION_EVERY_MS: auto-update changes it under a running app. */
+  readVersion?: () => Promise<string | null>
+  /** Where refused reports are logged. Defaults to console.warn. */
+  log?: (line: string) => void
+  intervalMs?: number
+  now?: () => number
+}
+
+const VERSION_EVERY_MS = 5 * 60 * 1000
+
+export class FleetPoller {
+  private readonly host: SessionHost
+  private readonly readReporter: FleetPollerOptions['readReporter'] | null
+  private readonly readPending: FleetPollerOptions['readPending'] | null
+  private readonly readUsage: FleetPollerOptions['readUsage'] | null
+  private usageFile: Field<RateLimits> | null = null
+  private readonly log: (line: string) => void
+  private readonly intervalMs: number
+  private readonly now: () => number
+  private readonly listeners = new Set<FleetListener>()
+  private timer: ReturnType<typeof setTimeout> | null = null
+  private sessions: SessionSnapshot[] = []
+  private health: SourceHealth = { source: 'agents-json', ok: false, lastOkAt: null, error: null }
+  private modHealth: SourceHealth = { source: 'mod', ok: false, lastOkAt: null, error: null }
+  private modFields = new Map<string, ReporterFields>()
+  /** The last logged reason per ignored file, so each is logged once. */
+  private readonly logged = new Map<string, string>()
+  private latest: FleetSnapshot | null = null
+  private readonly selfCheck: SelfCheck | null
+  private readonly readChannels: FleetPollerOptions['readChannels'] | null
+  private readonly readVersion: FleetPollerOptions['readVersion'] | null
+  private versionReadAt = Number.NEGATIVE_INFINITY
+  private rejectedEntries = 0
+  private reporterFiles = new Map<string, ReporterFile>()
+
+  constructor(opts: FleetPollerOptions) {
+    this.host = opts.host
+    this.readReporter = opts.readReporter ?? null
+    this.readPending = opts.readPending ?? null
+    this.readUsage = opts.readUsage ?? null
+    this.log = opts.log ?? (line => console.warn(line))
+    this.intervalMs = opts.intervalMs ?? 2_000
+    this.now = opts.now ?? Date.now
+    this.selfCheck = opts.selfCheck ?? null
+    this.readChannels = opts.readChannels ?? null
+    this.readVersion = opts.readVersion ?? null
+  }
+
+  subscribe(listener: FleetListener): () => void {
+    this.listeners.add(listener)
+    if (this.latest) listener(this.latest)
+    return () => this.listeners.delete(listener)
+  }
+
+  current(): FleetSnapshot | null {
+    return this.latest
+  }
+
+  start(): void {
+    if (this.timer) return
+    // Each poll schedules the next once it settles, so a slow `claude`
+    // never has two polls in flight.
+    const loop = async () => {
+      await this.pollOnce()
+      if (this.timer) this.timer = setTimeout(loop, this.intervalMs)
+    }
+    this.timer = setTimeout(loop, 0)
+  }
+
+  stop(): void {
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = null
+  }
+
+  async pollOnce(): Promise<FleetSnapshot> {
+    try {
+      const { sessions, rejected } = await this.host.list()
+      this.sessions = sessions
+      this.rejectedEntries = rejected.length
+      this.health = {
+        source: 'agents-json',
+        ok: true,
+        lastOkAt: this.now(),
+        error: rejected.length ? `${rejected.length} entries unreadable: ${rejected[0]?.reason}` : null,
+      }
+    } catch (err) {
+      this.sessions = this.sessions.map(staleAgentsJsonFields)
+      this.health = { ...this.health, ok: false, error: message(err) }
+    }
+    await this.pollReporter()
+    this.usageFile = (await this.readUsage?.().catch(() => null)) ?? null
+    await this.runSelfCheck()
+    return this.publish()
+  }
+
+  private async runSelfCheck(): Promise<void> {
+    if (!this.selfCheck) return
+    if (this.readVersion && this.now() - this.versionReadAt >= VERSION_EVERY_MS) {
+      this.versionReadAt = this.now()
+      this.selfCheck.setVersion(await this.readVersion().catch(() => null))
+    }
+    if (!this.health.ok) return
+    this.selfCheck.evaluate({
+      now: this.now(),
+      sessions: this.sessions.map(s => this.withModFields(s)),
+      rejectedEntries: this.rejectedEntries,
+      channels: this.readChannels?.() ?? [],
+      files: this.reporterFiles,
+      changing: this.host.changing?.() ?? new Set(),
+    })
+  }
+
+  private async pollReporter(): Promise<void> {
+    if (!this.readReporter) return
+    try {
+      const { files, rejected } = await this.readReporter()
+      this.logRejected(rejected)
+      this.reporterFiles = new Map([...files].map(([id, { file }]) => [id, file]))
+      this.modFields = new Map([...files].map(([id, { file, mtimeMs }]) => [id, reporterFields(file, mtimeMs)]))
+      this.modHealth = {
+        source: 'mod',
+        ok: true,
+        lastOkAt: this.now(),
+        error: rejected.length ? `${rejected.length} reporter files unreadable: ${rejected[0]?.reason}` : null,
+      }
+    } catch (err) {
+      // Keep the last fields; withModFields marks them stale.
+      this.modHealth = { ...this.modHealth, ok: false, error: message(err) }
+    }
+  }
+
+  private logRejected(rejected: ReporterRead['rejected']): void {
+    const now = new Set(rejected.map(r => r.name))
+    for (const { name, reason } of rejected) {
+      if (this.logged.get(name) !== reason) this.log(`reporter: ignored ${name}: ${reason}`)
+      this.logged.set(name, reason)
+    }
+    for (const name of this.logged.keys()) if (!now.has(name)) this.logged.delete(name)
+  }
+
+  private withModFields(s: SessionSnapshot): SessionSnapshot {
+    const mod = this.modFields.get(s.sessionId)
+    if (!mod) return s
+    // The reporter sends only when something happens, so its age says
+    // nothing. Its fields are stale when its process is gone or its source
+    // failed.
+    // `observedAt` is the mod's last contact; a live mod polls at least
+    // every 25 s, so a minute without one means its channel is gone.
+    const lastContact = mod.tokens?.observedAt ?? 0
+    const stale = !this.modHealth.ok || s.pid.value === null || this.now() - lastContact > MOD_SILENCE_MS
+    const pending = this.readPending?.().get(s.sessionId) ?? []
+    // A source the self-check found broken on this version reads stale.
+    const degraded = this.selfCheck?.degradedFields() ?? new Set()
+    const fields = stale ? staleModFields(mod) : staleModFields(mod, degraded)
+    // `blocked` with no `waitingFor` on a session awaiting its first message
+    // isn't Alex's to answer: it reads idle (Research MIP2-1426). Only on the
+    // mod's live word; any other such session stays Needs you.
+    const firstPrompt = fields.awaitingFirstPrompt
+    const waitsForFirst = !!firstPrompt?.value && !firstPrompt.stale && s.needsYou.value?.kind === 'blocked' && s.needsYou.value.detail === null && pending.length === 0
+    return {
+      ...s,
+      ...(waitsForFirst ? { activity: { ...s.activity, value: 'idle' as const }, needsYou: { ...s.needsYou, value: null } } : {}),
+      ...fields,
+      pendingRequests: field(stale ? [] : pending, 'mod', this.now()),
+    }
+  }
+
+  /** The freshest reading of both windows: a live mod's, or the governor's files. */
+  private usage(sessions: SessionSnapshot[]): Field<RateLimits> | null {
+    const readings = [this.usageFile, ...sessions.map(s => s.rateLimits)].filter(
+      (f): f is Field<RateLimits> => !!f && !f.stale && f.value.fiveHour !== null,
+    )
+    return readings.sort((a, b) => b.observedAt - a.observedAt)[0] ?? null
+  }
+
+  private publish(): FleetSnapshot {
+    const sessions = this.sessions.map(s => this.withModFields(s))
+    const snapshot: FleetSnapshot = {
+      contractVersion: CONTRACT_VERSION,
+      at: this.now(),
+      sessions,
+      usage: this.usage(sessions),
+      selfCheck: this.selfCheck?.report() ?? null,
+      sources: this.readReporter ? [this.health, this.modHealth] : [this.health],
+    }
+    this.latest = snapshot
+    for (const listener of this.listeners) listener(snapshot)
+    return snapshot
+  }
+}
+
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+/** Marks every mod field stale, or only those in `only`. */
+function staleModFields(mod: ReporterFields, only?: ReadonlySet<keyof ReporterFields>): ReporterFields {
+  const out: ReporterFields = {}
+  for (const key of Object.keys(mod) as (keyof ReporterFields)[]) {
+    const f = mod[key]
+    // Each key keeps its own Field type; the loop only flips `stale`.
+    if (f) Object.assign(out, { [key]: !only || only.has(key) ? markStale(f as Field<unknown>) : f })
+  }
+  return out
+}
+
+function staleAgentsJsonFields(s: SessionSnapshot): SessionSnapshot {
+  return {
+    ...s,
+    kind: markStale(s.kind),
+    cwd: markStale(s.cwd),
+    startedAt: markStale(s.startedAt),
+    name: markStale(s.name),
+    shortId: markStale(s.shortId),
+    pid: markStale(s.pid),
+    activity: markStale(s.activity),
+    needsYou: markStale(s.needsYou),
+  }
+}

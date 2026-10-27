@@ -1,0 +1,482 @@
+{
+    "wire": 0,
+    "plugin": {
+        "name": "ccc-reporter",
+        "version": "0.1.0"
+    },
+    "sessionId": "c0ffee05-0000-4000-8000-000000000005",
+    "loadedAt": 1793071935732,
+    "writtenAt": 1793071957469,
+    "seq": 39,
+    "latest": {
+        "model": "claude-sonnet-5-5",
+        "effort": "low",
+        "measure": {
+            "context": {
+                "tokens": 69534,
+                "window": 1000000,
+                "percent": 7
+            },
+            "rateLimits": [
+                {
+                    "kind": "five_hour",
+                    "percentUsed": 0,
+                    "resetsAt": "2026-10-27T08:30:00.000Z"
+                },
+                {
+                    "kind": "seven_day",
+                    "percentUsed": 29,
+                    "resetsAt": "2026-10-31T15:00:00.000Z"
+                }
+            ],
+            "cost": {
+                "usd": 0.27826920000000005
+            }
+        },
+        "agents": [
+            {
+                "id": "a27b96495a95ada95",
+                "type": "Explore",
+                "description": "List files in cwd",
+                "status": "completed",
+                "parentId": null
+            }
+        ],
+        "tokens": {
+            "input": 20,
+            "output": 954,
+            "cacheRead": 424776,
+            "cacheWrite": 39748
+        }
+    },
+    "events": [
+        {
+            "seq": 1,
+            "at": 1793071935732,
+            "agentId": null,
+            "type": "session.measure",
+            "measure": {
+                "context": {
+                    "window": 1000000
+                },
+                "rateLimits": [
+                    {
+                        "kind": "five_hour",
+                        "percentUsed": 0,
+                        "resetsAt": "2026-10-27T08:30:00.000Z"
+                    },
+                    {
+                        "kind": "seven_day",
+                        "percentUsed": 29,
+                        "resetsAt": "2026-10-31T15:00:00.000Z"
+                    }
+                ],
+                "cost": {
+                    "usd": 0
+                }
+            }
+        },
+        {
+            "seq": 2,
+            "at": 1793071935821,
+            "agentId": null,
+            "type": "session.start",
+            "model": "claude-sonnet-5-5",
+            "cwd": "/Users/example/scratch/a",
+            "version": "2.1.311"
+        },
+        {
+            "seq": 3,
+            "at": 1793071935942,
+            "agentId": null,
+            "type": "turn.start"
+        },
+        {
+            "seq": 4,
+            "at": 1793071936290,
+            "agentId": null,
+            "type": "turn.step",
+            "model": "claude-sonnet-5-5",
+            "effort": "low"
+        },
+        {
+            "seq": 5,
+            "at": 1793071939462,
+            "agentId": null,
+            "type": "tool.start",
+            "toolUseId": "toolu_01Gbe2UadEkTK5n76nk1QVwe",
+            "tool": "Agent",
+            "path": null
+        },
+        {
+            "seq": 6,
+            "at": 1793071940047,
+            "agentId": "a27b96495a95ada95",
+            "type": "turn.start"
+        },
+        {
+            "seq": 7,
+            "at": 1793071940058,
+            "agentId": null,
+            "type": "agent.spawn",
+            "spawnedId": "a27b96495a95ada95",
+            "subagentType": "Explore",
+            "description": "List files in cwd",
+            "model": "claude-sonnet-5-5",
+            "background": true
+        },
+        {
+            "seq": 8,
+            "at": 1793071940090,
+            "agentId": null,
+            "type": "tool.end",
+            "toolUseId": "toolu_01Gbe2UadEkTK5n76nk1QVwe",
+            "tool": "Agent",
+            "isError": false
+        },
+        {
+            "seq": 9,
+            "at": 1793071940091,
+            "agentId": "a27b96495a95ada95",
+            "type": "turn.step",
+            "model": "claude-sonnet-5-5",
+            "effort": "low"
+        },
+        {
+            "seq": 10,
+            "at": 1793071940132,
+            "agentId": null,
+            "type": "turn.step",
+            "model": "claude-sonnet-5-5",
+            "effort": "low"
+        },
+        {
+            "seq": 11,
+            "at": 1793071941644,
+            "agentId": null,
+            "type": "tool.start",
+            "toolUseId": "toolu_01YSWcTR6fpAzooQYd4qBs6B",
+            "tool": "Write",
+            "path": "/Users/example/scratch/a/note.txt"
+        },
+        {
+            "seq": 12,
+            "at": 1793071941898,
+            "agentId": "a27b96495a95ada95",
+            "type": "tool.start",
+            "toolUseId": "toolu_01QqqqzgiYHYCebY8j3j3oWB",
+            "tool": "Bash",
+            "path": null
+        },
+        {
+            "seq": 13,
+            "at": 1793071942356,
+            "agentId": null,
+            "type": "tool.end",
+            "toolUseId": "toolu_01YSWcTR6fpAzooQYd4qBs6B",
+            "tool": "Write",
+            "isError": false
+        },
+        {
+            "seq": 14,
+            "at": 1793071942362,
+            "agentId": null,
+            "type": "tool.start",
+            "toolUseId": "toolu_016hxRav1VSgHAyQWCwv7Wan",
+            "tool": "Bash",
+            "path": null
+        },
+        {
+            "seq": 15,
+            "at": 1793071942673,
+            "agentId": null,
+            "type": "tool.end",
+            "toolUseId": "toolu_016hxRav1VSgHAyQWCwv7Wan",
+            "tool": "Bash",
+            "isError": false
+        },
+        {
+            "seq": 16,
+            "at": 1793071942686,
+            "agentId": "a27b96495a95ada95",
+            "type": "tool.end",
+            "toolUseId": "toolu_01QqqqzgiYHYCebY8j3j3oWB",
+            "tool": "Bash",
+            "isError": false
+        },
+        {
+            "seq": 17,
+            "at": 1793071942717,
+            "agentId": "a27b96495a95ada95",
+            "type": "turn.step",
+            "model": "claude-sonnet-5-5",
+            "effort": "low"
+        },
+        {
+            "seq": 18,
+            "at": 1793071942729,
+            "agentId": null,
+            "type": "turn.step",
+            "model": "claude-sonnet-5-5",
+            "effort": "low"
+        },
+        {
+            "seq": 19,
+            "at": 1793071943889,
+            "agentId": "a27b96495a95ada95",
+            "type": "tool.start",
+            "toolUseId": "toolu_01MYbhbheSTVxCNT2YETZw4W",
+            "tool": "SubagentHandback",
+            "path": null
+        },
+        {
+            "seq": 20,
+            "at": 1793071944465,
+            "agentId": "a27b96495a95ada95",
+            "type": "tool.end",
+            "toolUseId": "toolu_01MYbhbheSTVxCNT2YETZw4W",
+            "tool": "SubagentHandback",
+            "isError": false
+        },
+        {
+            "seq": 21,
+            "at": 1793071944488,
+            "agentId": "a27b96495a95ada95",
+            "type": "turn.complete",
+            "reason": "answer",
+            "durationMs": 4452,
+            "usage": {
+                "input": 4,
+                "output": 184,
+                "cacheRead": 23091,
+                "cacheWrite": 25225,
+                "model": "claude-sonnet-5-5"
+            }
+        },
+        {
+            "seq": 22,
+            "at": 1793071946225,
+            "agentId": null,
+            "type": "turn.complete",
+            "reason": "answer",
+            "durationMs": 10393,
+            "usage": {
+                "input": 6,
+                "output": 491,
+                "cacheRead": 156397,
+                "cacheWrite": 35905,
+                "model": "claude-sonnet-5-5"
+            }
+        },
+        {
+            "seq": 23,
+            "at": 1793071946248,
+            "agentId": null,
+            "type": "session.measure",
+            "measure": {
+                "context": {
+                    "tokens": 65691,
+                    "window": 1000000,
+                    "percent": 7
+                },
+                "rateLimits": [
+                    {
+                        "kind": "five_hour",
+                        "percentUsed": 0,
+                        "resetsAt": "2026-10-27T08:30:00.000Z"
+                    },
+                    {
+                        "kind": "seven_day",
+                        "percentUsed": 29,
+                        "resetsAt": "2026-10-31T15:00:00.000Z"
+                    }
+                ],
+                "cost": {
+                    "usd": 0.23140130000000003
+                }
+            }
+        },
+        {
+            "seq": 24,
+            "at": 1793071946287,
+            "agentId": null,
+            "type": "turn.start"
+        },
+        {
+            "seq": 25,
+            "at": 1793071946300,
+            "agentId": null,
+            "type": "turn.step",
+            "model": "claude-sonnet-5-5",
+            "effort": "low"
+        },
+        {
+            "seq": 26,
+            "at": 1793071948959,
+            "agentId": null,
+            "type": "peer.received",
+            "from": "peer",
+            "preview": "<cross-session-message from=\"uds:/tmp/cc-socks/83459.sock\" from-name=\"ccc-scratch-b\" from-mode=\"prompting\">\nhello from b"
+        },
+        {
+            "seq": 27,
+            "at": 1793071949771,
+            "agentId": null,
+            "type": "turn.complete",
+            "reason": "answer",
+            "durationMs": 3526,
+            "usage": {
+                "input": 4,
+                "output": 91,
+                "cacheRead": 65689,
+                "cacheWrite": 560,
+                "model": "claude-sonnet-5-5"
+            }
+        },
+        {
+            "seq": 28,
+            "at": 1793071949791,
+            "agentId": null,
+            "type": "session.measure",
+            "measure": {
+                "context": {
+                    "tokens": 66253,
+                    "window": 1000000,
+                    "percent": 7
+                },
+                "rateLimits": [
+                    {
+                        "kind": "five_hour",
+                        "percentUsed": 0,
+                        "resetsAt": "2026-10-27T08:30:00.000Z"
+                    },
+                    {
+                        "kind": "seven_day",
+                        "percentUsed": 29,
+                        "resetsAt": "2026-10-31T15:00:00.000Z"
+                    }
+                ],
+                "cost": {
+                    "usd": 0.24112820000000004
+                }
+            }
+        },
+        {
+            "seq": 29,
+            "at": 1793071949824,
+            "agentId": null,
+            "type": "turn.start"
+        },
+        {
+            "seq": 30,
+            "at": 1793071949836,
+            "agentId": null,
+            "type": "turn.step",
+            "model": "claude-sonnet-5-5",
+            "effort": "low"
+        },
+        {
+            "seq": 31,
+            "at": 1793071951281,
+            "agentId": null,
+            "type": "tool.start",
+            "toolUseId": "toolu_01C3W8ZTwzZ3nSS4VVXz9prf",
+            "tool": "ToolSearch",
+            "path": null
+        },
+        {
+            "seq": 32,
+            "at": 1793071951346,
+            "agentId": null,
+            "type": "tool.end",
+            "toolUseId": "toolu_01C3W8ZTwzZ3nSS4VVXz9prf",
+            "tool": "ToolSearch",
+            "isError": false
+        },
+        {
+            "seq": 33,
+            "at": 1793071951374,
+            "agentId": null,
+            "type": "turn.step",
+            "model": "claude-sonnet-5-5",
+            "effort": "low"
+        },
+        {
+            "seq": 34,
+            "at": 1793071952536,
+            "agentId": null,
+            "type": "tool.start",
+            "toolUseId": "toolu_01PswZ71NNbFEuNqyaTs2nxf",
+            "tool": "SendMessage",
+            "path": null
+        },
+        {
+            "seq": 35,
+            "at": 1793071953330,
+            "agentId": null,
+            "type": "peer.sent",
+            "to": "uds:/tmp/cc-socks/83459.sock",
+            "preview": "got it"
+        },
+        {
+            "seq": 36,
+            "at": 1793071953434,
+            "agentId": null,
+            "type": "tool.end",
+            "toolUseId": "toolu_01PswZ71NNbFEuNqyaTs2nxf",
+            "tool": "SendMessage",
+            "isError": false
+        },
+        {
+            "seq": 37,
+            "at": 1793071953463,
+            "agentId": null,
+            "type": "turn.step",
+            "model": "claude-sonnet-5-5",
+            "effort": "low"
+        },
+        {
+            "seq": 38,
+            "at": 1793071957464,
+            "agentId": null,
+            "type": "turn.complete",
+            "reason": "answer",
+            "durationMs": 7675,
+            "usage": {
+                "input": 10,
+                "output": 372,
+                "cacheRead": 202690,
+                "cacheWrite": 3283,
+                "model": "claude-sonnet-5-5"
+            }
+        },
+        {
+            "seq": 39,
+            "at": 1793071957469,
+            "agentId": null,
+            "type": "session.measure",
+            "measure": {
+                "context": {
+                    "tokens": 69534,
+                    "window": 1000000,
+                    "percent": 7
+                },
+                "rateLimits": [
+                    {
+                        "kind": "five_hour",
+                        "percentUsed": 0,
+                        "resetsAt": "2026-10-27T08:30:00.000Z"
+                    },
+                    {
+                        "kind": "seven_day",
+                        "percentUsed": 29,
+                        "resetsAt": "2026-10-31T15:00:00.000Z"
+                    }
+                ],
+                "cost": {
+                    "usd": 0.27826920000000005
+                }
+            }
+        }
+    ]
+}
