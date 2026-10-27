@@ -70,6 +70,10 @@ mac:
   # Notarize via APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID (env).
   notarize: true
   extendInfo:
+    # 0.25.0, the farewell release (MIP2-61): Finder and the Dock show it as the
+    # legacy app. productName, the bundle name and the bundle id don't change, so
+    # electron-updater replaces it in place and the data folder stays the same.
+    CFBundleDisplayName: CC Command Center (Legacy)
     # Electron ships a generic default ("This app needs access to the microphone"),
     # which is what the user reads in the consent dialog. Say what it is actually for.
     NSMicrophoneUsageDescription: >-

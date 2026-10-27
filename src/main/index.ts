@@ -79,6 +79,7 @@ import {
   skipVersion,
   justUpdatedPayload,
 } from './updater'
+import { showFarewell } from './farewell'
 import { APP_VERSION, BUILD_HASH, BUILD_TIME, FULL_VERSION } from '../shared/version'
 import {
   initRegistry,
@@ -5612,7 +5613,9 @@ app.whenReady().then(() => {
   maybeSeed()
   lockDownPermissions() // must precede any window; Electron's no-handler default GRANTS
   createWindow()
-  initUpdater(() => win) // auto-update: first check ~8s after launch, then daily
+  initUpdater(() => win) // off in 0.25.0, the farewell release (MIP2-61)
+  // The farewell notice, once per launch, after the window has had a moment to appear.
+  setTimeout(() => void showFarewell(win), 1500)
   pollTimer = setInterval(pushSessions, 1500)
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -12,12 +12,19 @@
 //
 // Nothing here runs in dev (no app-update.yml), and downloads are user-driven:
 // autoDownload is off, so a check never pulls bytes until the user asks.
+//
+// 0.25.0, the farewell release (MIP2-61): the updater is off. This version
+// never checks again; Check for Updates shows the farewell notice instead.
 import { app, BrowserWindow } from 'electron'
 import electronUpdater from 'electron-updater'
 import { APP_VERSION } from '../shared/version'
 import { getAppState, setAppState } from './registry'
+import { showFarewell } from './farewell'
 
 const { autoUpdater } = electronUpdater
+
+/** 0.25.0 is the farewell release: no update checks, ever (MIP2-61). */
+export const UPDATER_OFF = true
 
 const CHANGELOG_URL =
   'https://raw.githubusercontent.com/avanrossum/cc-command-center/main/changelog.json'
@@ -91,6 +98,8 @@ async function buildPayload(version: string): Promise<UpdatePayload> {
 
 export function initUpdater(getMain: () => BrowserWindow | null): void {
   getMainWin = getMain
+  // The farewell release never checks again (MIP2-61).
+  if (UPDATER_OFF) return
   if (!app.isPackaged) return // no app-update.yml in dev; auto-update is a packaged-only path
 
   autoUpdater.autoDownload = false // never pull bytes until the user chooses
@@ -130,6 +139,10 @@ export function initUpdater(getMain: () => BrowserWindow | null): void {
 }
 
 export async function checkForUpdates(manual: boolean): Promise<void> {
+  if (UPDATER_OFF) {
+    if (manual) void showFarewell(getMainWin?.() ?? null)
+    return
+  }
   if (!app.isPackaged) {
     if (manual) send('update:none') // dev build: nothing to update to
     return
@@ -148,6 +161,7 @@ export async function checkForUpdates(manual: boolean): Promise<void> {
 }
 
 export function downloadAndInstall(mode: 'now' | 'quit'): void {
+  if (UPDATER_OFF) return
   if (!app.isPackaged) return
   pendingInstall = mode
   autoUpdater.autoInstallOnAppQuit = mode === 'quit'

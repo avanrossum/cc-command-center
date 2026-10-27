@@ -1,7 +1,7 @@
 // Publish a release: build locally, then upload the artifacts + latest-mac.yml
 // to the public releases repo and sync changelog.json to its main branch.
 //
-//   node scripts/publish.mjs
+//   node scripts/publish.mjs --extra-asset <path to cc-command-center-app-1.0.0-arm64.dmg>
 //
 // Everything lands in the SEPARATE PUBLIC releases repo
 // (avanrossum/claude-command-center-releases):
@@ -25,7 +25,7 @@
 //     APPLE_TEAM_ID). The updater refuses unsigned builds, so this is required.
 //   - A clean tree on a release tag (run npm run bump first).
 import { execSync } from 'node:child_process'
-import { readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -61,6 +61,33 @@ if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
 
 if (cap('git status --porcelain')) {
   console.error('working tree not clean — commit before publishing.')
+  process.exit(1)
+}
+
+// 0.25.0, the farewell release (MIP2-61). cc-command-center's main is the new app now, so
+// this version's tag goes on the electron-0.24 branch there, and gh tags the branch as it is
+// on GitHub: it has to be checked out and pushed. The cc-command-center release also carries
+// the new app's disk image, which the farewell notice opens.
+const BRANCH = 'electron-0.24'
+const TARGETS = { 'avanrossum/cc-command-center': BRANCH, 'avanrossum/claude-command-center-releases': 'main' }
+const NEW_APP_DMG = 'cc-command-center-app-1.0.0-arm64.dmg'
+const extraArg = process.argv.indexOf('--extra-asset')
+const extra = extraArg > 0 ? process.argv[extraArg + 1] : null
+if (cap('git rev-parse --abbrev-ref HEAD') !== BRANCH) {
+  console.error(`check out ${BRANCH} before publishing.`)
+  process.exit(1)
+}
+cap('git fetch -q origin')
+if (cap('git rev-parse HEAD') !== cap(`git rev-parse origin/${BRANCH}`)) {
+  console.error(`push ${BRANCH} first: gh tags the branch as it is on GitHub.`)
+  process.exit(1)
+}
+if (!extra || !extra.endsWith(`/${NEW_APP_DMG}`)) {
+  console.error(`the farewell release needs --extra-asset <path to ${NEW_APP_DMG}>, from the new app's --build-only run.`)
+  process.exit(1)
+}
+if (!existsSync(extra)) {
+  console.error(`no file at ${extra}`)
   process.exit(1)
 }
 
@@ -107,6 +134,8 @@ const fileArgs = assets.map(q).join(' ')
 if (isBeta) console.log(`\n  ${tag} is a PRERELEASE — published as beta, not marked latest.`)
 for (const repo of RELEASES_REPOS) {
   console.log(`\n▶ Publishing ${tag} to ${repo}…`)
+  // The new app's disk image goes on cc-command-center only, where the notice links.
+  const repoFiles = repo === 'avanrossum/cc-command-center' ? `${fileArgs} ${q(extra)}` : fileArgs
   let exists = false
   try {
     cap(`gh release view ${tag} --repo ${repo}`)
@@ -116,13 +145,13 @@ for (const repo of RELEASES_REPOS) {
   }
   if (exists) {
     console.log(`   release exists — uploading (clobber) into it`)
-    sh(`gh release upload ${tag} --repo ${repo} --clobber ${fileArgs}`)
+    sh(`gh release upload ${tag} --repo ${repo} --clobber ${repoFiles}`)
     sh(`gh release edit ${tag} --repo ${repo} --draft=false ${releaseFlags}`)
   } else {
     sh(
-      `gh release create ${tag} --repo ${repo} --target main ${releaseFlags} ` +
+      `gh release create ${tag} --repo ${repo} --target ${TARGETS[repo]} ${releaseFlags} ` +
         `--title ${q(`v${version}`)} --notes ${q(`Release v${version}. See changelog.json for details.`)} ` +
-        fileArgs,
+        repoFiles,
     )
   }
 }
