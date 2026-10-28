@@ -4,6 +4,7 @@
 
 import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { IPC, type ImportSummary, type Result } from '../shared/ipc.ts'
+import { SWITCHER_PINS_MAX, SWITCHER_RECENT_MAX } from '../shared/store.ts'
 import { registryPresent, type AppStoreService, type SeenSession } from './app-store.ts'
 import { isTrustedSender } from './security.ts'
 import { checkCategory, checkSettings, isCategoryId, isSessionId } from './validate.ts'
@@ -45,6 +46,12 @@ export function registerStore({ store, importFolder, sessions }: StoreDeps): voi
   invoke(IPC.storeSetName, (id: unknown, name: unknown): Result => {
     if (!isSessionId(id) || typeof name !== 'string' || name.length > 1000) return { ok: false, error: 'bad request' }
     store.setName(id, name)
+    return { ok: true }
+  }, untrusted)
+  invoke(IPC.storeSetSwitcher, (pins: unknown, recent: unknown): Result => {
+    const ids = (v: unknown, max: number): v is string[] => Array.isArray(v) && v.length <= max && v.every(isSessionId) && new Set(v).size === v.length
+    if (!ids(pins, SWITCHER_PINS_MAX) || !ids(recent, SWITCHER_RECENT_MAX)) return { ok: false, error: 'bad request' }
+    store.setSwitcher(pins, recent, Date.now())
     return { ok: true }
   }, untrusted)
   invoke(IPC.storeNotCategory, (id: unknown): Result => {

@@ -7,6 +7,8 @@ import type { ArbiterLogEntry, ArbiterState } from './arbiter-state.ts'
 import type { TurnSummary } from './summaries.ts'
 import type { AppStore, Category } from './store.ts'
 import type { UpdateState } from './update-state.ts'
+import type { TipFacts, TipsResult } from './usage.ts'
+import type { SpendState } from './spend.ts'
 
 export const IPC = {
   /** Renderer → main: the latest fleet snapshot, or null before the first poll. */
@@ -54,6 +56,7 @@ export const IPC = {
   storeImport: 'store:import',
   storePlace: 'store:place',
   storeSetName: 'store:set-name',
+  storeSetSwitcher: 'store:set-switcher',
   storeNotCategory: 'store:not-category',
   storeSeen: 'store:seen',
   storeGuess: 'store:guess',
@@ -67,9 +70,20 @@ export const IPC = {
   summariesGet: 'summaries:get',
   /** Main → renderer: the card summaries changed (MIP2-1422). */
   summariesUpdate: 'summaries:update',
+  waitsGet: 'waits:get',
+  waitsUpdate: 'waits:update',
+  usageTips: 'usage:tips',
+  spendGet: 'spend:get',
+  spendUpdate: 'spend:update',
+  spendSource: 'spend:source',
+  adminKeyStatus: 'spend:admin-key-status',
+  adminKeyTest: 'spend:admin-key-test',
+  adminKeySave: 'spend:admin-key-save',
+  adminKeyRemove: 'spend:admin-key-remove',
   firstRunInfo: 'first-run:info',
   appStatus: 'settings:app-status',
   selfCheckAgain: 'settings:self-check-again',
+  channelCheckAgain: 'settings:channel-check-again',
   arbiterKeyRemove: 'settings:arbiter-key-remove',
   firstRunRemoveMailbox: 'first-run:remove-mailbox',
   firstRunFinish: 'first-run:finish',
@@ -223,6 +237,22 @@ export interface CccApi {
   /** One-line summaries of each opted-in session's last turn, by session id (MIP2-1422). */
   getSummaries(): Promise<Record<string, TurnSummary>>
   onSummaries(listener: (all: Record<string, TurnSummary>) => void): () => void
+  /** What each waiting session waits on, for Needs-you cards in opted-in categories (MIP2-1485). */
+  getWaits(): Promise<Record<string, TurnSummary>>
+  onWaits(listener: (all: Record<string, TurnSummary>) => void): () => void
+  /** The usage help panel's tips from the Arbiter, cached 10 minutes (MIP2-1498 §4.5). */
+  usageTips(facts: TipFacts): Promise<TipsResult>
+  /** Spend (MIP2-1498 §5): this month's simulated and real amounts, and which one shows. */
+  getSpend(): Promise<SpendState | null>
+  onSpend(listener: (s: SpendState) => void): () => void
+  setSpendSource(source: 'real' | 'simulated'): Promise<Result>
+  /** Null with no Console key; `end` is its last four characters. */
+  adminKeyStatus(): Promise<{ end: string | null } | null>
+  /** Tests a pasted key, or the saved one with no argument; the API's own message on failure. */
+  testAdminKey(key?: string): Promise<Result>
+  /** Stored encrypted like the Arbiter's; never read back by the window. */
+  saveAdminKey(key: string): Promise<Result>
+  removeAdminKey(): Promise<Result>
   /** The Arbiter log, newest last (D-014). */
   arbiterLog(): Promise<ArbiterLogEntry[]>
   firstRunInfo(): Promise<FirstRunInfo | null>
@@ -233,12 +263,16 @@ export interface CccApi {
   appStatus(): Promise<AppStatus | null>
   /** Check again: the self-check forgets this version's results and observes afresh. */
   selfCheckAgain(): Promise<Result>
+  /** Check again for the channel only: the deadline starts over, other results stand (MIP2-1488). */
+  channelCheckAgain(): Promise<Result>
   removeArbiterKey(): Promise<Result>
   finishFirstRun(opts: { capUsd: number; arbiterEnabled: boolean }): Promise<Result>
   /** A placement by hand; null is Uncategorized. */
   place(sessionId: string, categoryId: string | null): Promise<Result>
   /** Rename…: the app's name for a session, over Claude Code's; empty clears it. */
   setName(sessionId: string, name: string): Promise<Result>
+  /** The switcher's pins and recents, in order (MIP2-1494 §5.5). */
+  setSwitcher(pins: string[], recent: string[]): Promise<Result>
   /** "Not <category>": Uncategorized, and the folder stops matching that category. */
   notCategory(sessionId: string): Promise<Result>
   /** Alex opened the session; an auto placement stops showing `· auto`. */
@@ -272,6 +306,8 @@ export interface CccApi {
     hideOutsideAsked?: boolean
     terminalFont?: string
     terminalFontSize?: number
+    betaUpdates?: boolean
+    sidebarWidth?: number
   }): Promise<Result>
   /** The category auto-assign would give a session in this folder, and the folder it keys on. */
   guessCategory(cwd: string): Promise<{ categoryId: string | null; folderKey: string } | null>
@@ -308,6 +344,8 @@ export interface AppStatus {
   restartsToday: number
   /** Null with no key; `end` is its last four characters, null if it can't be read. */
   arbiterKey: { end: string | null } | null
+  /** The Arbiter's slot holds an Admin key saved before 1.0.1; it isn't used (gate pass 16, M-2). */
+  arbiterKeyIsAdmin?: boolean
 }
 
 declare global {

@@ -55,10 +55,20 @@ export function Fleet({
   }
   const bulk = async (what: 'never' | 'allow' | 'archive' | { move: string | null }) => {
     const ids = [...(picked ?? [])]
+    const pins = api.store?.settings.switcherPins ?? []
+    const recent = api.store?.settings.switcherRecent ?? []
     for (const id of ids) {
       if (what === 'archive') await window.ccc.archive(id)
       else if (typeof what === 'object') await window.ccc.place(id, what.move)
       else await window.ccc.setNeverRollOff(id, what === 'never')
+    }
+    // Archiving unpins; Undo brings the pinned ones back and pins them again (MIP2-1494 §5.3).
+    const unpinned = what === 'archive' ? ids.filter(id => pins.includes(id)) : []
+    if (unpinned.length) {
+      api.notice(`${unpinned.length === 1 ? 'A pinned session was' : `${unpinned.length} pinned sessions were`} archived and unpinned.`, {
+        label: 'Undo',
+        run: () => void window.ccc.resurrect(unpinned).then(() => window.ccc.setSwitcher(pins, recent)),
+      })
     }
     setMoveOpen(false)
     onSelection(NO_SELECTION)
@@ -87,7 +97,11 @@ export function Fleet({
         </button>
       </div>
 
-      <SelfCheckBand report={selfCheck} />
+      <SelfCheckBand
+        report={selfCheck}
+        now={now}
+        rows={new Map(entries.map(e => [e.session.sessionId, { name: e.name, running: e.session.pid.value !== null, waiting: e.session.activity.value === 'waiting' }]))}
+      />
       <UpdateBand />
       {entries.length === 0 && <div className="empty">No Claude Code sessions are running.</div>}
 

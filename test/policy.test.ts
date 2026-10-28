@@ -119,7 +119,12 @@ describe('control checks', async () => {
     // The settings window's terminal and General values (MIP2-1424); an empty font clears it.
     expect(checkSettings({ showOutside: false, terminalFont: ' Fira Mono ', terminalFontSize: 18 })).toEqual({ showOutside: false, terminalFont: 'Fira Mono', terminalFontSize: 18 })
     expect(checkSettings({ terminalFont: '' })).toEqual({ terminalFont: '' })
+    // The sidebar's width, 200–480 px (MIP2-1495).
+    expect(checkSettings({ sidebarWidth: 320 })).toEqual({ sidebarWidth: 320 })
     for (const bad of [
+      { sidebarWidth: 199 },
+      { sidebarWidth: 481 },
+      { sidebarWidth: 300.5 },
       { rollOffDays: 6 },
       { rollOffDays: 15 },
       { rollOffDays: 7.5 },

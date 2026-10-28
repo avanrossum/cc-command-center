@@ -30,6 +30,13 @@ describe('checkStore', () => {
     expect(s.importedAt).toBeNull()
   })
 
+  it("keeps the switcher's session ids, once each, recents not pinned, at most five (MIP2-1494)", () => {
+    const id = (n: number) => `c0ffee01-0000-4000-8000-00000000000${n}`
+    const s = checkStore({ version: 1, settings: { switcherPins: [id(1), 'nope', id(1), id(2)], switcherRecent: [id(2), id(3), id(4), id(5), id(6), id(7), id(8), 42] } })
+    expect(s.settings.switcherPins).toEqual([id(1), id(2)])
+    expect(s.settings.switcherRecent).toEqual([id(4), id(5), id(6), id(7), id(8)])
+  })
+
   it('reads any other version as empty', () => {
     expect(checkStore({ version: 2, categories: [] }).categories).toEqual([])
     expect(checkStore('nonsense').version).toBe(1)

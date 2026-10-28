@@ -28,6 +28,7 @@ import {
   type PromptRelay,
 } from './channel-wire.ts'
 import { backgroundedChildren } from './children.ts'
+import { finishedCallSettles } from './offers.ts'
 import { governorUsage } from './usage.ts'
 import {
   DETAIL_CHARS,
@@ -60,7 +61,7 @@ let channel: Channel | null = null
 /** tool_use_ids from tool.check, keyed by tool and input, for the PermissionRequest that follows. */
 const toolIds = new Map<string, { id: string; at: number }[]>()
 /** Prompts offered to the app, so a local answer can end the offer. */
-const offers = new Map<string, { toolUseId: string | null; agentId: string | null; done: boolean }>()
+const offers = new Map<string, { toolUseId: string | null; agentId: string | null; tool: string; done: boolean }>()
 /** Relayed prompt ids already submitted, so a repeated delivery never submits twice. */
 const relayed = new Set<string>()
 let polling = false
@@ -165,7 +166,7 @@ function takeToolUseId(tool: string, input: unknown, now: number): string | null
 }
 
 /** Ends offers the session settled without the app: the call ran, or its loop's turn ended. */
-function settleOffers(match: (o: { toolUseId: string | null; agentId: string | null }) => boolean): void {
+function settleOffers(match: (o: { toolUseId: string | null; agentId: string | null; tool: string }) => boolean): void {
   for (const o of offers.values()) if (match(o)) o.done = true
 }
 
@@ -180,7 +181,7 @@ async function offer($: EngineInterface, ask: PermissionAsk): Promise<Answered |
   const ch = channel
   if (!ch) return null
   const deadline = (await $.clock.now()) + PERMISSION_WAIT_MS
-  const state = { toolUseId: ask.toolUseId, agentId: ask.agentId, done: false }
+  const state = { toolUseId: ask.toolUseId, agentId: ask.agentId, tool: ask.tool, done: false }
   offers.set(ask.requestId, state)
   let retries = 0
   try {
@@ -338,6 +339,10 @@ export const register: Register = (on, options) => {
       detail: detailOf(e),
     })
     const r = await next(e)
+    // Finished (PostToolUse): its offer is settled however the dialog was answered. An offer whose
+    // tool_use_id couldn't be matched (null) settles with the first call of its tool to finish, so a
+    // question answered in the terminal doesn't stay offered for the rest of the turn (MIP2-1492).
+    settleOffers(o => finishedCallSettles(o, { toolUseId: e.tool_use_id, tool }))
     const isError = Boolean((r as { isError?: unknown }).isError)
     await emit($, e.agentId, { type: 'tool.end', toolUseId: e.tool_use_id, tool, isError })
     if (tool === 'Bash' && !isError) {

@@ -1,5 +1,6 @@
 // electron-updater set up for this app (MIP2-1469): the custom provider, no
-// download until Download is pressed, no prereleases, no downgrades. A
+// download until Download is pressed, prereleases only with Get beta updates
+// (MIP2-1497), never a downgrade. A
 // dry-run build (CCC_UPDATE_TEST_FEED at build time, refused by the release
 // script) reads a local stand-in for the repository instead.
 
@@ -58,7 +59,7 @@ export function canUpdate(packaged: boolean, resourcesPath: string): boolean {
   return packaged && existsSync(join(resourcesPath, 'app-update.yml'))
 }
 
-export function setUpUpdates(packaged: boolean, onChange: (s: UpdateState) => void): Updates {
+export function setUpUpdates(packaged: boolean, onChange: (s: UpdateState) => void, betas: () => boolean = () => false): Updates {
   autoUpdater.autoDownload = false
   autoUpdater.allowPrerelease = false
   autoUpdater.allowDowngrade = false
@@ -69,5 +70,5 @@ export function setUpUpdates(packaged: boolean, onChange: (s: UpdateState) => vo
     testOrigin: UPDATE_TEST_FEED,
     open,
   } as Parameters<typeof autoUpdater.setFeedURL>[0])
-  return new Updates(autoUpdater, { active: canUpdate(packaged, process.resourcesPath), testOrigin: UPDATE_TEST_FEED, onChange })
+  return new Updates(autoUpdater, { active: canUpdate(packaged, process.resourcesPath), testOrigin: UPDATE_TEST_FEED, onChange, betas })
 }

@@ -158,7 +158,8 @@ export class AppStoreService {
       const life = lifeOf({
         lastActivityAt: lastActivityOf(s, m),
         needsYou: s.needsYou.value !== null,
-        neverRollOff: m.neverRollOff === true,
+        // A pin keeps a session from roll-off while it's pinned (MIP2-1494 §5.3).
+        neverRollOff: m.neverRollOff === true || (d.settings.switcherPins ?? []).includes(s.sessionId),
         contractor,
         parentGone: contractor && gone(cls.parentId),
         rollOffDays,
@@ -286,6 +287,32 @@ export class AppStoreService {
   archive(sessionId: string, now: number): void {
     const m = (this.data.sessions[sessionId] ??= { categoryId: null, placedBy: null })
     m.archivedAt = now
+    // Archiving unpins and leaves the switcher; the renderer's Undo pins it again (MIP2-1494 §5.3).
+    const s = this.data.settings
+    if (s.switcherPins?.includes(sessionId)) s.switcherPins = s.switcherPins.filter(x => x !== sessionId)
+    if (s.switcherRecent?.includes(sessionId)) s.switcherRecent = s.switcherRecent.filter(x => x !== sessionId)
+    this.save()
+  }
+
+  /** Which spend the top bar shows (MIP2-1498 §5.2). */
+  setSpendSource(source: 'real' | 'simulated'): void {
+    this.data.settings.spendSource = source
+    this.save()
+  }
+
+  /**
+   * The switcher's pins and recents (MIP2-1494 §5.5), each already checked
+   * (store-control.ts). A session that leaves the pins counts as active now,
+   * as clearing Never roll off does, so it doesn't roll off at once.
+   */
+  setSwitcher(pins: string[], recent: string[], now: number): void {
+    const s = this.data.settings
+    for (const id of s.switcherPins ?? []) {
+      const m = this.data.sessions[id]
+      if (m && !pins.includes(id)) m.activityAt = now
+    }
+    s.switcherPins = pins
+    s.switcherRecent = recent.filter(id => !pins.includes(id))
     this.save()
   }
 
@@ -336,7 +363,7 @@ export class AppStoreService {
 
   /** The settings sheet's switches, each already checked (validate.ts checkSettings). */
   updateSettings(
-    patch: Partial<Pick<AppStore['settings'], 'notifyEnabled' | 'notifyNeedsYou' | 'notifyTurn' | 'rollOffDays' | 'arbiterEnabled' | 'arbiterCapUsd' | 'showOutside' | 'hideOutsideAsked' | 'terminalFont' | 'terminalFontSize'>>,
+    patch: Partial<Pick<AppStore['settings'], 'notifyEnabled' | 'notifyNeedsYou' | 'notifyTurn' | 'rollOffDays' | 'arbiterEnabled' | 'arbiterCapUsd' | 'showOutside' | 'hideOutsideAsked' | 'terminalFont' | 'terminalFontSize' | 'betaUpdates' | 'sidebarWidth'>>,
   ): void {
     Object.assign(this.data.settings, patch)
     this.save()

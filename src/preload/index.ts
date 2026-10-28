@@ -8,6 +8,7 @@ import type { ArbiterState } from '../shared/arbiter-state.ts'
 import type { TurnSummary } from '../shared/summaries.ts'
 import type { AppStore } from '../shared/store.ts'
 import type { UpdateState } from '../shared/update-state.ts'
+import type { SpendState } from '../shared/spend.ts'
 
 function listen<A extends unknown[]>(channel: string, listener: (...args: A) => void): () => void {
   const handler = (_event: IpcRendererEvent, ...args: unknown[]) => listener(...(args as A))
@@ -60,16 +61,28 @@ const api: CccApi = {
   onArbiter: listener => listen<[ArbiterState]>(IPC.arbiterUpdate, listener),
   getSummaries: () => ipcRenderer.invoke(IPC.summariesGet),
   onSummaries: listener => listen<[Record<string, TurnSummary>]>(IPC.summariesUpdate, listener),
+  getWaits: () => ipcRenderer.invoke(IPC.waitsGet),
+  onWaits: listener => listen<[Record<string, TurnSummary>]>(IPC.waitsUpdate, listener),
+  usageTips: facts => ipcRenderer.invoke(IPC.usageTips, facts),
+  getSpend: () => ipcRenderer.invoke(IPC.spendGet),
+  onSpend: listener => listen<[SpendState]>(IPC.spendUpdate, listener),
+  setSpendSource: source => ipcRenderer.invoke(IPC.spendSource, source),
+  adminKeyStatus: () => ipcRenderer.invoke(IPC.adminKeyStatus),
+  testAdminKey: key => ipcRenderer.invoke(IPC.adminKeyTest, key),
+  saveAdminKey: key => ipcRenderer.invoke(IPC.adminKeySave, key),
+  removeAdminKey: () => ipcRenderer.invoke(IPC.adminKeyRemove),
   arbiterLog: () => ipcRenderer.invoke(IPC.arbiterLog),
   firstRunInfo: () => ipcRenderer.invoke(IPC.firstRunInfo),
   removeMailboxRules: () => ipcRenderer.invoke(IPC.firstRunRemoveMailbox),
   setArbiterKey: key => ipcRenderer.invoke(IPC.arbiterSetKey, key),
   appStatus: () => ipcRenderer.invoke(IPC.appStatus),
   selfCheckAgain: () => ipcRenderer.invoke(IPC.selfCheckAgain),
+  channelCheckAgain: () => ipcRenderer.invoke(IPC.channelCheckAgain),
   removeArbiterKey: () => ipcRenderer.invoke(IPC.arbiterKeyRemove),
   finishFirstRun: opts => ipcRenderer.invoke(IPC.firstRunFinish, opts),
   place: (id, categoryId) => ipcRenderer.invoke(IPC.storePlace, id, categoryId),
   setName: (id, name) => ipcRenderer.invoke(IPC.storeSetName, id, name),
+  setSwitcher: (pins, recent) => ipcRenderer.invoke(IPC.storeSetSwitcher, pins, recent),
   notCategory: id => ipcRenderer.invoke(IPC.storeNotCategory, id),
   markSeen: id => ipcRenderer.invoke(IPC.storeSeen, id),
   guessCategory: cwd => ipcRenderer.invoke(IPC.storeGuess, cwd),

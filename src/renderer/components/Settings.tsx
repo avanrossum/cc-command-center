@@ -9,9 +9,10 @@ import { ARBITER_MODEL, type ArbiterState } from '../../shared/arbiter-state.ts'
 import { TERMINAL_FONT_SIZE, terminalFont } from '../model/format.ts'
 import { useStore } from './Categories.tsx'
 import { checkLine, useUpdate } from './UpdateBand.tsx'
+import { betaUpdatesOn } from '../../shared/update-state.ts'
 
-const SECTIONS = ['General', 'Terminal', 'Notifications', 'Arbiter', 'Claude Code', 'About'] as const
-type Section = (typeof SECTIONS)[number]
+const SECTIONS = ['General', 'Terminal', 'Notifications', 'Arbiter', 'Spend', 'Claude Code', 'About'] as const
+export type Section = (typeof SECTIONS)[number]
 
 /** What `Copy build info` copies, for bug reports (§4.6). */
 export function buildInfo(s: AppStatus, claudeVersion: string | null): string {
@@ -35,7 +36,10 @@ export function SettingsSheet({
   onArbiterLog,
   arbiter,
   selfCheck,
+  initialSection = 'General',
 }: {
+  /** The section to open at, such as Spend from the spend panel's Set up… (MIP2-1498 §5.4). */
+  initialSection?: Section
   onClose: () => void
   /** The move sheet for 0.24's sessions (MIP2-1425). */
   onMove: () => void
@@ -45,7 +49,7 @@ export function SettingsSheet({
 }) {
   const api = useStore()
   const s = api.store?.settings
-  const [section, setSection] = useState<Section>('General')
+  const [section, setSection] = useState<Section>(initialSection)
   const [cap, setCap] = useState((s?.arbiterCapUsd ?? 1).toFixed(2))
   const [key, setKey] = useState('')
   const [replacing, setReplacing] = useState(false)
@@ -202,7 +206,15 @@ export function SettingsSheet({
                   </button>
                 </div>
               )}
-              <p className="note">The key is encrypted on this Mac with a key kept in your Keychain.</p>
+              {status?.arbiterKeyIsAdmin && (
+                <p className="note warn">
+                  The saved key is an Admin API key, which has organization-admin rights, so the Arbiter doesn't use it. Remove it and save a workspace-scoped API key.
+                </p>
+              )}
+              <p className="note">
+                Use a workspace-scoped API key. The app refuses an Admin key, but it can't tell whether a personal key's account has admin rights. The key is encrypted on this Mac with a key kept in
+                your Keychain.
+              </p>
               <div className="lbl">Model</div>
               <p className="mono">{ARBITER_MODEL}</p>
               <label>
@@ -229,6 +241,8 @@ export function SettingsSheet({
               </button>
             </>
           )}
+
+          {section === 'Spend' && <SpendSettings />}
 
           {section === 'Claude Code' && (
             <>
@@ -294,6 +308,12 @@ export function SettingsSheet({
                   Check for updates
                 </button>
               )}
+              {update && update.phase !== 'off' && (
+                <>
+                  {toggle('Get beta updates', betaUpdatesOn(s.betaUpdates, status.version), v => ({ betaUpdates: v }))}
+                  <p className="note">Betas come before a release, to try new features early. A beta install keeps getting betas, then the release. You can turn this off at any time.</p>
+                </>
+              )}
               {update?.phase === 'available' && (
                 <button type="button" className="fchip on" onClick={() => void window.ccc.downloadUpdate()}>
                   Download
@@ -316,5 +336,74 @@ export function SettingsSheet({
         </div>
       </div>
     </div>
+  )
+}
+
+/** Settings → Spend (MIP2-1498 §5.3): the Console key, with Test and Remove. Stored like the Arbiter's key. */
+function SpendSettings() {
+  const api = useStore()
+  const [status, setStatus] = useState<{ end: string | null } | null | undefined>(undefined)
+  const [key, setKey] = useState('')
+  const [result, setResult] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const refresh = () => void window.ccc.adminKeyStatus().then(setStatus)
+  useEffect(refresh, [])
+  const run = async (what: 'test' | 'save' | 'remove') => {
+    setBusy(true)
+    setResult(null)
+    try {
+      const r = what === 'test' ? await window.ccc.testAdminKey(key.trim() || undefined) : what === 'save' ? await window.ccc.saveAdminKey(key) : await window.ccc.removeAdminKey()
+      // A failed test shows the API's own message.
+      if (!r.ok) return setResult(r.error)
+      if (what === 'test') setResult('The key works.')
+      if (what === 'save') (setKey(''), api.notice('Console key saved.'))
+      if (what === 'remove') api.notice('Console key removed.')
+      refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <>
+      <div className="lbl">Console key (Admin, personal or service account)</div>
+      {status ? (
+        <div className="row">
+          <span className="mono grow">Stored · …{status.end ?? '????'}</span>
+          <button type="button" className="fchip" disabled={busy} onClick={() => void run('test')}>
+            Test
+          </button>
+          <button type="button" className="fchip" disabled={busy} onClick={() => void run('remove')}>
+            Remove
+          </button>
+        </div>
+      ) : (
+        <div className="row">
+          <input
+            className="grow"
+            type="password"
+            value={key}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="sk-ant-… (paste; tested, then stored in the Keychain)"
+            onChange={e => setKey(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && key.trim() && void run('save')}
+          />
+          <button type="button" className="fchip" disabled={busy || !key.trim()} onClick={() => void run('test')}>
+            Test
+          </button>
+          <button type="button" className="fchip on" disabled={busy || !key.trim()} onClick={() => void run('save')}>
+            Save
+          </button>
+        </div>
+      )}
+      {result && <p className="note">{result}</p>}
+      <p className="note">Needs an Anthropic Console organization. Individual accounts don't have one. Check platform.claude.com/settings/organization.</p>
+      <p className="note">
+        An Admin API key has full organization-admin rights: it can manage members, workspaces and API keys. A personal or service-account key carries its account's role. For an owner or
+        admin it's just as broad, and it can also spend on inference. The narrower choice is a service account with the lowest role that can read cost. The key is tested with one cost-report
+        call before it's saved.
+      </p>
+      <p className="note">The key is encrypted on this Mac with a key kept in your Keychain. It's used only to read your organization's cost, every 15 minutes.</p>
+    </>
   )
 }

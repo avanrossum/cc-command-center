@@ -2,7 +2,7 @@
 export function parseVersion(tag: string): [number, number, number, string | null] | null
 export function newerThan(a: string, b: string): boolean
 export function windowRefusal(tag: string, window: { tombstone: string | null; closed: boolean } | null): string | null
-export function releaseArgs(o: { tag: string; repo: string; title: string; notesFile: string; files: string[]; draft: boolean; target?: string | null }): string[]
+export function releaseArgs(o: { tag: string; repo: string; title: string; notesFile: string; files: string[]; draft: boolean; target?: string | null; prerelease?: boolean }): string[]
 export function latestFalseRefusal(args: string[]): string | null
 export function updateFileRefusal(files: string[]): string | null
 export function teamOf(codesignOutput: string): string | null
@@ -22,3 +22,5 @@ export function remoteTagRefusal(refs: { ref: string; object?: { sha: string; ty
 export function builderConfig(o: { identity: string | null; adhoc: boolean; repo: string | null }): string[]
 export const PUBLIC_REPO: string
 export function installEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv
+export function comparePrerelease(a: string, b: string): number
+export function prereleaseRefusal(version: string, prerelease: boolean): string | null

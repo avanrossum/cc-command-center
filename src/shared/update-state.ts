@@ -29,3 +29,13 @@ export interface UpdateState {
 }
 
 export const INITIAL_UPDATE_STATE: UpdateState = { phase: 'idle', version: null, percent: null, checkedAt: null, error: null, dismissed: false, testOrigin: null }
+
+/** Whether a version is a prerelease (`1.0.1-beta.2`). */
+export function isPrerelease(version: string): boolean {
+  return /^v?\d+\.\d+\.\d+-/.test(version)
+}
+
+/** Get beta updates (MIP2-1497): the setting when set; unset, on in a beta build, so a beta keeps getting betas and then the final. */
+export function betaUpdatesOn(setting: boolean | undefined, version: string): boolean {
+  return setting ?? isPrerelease(version)
+}

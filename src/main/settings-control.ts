@@ -57,6 +57,7 @@ export function registerSettings({ key, selfCheck, watchdog, now = Date.now }: S
         supervisor: w?.state.kind ?? 'unknown',
         restartsToday: w?.restartsSince(startOfDay(now())) ?? 0,
         arbiterKey: key.has() ? { end: stored ? stored.slice(-4) : null } : null,
+        arbiterKeyIsAdmin: key.holdsAdminKey(),
       }
     },
     null,
@@ -64,7 +65,15 @@ export function registerSettings({ key, selfCheck, watchdog, now = Date.now }: S
   invoke(
     IPC.selfCheckAgain,
     (): Result => {
-      selfCheck.recheck()
+      selfCheck.recheck(now())
+      return { ok: true }
+    },
+    untrusted,
+  )
+  invoke(
+    IPC.channelCheckAgain,
+    (): Result => {
+      selfCheck.recheckChannel(now())
       return { ok: true }
     },
     untrusted,

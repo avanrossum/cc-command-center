@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { claudeEnv, cleanPath, resolveLoginPath, setLoginPath } from '../src/claude-cli.ts'
-import { checkSupervisorPath, daemonPid, pathFromPs, sharedSupervisorStart, supervisorState } from '../src/supervisor-env.ts'
+import { checkSupervisorPath, daemonPid, pathFromPs, processStartedAt, sharedSupervisorStart, supervisorState } from '../src/supervisor-env.ts'
 import { ClaudeCommandError as CommandError } from '../src/claude-cli.ts'
 
 const env = { HOME: '/Users/x', USER: 'x', SHELL: '/bin/zsh', PATH: '/usr/bin:/bin:/usr/sbin:/sbin' }
@@ -103,5 +103,50 @@ describe('the supervisor start the host and the watchdog share (pass 9, L-5)', (
     expect(await supervisorState(async () => { throw new Error('timed out') })).toBe('unknown')
     expect(await supervisorState(async () => { throw new CommandError('claude daemon status', 2, 'something else', '') })).toBe('unknown')
     expect(await supervisorState(async () => '')).toBe('unknown')
+  })
+})
+
+describe('waiting for the login PATH (MIP2-1489)', () => {
+  it('starts a supervisor only once the login PATH is known, and with it', async () => {
+    const { awaitLoginPath, createClaudeSpawner, createClaudeExitCode } = await import('../src/claude-cli.ts')
+    const { mkdtempSync, writeFileSync, chmodSync, readFileSync, existsSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const dir = mkdtempSync(join(tmpdir(), 'ccc-path-race-'))
+    const seen = join(dir, 'path.txt')
+    const fake = join(dir, 'claude')
+    writeFileSync(fake, `#!/bin/sh\nprintf '%s' "$PATH" > '${seen}'\n`)
+    chmodSync(fake, 0o755)
+    let resolve!: () => void
+    awaitLoginPath(new Promise<void>(r => (resolve = r)))
+    try {
+      // Before the PATH is known: nothing starts, and no pid is claimed.
+      expect(createClaudeSpawner(fake)(['daemon', 'run'])).toBeUndefined()
+      const exit = createClaudeExitCode(fake)(['daemon', 'status'])
+      await new Promise(r => setTimeout(r, 150))
+      expect(existsSync(seen)).toBe(false)
+      // Known: the deferred start runs with the login PATH, and the status check goes too.
+      setLoginPath('/opt/login/bin:/usr/bin:/bin')
+      resolve()
+      expect(await exit).toBe(0)
+      for (let i = 0; i < 50 && !readFileSync(seen, { flag: 'a+' }).toString().includes('/opt/login/bin'); i++) await new Promise(r => setTimeout(r, 20))
+      expect(readFileSync(seen, 'utf8').startsWith('/opt/login/bin:/usr/bin:/bin')).toBe(true)
+      // Once settled, a start goes at once and has its pid.
+      expect(createClaudeSpawner(fake)(['daemon', 'run'])).toEqual(expect.any(Number))
+    } finally {
+      awaitLoginPath(Promise.resolve())
+      setLoginPath(null)
+      await new Promise(r => setTimeout(r, 50))
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('processStartedAt (MIP2-1488)', () => {
+  it("reads ps's lstart in the C locale, and nothing else", async () => {
+    expect(await processStartedAt(1, async () => 'Thu Oct  8 02:53:01 2026\n')).toBe(new Date(2026, 9, 8, 2, 53, 1).getTime())
+    expect(await processStartedAt(1, async () => '')).toBeNull()
+    expect(await processStartedAt(1, async () => 'mer 28 oct 02:53:01 2026')).toBeNull()
+    expect(await processStartedAt(1, async () => Promise.reject(new Error('no such process')))).toBeNull()
   })
 })

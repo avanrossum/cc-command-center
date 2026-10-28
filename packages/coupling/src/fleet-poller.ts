@@ -22,6 +22,22 @@ import type { SessionHost } from './session-host.ts'
 /** A mod that hasn't been heard from this long has its fields marked stale (spec MIP2-1370 §4, Stale). */
 export const MOD_SILENCE_MS = 60_000
 
+/** How long a newly offered ask counts before Claude Code's own status must agree it's waiting. */
+export const ASK_GRACE_MS = 15_000
+
+/**
+ * The asks that still need Alex, newest first (MIP2-1492). The mod keeps an
+ * offer open until the tool runs or the turn ends, so a question answered in
+ * the terminal stays offered while the turn goes on thinking. An ask counts
+ * only while Claude Code says the session waits on Alex, or for
+ * ASK_GRACE_MS after it was offered, so a poll can't race the dialog opening.
+ * Newest first, so a newer prompt shows over an older one.
+ */
+export function livePending(pending: PendingRequest[], s: Pick<SessionSnapshot, 'activity' | 'needsYou'>, now: number): PendingRequest[] {
+  const waiting = s.activity.value === 'waiting' || s.needsYou.value !== null
+  return pending.filter(p => waiting || now - p.askedAt < ASK_GRACE_MS).sort((a, b) => b.askedAt - a.askedAt)
+}
+
 export type FleetListener = (snapshot: FleetSnapshot) => void
 
 export interface FleetPollerOptions {
@@ -98,9 +114,15 @@ export class FleetPoller {
     if (this.timer) return
     // Each poll schedules the next once it settles, so a slow `claude`
     // never has two polls in flight.
+    // A poll that throws still schedules the next, so nothing stops polling for good (gate pass 15, M-2).
     const loop = async () => {
-      await this.pollOnce()
-      if (this.timer) this.timer = setTimeout(loop, this.intervalMs)
+      try {
+        await this.pollOnce()
+      } catch (err) {
+        console.warn(`fleet poll: ${message(err)}`)
+      } finally {
+        if (this.timer) this.timer = setTimeout(loop, this.intervalMs)
+      }
     }
     this.timer = setTimeout(loop, 0)
   }
@@ -186,7 +208,7 @@ export class FleetPoller {
     // every 25 s, so a minute without one means its channel is gone.
     const lastContact = mod.tokens?.observedAt ?? 0
     const stale = !this.modHealth.ok || s.pid.value === null || this.now() - lastContact > MOD_SILENCE_MS
-    const pending = this.readPending?.().get(s.sessionId) ?? []
+    const pending = livePending(this.readPending?.().get(s.sessionId) ?? [], s, this.now())
     // A source the self-check found broken on this version reads stale.
     const degraded = this.selfCheck?.degradedFields() ?? new Set()
     const fields = stale ? staleModFields(mod) : staleModFields(mod, degraded)
@@ -222,7 +244,14 @@ export class FleetPoller {
       sources: this.readReporter ? [this.health, this.modHealth] : [this.health],
     }
     this.latest = snapshot
-    for (const listener of this.listeners) listener(snapshot)
+    // One listener that throws neither stops the others nor the poll (gate pass 15, M-2).
+    for (const listener of this.listeners) {
+      try {
+        listener(snapshot)
+      } catch (err) {
+        console.warn(`fleet listener: ${message(err)}`)
+      }
+    }
     return snapshot
   }
 }

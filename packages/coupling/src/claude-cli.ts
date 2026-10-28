@@ -123,9 +123,22 @@ let loginPath: string | null = null
 /** Resolves once the login PATH is known; every claude the runner starts waits for it (pass 8, L-2). */
 let pathReady: Promise<void> = Promise.resolve()
 
-/** Makes every claude the runner starts wait for the login PATH, resolved in the background (pass 8, L-2). */
+/** Whether pathReady has settled, so a spawn can go at once (MIP2-1489). */
+let pathSettled = true
+
+/**
+ * Makes every claude the app starts wait for the login PATH, resolved in the
+ * background: the runner, the exit-code check and the spawner (pass 8, L-2;
+ * MIP2-1489).
+ */
 export function awaitLoginPath(ready: Promise<void>): void {
-  pathReady = ready.catch(() => {})
+  pathSettled = false
+  const mine: Promise<void> = ready
+    .catch(() => {})
+    .then(() => {
+      if (pathReady === mine) pathSettled = true
+    })
+  pathReady = mine
 }
 
 /** Sets the PATH every `claude` the app runs gets (MIP2-1457). */
@@ -242,8 +255,10 @@ export function createClaudeRunner(binary = resolveClaudeBinary()): ClaudeRunner
 }
 
 export function createClaudeExitCode(binary = resolveClaudeBinary()): ClaudeExitCode {
-  return (args, opts = {}) =>
-    new Promise(resolve => {
+  return async (args, opts = {}) => {
+    // The watchdog's status check waits for the login PATH like every other claude (MIP2-1489).
+    await pathReady
+    return new Promise(resolve => {
       execFile(binary, args, { timeout: opts.timeoutMs ?? 10_000, env: claudeEnv() }, error => {
         if (!error) return resolve(0)
         const code = (error as NodeJS.ErrnoException & { code?: unknown }).code
@@ -251,15 +266,24 @@ export function createClaudeExitCode(binary = resolveClaudeBinary()): ClaudeExit
         resolve(typeof code === 'number' ? code : -1)
       })
     })
+  }
 }
 
 export function createClaudeSpawner(binary = resolveClaudeBinary()): ClaudeSpawner {
-  return args => {
+  const start = (args: string[]): number | undefined => {
     // Its own process group and no stdio tie to the app: quitting the app
     // must not take Claude Code's supervisor, and every session, with it.
     const child = spawn(binary, args, { detached: true, stdio: 'ignore', env: claudeEnv() })
     child.on('error', () => {})
     child.unref()
     return child.pid
+  }
+  return args => {
+    // A supervisor started before the login PATH is known would keep launchd's bare one, and a
+    // Claude Code upgrade carries it forward (MIP2-1486, MIP2-1489). Until then the start waits,
+    // and its pid isn't known yet.
+    if (pathSettled) return start(args)
+    void pathReady.then(() => start(args))
+    return undefined
   }
 }

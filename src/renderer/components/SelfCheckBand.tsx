@@ -4,6 +4,7 @@
 
 import { useState } from 'react'
 import type { SelfCheckReport } from '@ccc/contract'
+import { age } from '../model/format.ts'
 
 const KEY = 'ccc.selfCheckDismissed'
 
@@ -120,12 +121,122 @@ export function SecurityStrip({ report, onFocusBack }: { report: SelfCheckReport
   )
 }
 
-export function SelfCheckBand({ report }: { report: SelfCheckReport | null }) {
+/** What the channel band needs to know about a listed session (MIP2-1488). */
+export interface ChannelRow {
+  name: string
+  /** It has a process: Restart stops it and resumes it through the app. Otherwise Resume. */
+  running: boolean
+  /** Waiting on a permission: a restart would end the wait, so it isn't offered (Research, MIP2-1488). */
+  waiting: boolean
+}
+
+export function SelfCheckBand({
+  report,
+  rows = new Map(),
+  now = Date.now(),
+}: {
+  report: SelfCheckReport | null
+  /** Listed sessions by id, for the channel band. */
+  rows?: ReadonlyMap<string, ChannelRow>
+  now?: number
+}) {
   return (
     <>
       <SecurityBands report={report} />
+      <ChannelBand report={report} rows={rows} now={now} />
       <UpdateBand report={report} />
     </>
+  )
+}
+
+const time = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+
+/**
+ * What may have cut the sessions off: a Claude Code install or a supervisor
+ * start after the oldest of them reached the app's channel list. The app
+ * infers it from timing, so it reads as likely; null when it saw neither
+ * (MIP2-1488).
+ */
+export function channelCause(report: SelfCheckReport): string | null {
+  const since = Math.min(...(report.unconnected ?? []).map(u => u.since))
+  const { claudeInstalledAt, supervisorStartedAt } = report.causes ?? { claudeInstalledAt: null, supervisorStartedAt: null }
+  const installed = claudeInstalledAt !== null && claudeInstalledAt > since
+  const restarted = supervisorStartedAt !== null && supervisorStartedAt > since
+  const claude = report.claudeVersion ? `Claude Code ${report.claudeVersion}` : 'Claude Code'
+  if (installed && restarted) return `Likely cause: ${claude} was installed at ${time(claudeInstalledAt)}, and its background supervisor restarted at ${time(supervisorStartedAt)}.`
+  if (installed) return `Likely cause: ${claude} was installed at ${time(claudeInstalledAt)}.`
+  if (restarted) return `Likely cause: Claude Code's background supervisor restarted at ${time(supervisorStartedAt)}.`
+  return null
+}
+
+/**
+ * Sessions whose mod hasn't reached the app (MIP2-1488), by name and how
+ * long. A running session's mod comes back by itself within a minute once
+ * the app can hear it, so Check again starts the deadline over. One that
+ * doesn't needs a new process: Restart stops it and resumes it through the
+ * app (resume.ts), and an ended one gets Resume. Opening only attaches,
+ * which doesn't reload the mod. Copy: UX review on MIP2-1488.
+ */
+export function ChannelBand({ report, rows, now }: { report: SelfCheckReport | null; rows: ReadonlyMap<string, ChannelRow>; now: number }) {
+  const [busy, setBusy] = useState(false)
+  const [restarting, setRestarting] = useState<ReadonlySet<string>>(new Set())
+  const failed = report?.checks.some(c => c.id === 'channel' && c.state === 'fail')
+  const list = report?.unconnected ?? []
+  if (!report || !failed || !list.length) return null
+  const cause = channelCause(report)
+  const again = async () => {
+    setBusy(true)
+    try {
+      await window.ccc.channelCheckAgain()
+    } finally {
+      setBusy(false)
+    }
+  }
+  const restart = async (id: string) => {
+    setRestarting(r => new Set([...r, id]))
+    try {
+      await window.ccc.resume(id)
+    } finally {
+      setRestarting(r => new Set([...r].filter(x => x !== id)))
+    }
+  }
+  return (
+    <div className="band" role="status">
+      <div className="band-t">
+        <b>{list.length === 1 ? "A session isn't connected to the app." : `${list.length} sessions aren't connected to the app.`}</b> Answering from cards and sending prompts are
+        off for all sessions until {list.length === 1 ? 'it connects' : 'these connect'}. Sessions show their own permission dialogs meanwhile. {cause ? `${cause} ` : ''}Running
+        sessions usually reconnect by themselves within a minute. If one stays listed, press Check again, then restart it from its row.
+        <ul className="band-d">
+          {list.map((u, i) => {
+            if (!u.sessionId) return <li key={`new-${i}`}>A session the app launched at {time(u.since)}</li>
+            const id = u.sessionId
+            const row = rows.get(id)
+            return (
+              <li key={id}>
+                {row?.name ?? `Session ${id.slice(0, 8)}`} · {age(now - u.since)}{' '}
+                {row?.running ? (
+                  <button
+                    className="fchip"
+                    disabled={row.waiting || restarting.has(id)}
+                    title={row.waiting ? 'Waiting on a permission: answer it in the session first. A restart would end the wait.' : 'Stops this session and resumes it in the app. The conversation is kept.'}
+                    onClick={() => void restart(id)}
+                  >
+                    {restarting.has(id) ? 'Restarting…' : 'Restart'}
+                  </button>
+                ) : (
+                  <button className="fchip" disabled={restarting.has(id)} onClick={() => void restart(id)}>
+                    {restarting.has(id) ? 'Resuming…' : 'Resume'}
+                  </button>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      </div>
+      <button className="fchip" onClick={() => void again()} disabled={busy}>
+        {busy ? 'Checking…' : 'Check again'}
+      </button>
+    </div>
   )
 }
 
@@ -146,6 +257,8 @@ function UpdateBand({ report }: { report: SelfCheckReport | null }) {
   }
   if (report.state !== 'degraded') return null
   const failed = report.checks.filter(c => c.state === 'fail')
+  // A channel-only failure isn't an update's doing; the channel band says it (MIP2-1488).
+  if (report.unconnected?.length && failed.every(c => c.id === 'channel' || SECURITY.some(a => a.id === c.id))) return null
   const off = report.controlOff.map(c => (c === 'card-answers' ? 'answering from cards' : 'sending prompts')).join(' and ')
   const dismiss = () => {
     try {

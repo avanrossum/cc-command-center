@@ -14,6 +14,9 @@ export const CHECK_EVERY_MS = 4 * 60 * 60 * 1000
 
 /** The part of electron-updater's AppUpdater this uses. */
 export interface UpdaterLike {
+  /** Prerelease tags are candidates (MIP2-1497); the provider reads it on each check. */
+  allowPrerelease: boolean
+  allowDowngrade: boolean
   checkForUpdates(): Promise<unknown>
   downloadUpdate(): Promise<unknown>
   quitAndInstall(): void
@@ -32,7 +35,14 @@ export class Updates {
 
   constructor(
     private readonly updater: UpdaterLike,
-    private readonly opts: { active: boolean; testOrigin: string | null; onChange: (s: UpdateState) => void; now?: () => number },
+    private readonly opts: {
+      active: boolean
+      testOrigin: string | null
+      onChange: (s: UpdateState) => void
+      now?: () => number
+      /** Get beta updates, read at each check (MIP2-1497). */
+      betas?: () => boolean
+    },
   ) {
     this.state = { ...INITIAL_UPDATE_STATE, phase: opts.active ? 'idle' : 'off', testOrigin: opts.testOrigin }
     const on = <A extends unknown[]>(event: string, fn: (...args: A) => void) => updater.on(event, fn as unknown as (...args: never[]) => void)
@@ -56,6 +66,9 @@ export class Updates {
     if (['checking', 'downloading', 'downloaded'].includes(this.state.phase)) return
     if (byHand) this.set({ dismissed: false })
     this.set({ phase: 'checking', error: null })
+    // The setting as it is now; never a downgrade, whatever electron-updater's defaults say.
+    this.updater.allowPrerelease = this.opts.betas?.() ?? false
+    this.updater.allowDowngrade = false
     await this.updater.checkForUpdates().catch(err => this.set({ phase: 'error', error: shortError(err), checkedAt: this.now() }))
   }
 

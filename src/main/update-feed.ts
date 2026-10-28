@@ -28,6 +28,28 @@ function parse(v: string): Version | null {
   return m ? [Number(m[1]), Number(m[2]), Number(m[3]), m[4] ?? null] : null
 }
 
+/**
+ * Prerelease order (semver §11): dot-separated identifiers compared in turn,
+ * numeric ones as numbers and below alphanumeric ones, and a shorter list
+ * below a longer one it starts. So beta.2 < beta.10 (MIP2-1497).
+ */
+export function comparePrerelease(a: string, b: string): number {
+  const x = a.split('.')
+  const y = b.split('.')
+  for (let i = 0; i < Math.min(x.length, y.length); i++) {
+    const p = x[i] as string
+    const q = y[i] as string
+    if (p === q) continue
+    const pn = /^\d+$/.test(p)
+    const qn = /^\d+$/.test(q)
+    if (pn && qn) return Number(p) - Number(q)
+    if (pn) return -1
+    if (qn) return 1
+    return p < q ? -1 : 1
+  }
+  return x.length - y.length
+}
+
 /** Semver order, prereleases below their release; null when either isn't semver. */
 export function compareVersions(a: string, b: string): number | null {
   const x = parse(a)
@@ -37,7 +59,7 @@ export function compareVersions(a: string, b: string): number | null {
   if (x[3] === y[3]) return 0
   if (x[3] === null) return 1
   if (y[3] === null) return -1
-  return x[3] < y[3] ? -1 : 1
+  return comparePrerelease(x[3], y[3])
 }
 
 /** The release tags in a releases.atom feed, in feed order. */

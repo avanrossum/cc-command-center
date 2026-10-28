@@ -2,7 +2,7 @@
 // package's fleet poller, self-check and supervisor watchdog, and shows the
 // window. It reads Claude Code only through @ccc/coupling.
 
-import { chmodSync, lstatSync, mkdirSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import {
@@ -27,6 +27,7 @@ import {
   resolveLoginPath,
   setLoginPath,
   checkSupervisorPath,
+  processStartedAt,
   sharedSupervisorStart,
   awaitLoginPath,
   terminalHostOf,
@@ -37,7 +38,13 @@ import { APP_ORIGIN } from './policy.ts'
 import { AppStoreService, registryPresent } from './app-store.ts'
 import { Arbiter, ArbiterLog, waitingItems } from './arbiter.ts'
 import { Summaries } from './summaries.ts'
-import { createAsk, createSummarize } from './arbiter-client.ts'
+import { blockedOnAlex, lastQuestion, type TurnSummary } from '../shared/summaries.ts'
+import { createAsk, createSummarize, createTips } from './arbiter-client.ts'
+import { checkTipFacts, UsageTips } from './usage-tips.ts'
+import { REAL_POLL_MS, RealSpendPoller, SpendLedger, type Fetch } from './spend.ts'
+import { registerSpend } from './spend-control.ts'
+import type { SpendState } from '../shared/spend.ts'
+import type { SessionSnapshot } from '@ccc/contract'
 import { ArbiterKey } from './arbiter-key.ts'
 import { registerArtifacts } from './artifacts.ts'
 import { registerFirstRun } from './first-run-control.ts'
@@ -56,6 +63,7 @@ import { registerSettings } from './settings-control.ts'
 import { setUpUpdates } from './update-setup.ts'
 import { isolatedEnv, runFolderRefusal, TEST_RUN_FOLDER, testIsolation, UPDATE_TEST_FEED } from './test-isolation.ts'
 import { registerUpdates } from './updater.ts'
+import { betaUpdatesOn } from '../shared/update-state.ts'
 
 // The build writes main.cjs, preload.cjs and renderer/ side by side in dist/.
 const DIST = __dirname
@@ -140,6 +148,14 @@ let hub: ChannelHub | null = null
 let watchdog: SupervisorWatchdog | null = null
 let pool: AttachPool | null = null
 let summaries: Summaries | null = null
+/** The Needs-you line for sessions blocked with nothing the card can answer (MIP2-1485). */
+let waits: Summaries | null = null
+/** Simulated spend (MIP2-1498 §5); saved on quit. */
+let spendLedger: SpendLedger | null = null
+/** Notes the local last-line excerpts for blocked sessions; set up with `waits`. */
+/** Adds a poll's session costs to the spend ledger; set up with it. */
+let noteSpend: (sessions: readonly SessionSnapshot[]) => void = () => {}
+let noteLastLines: (blocked: string[], live: ReadonlySet<string>) => void = () => {}
 
 function broadcast(channel: string, ...args: unknown[]): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -294,7 +310,7 @@ async function start(): Promise<void> {
     denyAlso: [app.getPath('userData')],
     root: resolveChannelRoot(process.env, DEFAULT_CHANNEL_ROOT),
     // Card summaries (MIP2-1422); set up below, once the store and key exist.
-    onAnswer: (id, post) => void summaries?.offer(id, post),
+    onAnswer: (id, post) => (void summaries?.offer(id, post), void waits?.offer(id, post)),
     // Every connection must come from the session's own process (gate M-1).
     sessionPid: id => poller?.current()?.sessions.find(s => s.sessionId === id && !s.pid.stale)?.pid.value ?? null,
     // A swapped or squatted channel: stop the session, so an impostor holding its secret loses its mod (gate run 2, M-1).
@@ -326,8 +342,24 @@ async function start(): Promise<void> {
   if (modChanged) selfCheck.markModChanged(Date.now(), (modChanged as ModHealed).movedTo, [], (modChanged as ModHealed).why)
   if (checkFailed) selfCheck.markModCheckFailed(Date.now(), (checkFailed as { what: string }).what, (checkFailed as { why: string }).why)
   const binary = resolveClaudeBinary()
+  // When the Claude Code the app runs was installed: the creation time of the file the binary's link resolves to.
+  const installedAt = (bin: string): number | null => {
+    try {
+      return statSync(realpathSync(bin)).birthtimeMs || null
+    } catch {
+      return null
+    }
+  }
   // Whether the shared supervisor can find claude and Alex's tools; read at start and every 5 minutes (MIP2-1457).
-  const readSupervisorPath = () => void checkSupervisorPath(run, binary).then(r => selfCheck.noteSupervisorPath(r), err => console.warn(`supervisor PATH: ${String(err)}`))
+  const readSupervisorPath = () =>
+    void checkSupervisorPath(run, binary).then(
+      async r => {
+        selfCheck.noteSupervisorPath(r)
+        // What may have cut sessions off from the app, for the channel band (MIP2-1488).
+        selfCheck.noteCauses({ claudeInstalledAt: installedAt(binary), supervisorStartedAt: r ? await processStartedAt(r.pid) : null })
+      },
+      err => console.warn(`supervisor PATH: ${String(err)}`),
+    )
   readSupervisorPath()
   setInterval(readSupervisorPath, 5 * 60_000).unref()
   // `claude daemon run`, as the watchdog starts it: the user's environment, none of the session switches (MIP2-1463).
@@ -460,24 +492,64 @@ async function start(): Promise<void> {
     enabled: () => store.get().settings.arbiterEnabled !== false && arbiterKey.has(),
   })
   // Card summaries of the last turn (MIP2-1422): the Arbiter's key, cap and log, opted-in categories only.
-  summaries = new Summaries({
+  const cardText = {
     summarize: createSummarize(() => arbiterKey.get()),
     log: arbiterLog,
     capUsd: () => store.get().settings.arbiterCapUsd ?? 1,
     enabled: () => store.get().settings.arbiterEnabled !== false && arbiterKey.has(),
-    optedIn: id => {
+    optedIn: (id: string) => {
       const s = store.get()
       const cat = s.categories.find(c => c.id === s.sessions[id]?.categoryId)
       return cat?.arbiterReadsText === true
     },
-    onChange: all => broadcast(IPC.summariesUpdate, all),
+  }
+  summaries = new Summaries({ ...cardText, onChange: all => broadcast(IPC.summariesUpdate, all) })
+  // The Needs-you line (MIP2-1485): the same key, cap, log and opt-in, written only when the poll finds a session blocked on Alex.
+  // For categories not opted in, the turn's own last question, read here and never sent (MIP2-1485).
+  const lastLines = new Map<string, TurnSummary>()
+  const allWaits = () => ({ ...Object.fromEntries(lastLines), ...(waits?.current() ?? {}) })
+  waits = new Summaries({ ...cardText, mode: 'wait', onChange: () => broadcast(IPC.waitsUpdate, allWaits()) })
+  // The usage help panel's tips (MIP2-1498 §4.5): the Arbiter's key, cap and log; windows and session fields only.
+  const usageTips = new UsageTips({ call: createTips(() => arbiterKey.get()), log: arbiterLog, capUsd: cardText.capUsd, enabled: cardText.enabled })
+  ipcMain.handle(IPC.usageTips, (event, facts: unknown) => {
+    if (!isTrustedSender(event)) return { ok: false, reason: 'error', error: 'untrusted sender' }
+    const checked = checkTipFacts(facts)
+    return checked ? usageTips.get(checked) : { ok: false, reason: 'error', error: 'bad request' }
   })
+  // Spend (MIP2-1498 §5): simulated from each session's cost, real from the Console with a Console key.
+  const adminKey = new ArbiterKey(join(app.getPath('userData'), 'admin-key.bin'), safeStorage, 'spend')
+  const ledger = new SpendLedger(join(app.getPath('userData'), 'spend.json'))
+  spendLedger = ledger
+  const spendState = (): SpendState => ({
+    source: store.get().settings.spendSource ?? (adminKey.has() ? 'real' : 'simulated'),
+    simulated: ledger.current(Date.now()),
+    real: realSpend.current(),
+  })
+  const sendSpend = () => broadcast(IPC.spendUpdate, spendState())
+  const realSpend = new RealSpendPoller(() => adminKey.get(), fetch as unknown as Fetch, sendSpend)
+  noteSpend = sessions => ledger.observe(sessions, Date.now()) && sendSpend()
+  registerSpend({ state: spendState, real: realSpend, adminKey, setSource: s => store.setSpendSource(s), changed: sendSpend })
+  void realSpend.poll()
+  setInterval(() => void realSpend.poll(), REAL_POLL_MS).unref()
+  ipcMain.handle(IPC.waitsGet, event => (isTrustedSender(event) ? allWaits() : {}))
+  noteLastLines = (blocked: string[], live: ReadonlySet<string>) => {
+    let changed = false
+    for (const id of [...lastLines.keys()]) if (!live.has(id)) (lastLines.delete(id), (changed = true))
+    for (const id of blocked) {
+      if (cardText.optedIn(id)) continue
+      const post = channels.lastAnswer(id)
+      if (!post || lastLines.get(id)?.turnAt === post.at) continue
+      const text = lastQuestion(post.text)
+      if (text) (lastLines.set(id, { text, turnAt: post.at, lastLine: true }), (changed = true))
+    }
+    if (changed) broadcast(IPC.waitsUpdate, allWaits())
+  }
   ipcMain.handle(IPC.summariesGet, event => (isTrustedSender(event) ? (summaries?.current() ?? {}) : {}))
   ipcMain.handle(IPC.arbiterGet, event => (isTrustedSender(event) ? arbiter.current() : null))
   ipcMain.handle(IPC.arbiterLog, event => (isTrustedSender(event) ? arbiterLog.entries(200) : []))
   registerSettings({ key: arbiterKey, selfCheck, watchdog: () => watchdog })
   // App updates (MIP2-1469): checked at start and every few hours; nothing downloads until Download.
-  const updates = setUpUpdates(app.isPackaged, s => broadcast(IPC.updateUpdate, s))
+  const updates = setUpUpdates(app.isPackaged, s => broadcast(IPC.updateUpdate, s), () => betaUpdatesOn(store.get().settings.betaUpdates, app.getVersion()))
   registerUpdates(updates)
   updates.start()
   registerFirstRun({
@@ -535,6 +607,19 @@ async function start(): Promise<void> {
     notify(snapshot.sessions, listOk)
     void arbiter.consider(waitingItems(snapshot.sessions, store.get())).then(s => s && broadcast(IPC.arbiterUpdate, s))
     if (listOk) summaries?.forget(new Set(snapshot.sessions.map(s => s.sessionId)))
+    if (listOk) waits?.forget(new Set(snapshot.sessions.map(s => s.sessionId)))
+    const blocked = snapshot.sessions.filter(blockedOnAlex).map(s => s.sessionId)
+    for (const id of blocked) void waits?.wanted(id)
+    // Each on its own, so one that throws can't stop the rest of this poll's work (gate pass 15, M-2).
+    const guard = (what: string, fn: () => void) => {
+      try {
+        fn()
+      } catch (err) {
+        console.warn(`${what}: ${String(err)}`)
+      }
+    }
+    if (listOk) guard('last lines', () => noteLastLines(blocked, new Set(snapshot.sessions.map(s => s.sessionId))))
+    guard('spend ledger', () => noteSpend(snapshot.sessions))
     broadcast(IPC.fleetUpdate, snapshot)
   })
   poller.start()
@@ -557,6 +642,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   poller?.stop()
+  spendLedger?.save()
   // The supervisor the watchdog started is detached and stays: sessions outlive the app.
   watchdog?.stop()
   // Ending each attach frees its supervisor spare; the sessions keep running.

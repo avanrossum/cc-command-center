@@ -9,7 +9,7 @@ import { allowedUrl, boundedGet, candidates, compareVersions, feedTags, type Hop
 import { CccProvider, guardExecutor } from '../src/main/update-provider.ts'
 import { Updates, shortError } from '../src/main/updater.ts'
 import { bandText, checkLine } from '../src/renderer/components/UpdateBand.tsx'
-import { INITIAL_UPDATE_STATE, type UpdateState } from '../src/shared/update-state.ts'
+import { betaUpdatesOn, INITIAL_UPDATE_STATE, type UpdateState } from '../src/shared/update-state.ts'
 
 const REPO = 'https://github.com/avanrossum/cc-command-center'
 const RECORDED = readFileSync(new URL('./fixtures/releases-0.24.atom', import.meta.url), 'utf8')
@@ -161,16 +161,18 @@ describe('requests and their size', () => {
 })
 
 describe('the update notice', () => {
-  function updates(active = true) {
+  function updates(active = true, betas?: () => boolean) {
     const emitter = new EventEmitter()
     const updater = {
+      allowPrerelease: false,
+      allowDowngrade: true,
       checkForUpdates: vi.fn(async () => null),
       downloadUpdate: vi.fn(async () => []),
       quitAndInstall: vi.fn(),
       on: (e: string, fn: (...a: never[]) => void) => emitter.on(e, fn as (...a: unknown[]) => void),
     }
     const changes: UpdateState[] = []
-    const u = new Updates(updater, { active, testOrigin: null, onChange: s => changes.push(s), now: () => 1000 })
+    const u = new Updates(updater, { active, testOrigin: null, onChange: s => changes.push(s), now: () => 1000, betas })
     return { u, updater, emitter, changes }
   }
 
@@ -225,5 +227,43 @@ describe('the update notice', () => {
     expect(checkLine(s({ phase: 'off' }), 0)).toBe('Updates come with release builds.')
     expect(checkLine(s({ phase: 'none', checkedAt: 0 }), 2 * 3600_000)).toBe('This is the newest version. Checked 2 hours ago.')
     expect(checkLine(s({ phase: 'idle' }), 0)).toBe('Not checked yet.')
+  })
+})
+
+describe('beta updates (MIP2-1497)', () => {
+  it('orders prereleases by semver: beta.1 < beta.2 < beta.10 < the release, and alpha < beta', () => {
+    expect(compareVersions('1.0.1-beta.2', '1.0.1-beta.10')).toBeLessThan(0)
+    expect(compareVersions('1.0.1-beta.10', '1.0.1-beta.2')).toBeGreaterThan(0)
+    expect(compareVersions('1.0.1-beta.1', '1.0.1-beta.2')).toBeLessThan(0)
+    expect(compareVersions('1.0.1-beta.10', '1.0.1')).toBeLessThan(0)
+    expect(compareVersions('1.0.1-alpha.3', '1.0.1-beta.1')).toBeLessThan(0)
+    expect(compareVersions('1.0.1-beta', '1.0.1-beta.1')).toBeLessThan(0)
+    expect(compareVersions('1.0.1-1', '1.0.1-beta')).toBeLessThan(0)
+  })
+  it('offers betas above the running version only with the setting on, the newest first, and the final over every beta', () => {
+    const tags = ['v1.0.1', 'v1.0.1-beta.10', 'v1.0.1-beta.2', 'v1.0.0', 'v0.25.0']
+    expect(candidates(tags, '1.0.0', true)).toEqual(['v1.0.1', 'v1.0.1-beta.10', 'v1.0.1-beta.2'])
+    expect(candidates(tags, '1.0.0', false)).toEqual(['v1.0.1'])
+    expect(candidates(['v1.0.1-beta.10', 'v1.0.1-beta.2'], '1.0.1-beta.2', true)).toEqual(['v1.0.1-beta.10'])
+    // Never a downgrade: a beta install isn't offered an older beta or 1.0.0.
+    expect(candidates(['v1.0.1-beta.1', 'v1.0.0'], '1.0.1-beta.2', true)).toEqual([])
+  })
+  it('is on by default in a beta build and off in a release, and the setting wins either way', () => {
+    expect(betaUpdatesOn(undefined, '1.0.1-beta.2')).toBe(true)
+    expect(betaUpdatesOn(undefined, '1.0.0')).toBe(false)
+    expect(betaUpdatesOn(false, '1.0.1-beta.2')).toBe(false)
+    expect(betaUpdatesOn(true, '1.0.0')).toBe(true)
+  })
+  it('sets the updater from the setting at each check, and never allows a downgrade', async () => {
+    let on = false
+    const emitter = new EventEmitter()
+    const updater = { allowPrerelease: true, allowDowngrade: true, checkForUpdates: vi.fn(async () => null), downloadUpdate: vi.fn(async () => []), quitAndInstall: vi.fn(), on: (e: string, fn: (...a: never[]) => void) => emitter.on(e, fn as (...a: unknown[]) => void) }
+    const u = new Updates(updater, { active: true, testOrigin: null, onChange: () => {}, betas: () => on })
+    await u.check()
+    expect(updater).toMatchObject({ allowPrerelease: false, allowDowngrade: false })
+    on = true
+    emitter.emit('update-not-available')
+    await u.check()
+    expect(updater).toMatchObject({ allowPrerelease: true, allowDowngrade: false })
   })
 })

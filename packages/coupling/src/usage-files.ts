@@ -5,7 +5,9 @@
 //
 // The rule matches `usage-governor.sh`: the newest file whose 5-hour window
 // hasn't reset yet. An idle session re-renders an old payload whose reset
-// time has passed, so that guard keeps a stale window off the meter.
+// time has passed, so that guard keeps a stale window off the meter. When
+// every file is past its reset, the newest of them comes back, so the meter
+// can say the window reset and it waits for a new reading (MIP2-1498 §4.4).
 
 import { lstat, readdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -42,15 +44,18 @@ export async function readUsageDir(dir = DEFAULT_USAGE_DIR, now = Date.now()): P
     }),
   )
   const newest = stats.filter((s): s is { name: string; mtimeMs: number } => s !== null).sort((a, b) => b.mtimeMs - a.mtimeMs)
+  let pastReset: Field<RateLimits> | null = null
   for (const { name, mtimeMs } of newest.slice(0, NEWEST_READ)) {
     try {
       const data = JSON.parse(await readFile(join(dir, name), 'utf8')) as { rate_limits?: { five_hour?: unknown; seven_day?: unknown } }
       const fiveHour = windowOf(data.rate_limits?.five_hour)
-      if (!fiveHour || fiveHour.resetsAt === null || fiveHour.resetsAt * 1000 <= now) continue
-      return field({ fiveHour, sevenDay: windowOf(data.rate_limits?.seven_day) }, 'statusline', mtimeMs)
+      if (!fiveHour || fiveHour.resetsAt === null) continue
+      const reading = field({ fiveHour, sevenDay: windowOf(data.rate_limits?.seven_day) }, 'statusline', mtimeMs)
+      if (fiveHour.resetsAt * 1000 > now) return reading
+      pastReset ??= reading
     } catch {
       // A file mid-write reads short; the next poll reads it whole.
     }
   }
-  return null
+  return pastReset
 }

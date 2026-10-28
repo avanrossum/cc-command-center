@@ -221,13 +221,45 @@ export function resolveAppPath(root: string, requestUrl: string): string | null 
 }
 
 /**
- * What a link click does, from the two checks (pass 13, L-2): `refuse` when
- * a plain-http host is this Mac or the local network, `ask` when the text
- * names somewhere else or the host couldn't be checked, `open` otherwise.
- * `reach` is null for an https link, which isn't looked up.
+ * What a plain-http link's host lookup means (pass 14, L-2): `refuse` for
+ * this Mac or the local network (pass 10, M-1), `ask` when it couldn't be
+ * checked (pass 12, M-3), `open` for a public address.
  */
-export function linkDecision(mismatch: string | null, reach: 'private' | 'public' | 'unknown' | null): 'refuse' | 'ask' | 'open' {
-  if (reach === 'private') return 'refuse'
-  if (mismatch !== null || reach === 'unknown') return 'ask'
-  return 'open'
+export function reachDecision(reach: 'private' | 'public' | 'unknown'): 'refuse' | 'ask' | 'open' {
+  return reach === 'private' ? 'refuse' : reach === 'unknown' ? 'ask' : 'open'
+}
+
+export interface LinkDeps {
+  /** Shows a warning with Cancel and Open; true for Open. */
+  ask: (message: string, detail: string) => Promise<boolean>
+  lookup: (host: string) => Promise<{ address: string }[]>
+  open: (href: string) => Promise<void>
+}
+
+export type LinkResult = { ok: true } | { ok: false; error: string; canceled?: true }
+
+/**
+ * A link clicked in a session's terminal view (MIP2-1471; pass 9, M-3,
+ * L-1): web links only, in the default browser. In order: the link's own
+ * check; a question when its text names another host than it opens; then,
+ * for plain http only, where the name points. The lookup comes after any
+ * question, so a canceled link is never looked up (pass 11, L-3).
+ */
+export async function openTerminalLink(url: string, text: string | undefined, atEdge: boolean, deps: LinkDeps): Promise<LinkResult> {
+  const link = checkTerminalLink(url)
+  if (!link.ok) return link
+  const canceled = { ok: false, error: 'canceled', canceled: true } as const
+  const mismatch = linkMismatch(text, link.host, atEdge)
+  if (mismatch !== null && !(await deps.ask(mismatch, link.href))) return canceled
+  if (link.href.startsWith('http:')) {
+    const decision = reachDecision(await hostReach(link.host, deps.lookup))
+    if (decision === 'refuse') return { ok: false, error: `plain http links to this Mac or the local network (${link.host}) don't open from the terminal` }
+    if (decision === 'ask' && !(await deps.ask(`The app couldn't check where ${link.host} points. It may be this Mac or the local network.`, link.href))) return canceled
+  }
+  try {
+    await deps.open(link.href)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
 }

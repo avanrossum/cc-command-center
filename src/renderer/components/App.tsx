@@ -15,7 +15,8 @@ import { History } from '../model/history.ts'
 import { Archive, RollOffNotice } from './Archive.tsx'
 import { ArbiterLogSheet } from './ArbiterLog.tsx'
 import { MoveSheet } from './MoveSheet.tsx'
-import { SettingsSheet } from './Settings.tsx'
+import { SettingsSheet, type Section } from './Settings.tsx'
+import type { SpendState } from '../../shared/spend.ts'
 import { CategoryEditor, StoreContext, type NoticeAction, type StoreApi } from './Categories.tsx'
 import { FirstRun } from './FirstRun.tsx'
 import { Fleet } from './Fleet.tsx'
@@ -25,6 +26,10 @@ import { NewSession } from './NewSession.tsx'
 import { viewSelection } from './FocusPane.tsx'
 import { FocusRail, Rail } from './Rail.tsx'
 import { Sidebar } from './Sidebar.tsx'
+import { Switcher } from './Switcher.tsx'
+import { SidebarGrip } from './SidebarGrip.tsx'
+import { SIDEBAR_WIDTH } from '../../shared/store.ts'
+import { chipIds, cycle, moveChip, movePin, noteOpened, pruned, removeRecent, togglePin, type SwitcherLists } from '../model/switcher.ts'
 import { TopBar } from './TopBar.tsx'
 
 /** Below this width the rail starts collapsed (spec §3). */
@@ -47,9 +52,15 @@ export function App() {
   const [arbiter, setArbiter] = useState<ArbiterState | null>(null)
   const [arbiterLogOpen, setArbiterLogOpen] = useState(false)
   const [summaries, setSummaries] = useState<Record<string, TurnSummary>>({})
+  const [waits, setWaits] = useState<Record<string, TurnSummary>>({})
   /** The move sheet for 0.24's sessions (MIP2-1425). */
   const [move, setMove] = useState<{ preselect: string | null } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  /** The usage help panel (MIP2-1498 §4.5). */
+  const [usageHelp, setUsageHelp] = useState(false)
+  const [spend, setSpend] = useState<SpendState | null>(null)
+  /** The settings section to open at, from Set up… in the spend panel. */
+  const [settingsSection, setSettingsSection] = useState<Section | undefined>(undefined)
   /** Review in first run step 2 shows Fleet's auto placements; the first run comes back at the next start. */
   const [firstRunHidden, setFirstRunHidden] = useState(false)
   /** The category editor: which category (null for a new one), and whether to open at Folders. */
@@ -95,7 +106,11 @@ export function App() {
     const offArbiter = window.ccc.onArbiter(setArbiter)
     void window.ccc.getSummaries().then(setSummaries)
     const offSummaries = window.ccc.onSummaries(setSummaries)
-    return () => (offStore(), offNotice(), offOpen(), offArbiter(), offSummaries(), offNeeds(), offSettings())
+    void window.ccc.getSpend().then(setSpend)
+    const offSpend = window.ccc.onSpend(setSpend)
+    void window.ccc.getWaits().then(setWaits)
+    const offWaits = window.ccc.onWaits(setWaits)
+    return () => (offStore(), offNotice(), offOpen(), offArbiter(), offSummaries(), offWaits(), offSpend(), offNeeds(), offSettings())
   }, [])
 
   useEffect(() => {
@@ -111,10 +126,18 @@ export function App() {
       if (e.metaKey && !e.altKey && !e.shiftKey && e.code === 'KeyK') (e.preventDefault(), setSheet('jump'))
       if (e.metaKey && e.shiftKey && e.code === 'KeyT') (e.preventDefault(), reopenRef.current())
       if (e.metaKey && e.shiftKey && e.code === 'KeyA') (e.preventDefault(), setArchiveOnly(null), setSheet('archive'))
+      if (e.metaKey && e.shiftKey && !e.altKey && e.code === 'KeyU') (e.preventDefault(), setUsageHelp(o => !o))
       if (e.metaKey && !e.shiftKey && !e.altKey && e.code === 'Comma') (e.preventDefault(), setSettingsOpen(true))
-      // ⌘1–⌘9: category 1–9 in sidebar order (spec MIP2-1370 §15).
+      // ⌘1–⌘9: the switcher's chips, in every view; ⌥⌘1–⌥⌘9: category 1–9 in sidebar order (MIP2-1494 §5.4, amending MIP2-1370 §15).
       const digit = /^Digit([1-9])$/.exec(e.code)?.[1]
-      if (digit && e.metaKey && !e.altKey && !e.shiftKey && !e.ctrlKey) (e.preventDefault(), categoryKeyRef.current(Number(digit)))
+      if (digit && e.metaKey && !e.shiftKey && !e.ctrlKey) {
+        e.preventDefault()
+        if (e.altKey) categoryKeyRef.current(Number(digit))
+        else switcherKeyRef.current({ chip: Number(digit) })
+      }
+      // ⌘⇧[ and ⌘⇧]: previous and next chip, wrapping; ⌘⇧P: pin or unpin the session in Focus.
+      if (e.metaKey && e.shiftKey && !e.altKey && (e.code === 'BracketLeft' || e.code === 'BracketRight')) (e.preventDefault(), switcherKeyRef.current({ by: e.code === 'BracketLeft' ? -1 : 1 }))
+      if (e.metaKey && e.shiftKey && !e.altKey && e.code === 'KeyP') (e.preventDefault(), switcherKeyRef.current({ pin: true }))
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -130,12 +153,15 @@ export function App() {
       const meta = store?.sessions[session.sessionId]
       const cls = classify(session, meta, parents)
       const contractor = cls.kind === 'contractor' ? cls : null
-      const first = cardView(session, now)
+      const view0 = cardView(session, now)
+      // The app launched it, so it's never "outside the app", even before its mod reports (MIP2-1493).
+      const first = meta?.origin === 'app' && view0.outside ? { ...view0, outside: false } : view0
       const since = history.observe(session.sessionId, first.state, now)
       const life = lifeOf({
         lastActivityAt: lastActivityOf(session, meta),
         needsYou: NEEDS_YOU.has(first.state),
-        neverRollOff: meta?.neverRollOff === true,
+        // A pin keeps a session from roll-off, as in the store (MIP2-1494 §5.3).
+        neverRollOff: meta?.neverRollOff === true || (store?.settings.switcherPins ?? []).includes(session.sessionId),
         contractor: contractor !== null,
         parentGone: false,
         rollOffDays,
@@ -164,6 +190,8 @@ export function App() {
         })(),
         arbiterStart: arbiter?.status === 'ranked' && arbiter.start?.sessionId === session.sessionId ? arbiter.start.unblocks : undefined,
         summary: summaryFor(session, summaries[session.sessionId]),
+        waitingOn: summaryFor(session, waits[session.sessionId]),
+        waitingLastLine: waits[session.sessionId]?.lastLine === true,
         inElectron: meta?.origin === 'import' && !meta.movedAt && session.kind.value === 'interactive',
         movable: meta?.origin !== 'app' && !meta?.movedAt && session.kind.value === 'interactive',
       }
@@ -177,7 +205,7 @@ export function App() {
     }
     return built
     // `now` ticks every second so ages and the 30-minute idle line move on their own.
-  }, [fleet, store, arbiter, summaries, now, history])
+  }, [fleet, store, arbiter, summaries, waits, now, history])
   const rank = arbiter && arbiter.status !== 'off' ? arbiter.order.map(o => o.sessionId) : []
   const shown = useMemo(() => shownEntries(entries, store?.settings.showOutside), [entries, store?.settings.showOutside])
 
@@ -189,10 +217,12 @@ export function App() {
       notice: setNotice,
       openMove: sessionId => setMove({ preselect: sessionId }),
       openSheet: (kind, sessionId) => (setSheetSource({ kind, sessionId, ...(kind === 'from' ? { selection: viewSelection(sessionId) } : {}) }), setSheet('new')),
+      togglePin: id => pinRef.current(id),
     }),
     [store, entries],
   )
 
+  const pinRef = useRef((_id: string) => {})
   /** Sessions being resumed by an open: a second open waits for the first, not a second resume (MIP2-1467). */
   const resuming = useRef(new Set<string>())
   /** Opens a session in Focus; an ended one is resumed first (spec MIP2-1379 §4a). */
@@ -238,6 +268,68 @@ export function App() {
     else (setFocused(null), setFilter(catFilter(cat)))
   }
 
+  // The session switcher (MIP2-1494 §5). Its lists live in the store; each change is saved there and comes back as a store update.
+  // A change shows at once, and the next change builds on it rather than on a store update still on its way.
+  const [pendingLists, setPendingLists] = useState<SwitcherLists | null>(null)
+  useEffect(() => setPendingLists(null), [store])
+  const lists: SwitcherLists = pendingLists ?? { pins: store?.settings.switcherPins ?? [], recent: store?.settings.switcherRecent ?? [] }
+  const saveLists = (next: SwitcherLists) => {
+    if (next.pins.join() === lists.pins.join() && next.recent.join() === lists.recent.join()) return
+    setPendingLists(next)
+    void window.ccc.setSwitcher(next.pins, next.recent).then(r => r.ok || (setPendingLists(null), setNotice(`Not saved: ${r.error}`)))
+  }
+  /** When each session was last in Focus, this run: the recent that leaves is the least recently focused (§5.3). */
+  const focusedAt = useRef(new Map<string, number>()).current
+  const listed = useMemo(() => new Set(entries.map(e => e.session.sessionId)), [entries])
+  const chips = chipIds(lists, listed)
+  // A session opened in Focus joins the strip.
+  useEffect(() => {
+    if (!focused || !store) return
+    focusedAt.set(focused, Date.now())
+    saveLists(noteOpened(lists, focused, focusedAt))
+  }, [focused, store === null])
+  // Pins and recents no longer listed are dropped once, at startup (§5.5).
+  const prunedOnce = useRef(false)
+  useEffect(() => {
+    if (prunedOnce.current || !store || !fleet) return
+    prunedOnce.current = true
+    saveLists(pruned(lists, listed))
+  }, [store, fleet])
+  const pin = (id: string) => saveLists(togglePin(lists, id, focused, focusedAt))
+  const switcherKeyRef = useRef((_k: { chip?: number; by?: -1 | 1; pin?: boolean }) => {})
+  switcherKeyRef.current = k => {
+    if (k.chip !== undefined) {
+      const id = chips[k.chip - 1]
+      if (id) void open(id)
+    } else if (k.by !== undefined) {
+      const id = cycle(chips, focused, k.by)
+      if (id && id !== focused) void open(id)
+    } else if (k.pin && focused) pin(focused)
+  }
+  pinRef.current = pin
+  const strip = focused && (
+    <Switcher
+      chips={chips}
+      pins={lists.pins}
+      byId={new Map(entries.map(e => [e.session.sessionId, e]))}
+      current={focused}
+      act={{
+        open: id => void open(id),
+        togglePin: pin,
+        move: (id, by) => saveLists(moveChip(lists, id, by)),
+        movePin: (id, before) => saveLists(movePin(lists, id, before)),
+        removeRecent: id => saveLists(removeRecent(lists, id)),
+      }}
+    />
+  )
+
+  // The sidebar's width (MIP2-1495): live while dragging, saved when the drag ends.
+  const [dragWidth, setDragWidth] = useState<number | null>(null)
+  const sideWidth = dragWidth ?? store?.settings.sidebarWidth ?? SIDEBAR_WIDTH.default
+  const saveSideWidth = (px: number) => void window.ccc.updateSettings({ sidebarWidth: px }).then(r => r.ok || (setDragWidth(null), setNotice(`Not saved: ${r.error}`)))
+  // The saved width takes over once the store has it, so the edge doesn't jump back while the save is on its way.
+  useEffect(() => setDragWidth(null), [store?.settings.sidebarWidth])
+
   const counts = countFleet(entries)
   const line = attentionLine(groupFleet(entries, 'all', rank), counts, now, age, arbiter)
 
@@ -261,8 +353,18 @@ export function App() {
         railOpen={railOpen}
         onToggleRail={() => setRailOpen(o => !o)}
         onNew={() => (setNewCat(undefined), setSheetSource(null), setSheet('new'))}
+        sessions={fleet?.sessions ?? []}
+        names={new Map(entries.map(e => [e.session.sessionId, e.name]))}
+        arbiterOn={arbiter !== null && arbiter.status !== 'off'}
+        help={usageHelp}
+        onHelp={setUsageHelp}
+        onOpen={id => void open(id)}
+        spend={spend}
+        claudeVersion={fleet?.selfCheck?.claudeVersion ?? null}
+        onSpendSetUp={() => (setSettingsSection('Spend'), setSettingsOpen(true))}
       />
-      <div className={`body${railOpen ? '' : ' rail-off'}`}>
+      <div className={`body${railOpen ? '' : ' rail-off'}`} style={{ '--side-w': `${sideWidth}px` } as React.CSSProperties}>
+        <SidebarGrip width={sideWidth} onWidth={setDragWidth} onSave={saveSideWidth} />
         <Sidebar entries={shown} now={now} onFilter={f => (setFocused(null), setFilter(f))} focused={focused} typing={typing}
           onOpen={id => void open(id)}
           onNew={id => (setNewCat(id), setSheetSource(null), setSheet('new'))}
@@ -270,7 +372,7 @@ export function App() {
           onSelection={setSelection}
         />
         {focused ? (
-          <Focus focused={focused} entries={entries} onBackToFleet={() => setFocused(null)} onTitle={setFocusTitle} onTyping={setTyping} selfCheck={fleet?.selfCheck ?? null} />
+          <Focus focused={focused} entries={entries} onBackToFleet={() => setFocused(null)} onTitle={setFocusTitle} onTyping={setTyping} selfCheck={fleet?.selfCheck ?? null} strip={strip} />
         ) : (
           <Fleet entries={shown} rank={rank} now={now} filter={filter} onFilter={setFilter} selfCheck={fleet?.selfCheck ?? null} onOpen={id => void open(id)} selection={selection} onSelection={setSelection} />
         )}
@@ -296,7 +398,7 @@ export function App() {
       {arbiterLogOpen && <ArbiterLogSheet onClose={() => setArbiterLogOpen(false)} />}
       {move && <MoveSheet entries={entries} preselect={move.preselect} onClose={() => setMove(null)} onOpen={id => void open(id)} />}
       {settingsOpen && (
-        <SettingsSheet onClose={() => setSettingsOpen(false)} onMove={() => (setSettingsOpen(false), setMove({ preselect: null }))} onArbiterLog={() => setArbiterLogOpen(true)} arbiter={arbiter} selfCheck={fleet?.selfCheck ?? null} />
+        <SettingsSheet initialSection={settingsSection} onClose={() => (setSettingsOpen(false), setSettingsSection(undefined))} onMove={() => (setSettingsOpen(false), setMove({ preselect: null }))} onArbiterLog={() => setArbiterLogOpen(true)} arbiter={arbiter} selfCheck={fleet?.selfCheck ?? null} />
       )}
       <RollOffNotice onReview={ids => (setArchiveOnly(ids), setSheet('archive'))} />
       {/* Until it's finished; 0.24's sessions are its interactive ones with a process (step 3). */}

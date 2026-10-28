@@ -18,7 +18,23 @@ export function newerThan(a, b) {
   if (x[3] === y[3]) return false
   if (x[3] === null) return true
   if (y[3] === null) return false
-  return x[3] > y[3]
+  return comparePrerelease(x[3], y[3]) > 0
+}
+
+/** Prerelease order (semver §11): numeric identifiers as numbers, below alphanumeric ones; beta.2 < beta.10 (MIP2-1497). */
+export function comparePrerelease(a, b) {
+  const x = a.split('.')
+  const y = b.split('.')
+  for (let i = 0; i < Math.min(x.length, y.length); i++) {
+    if (x[i] === y[i]) continue
+    const xn = /^\d+$/.test(x[i])
+    const yn = /^\d+$/.test(y[i])
+    if (xn && yn) return Number(x[i]) - Number(y[i])
+    if (xn) return -1
+    if (yn) return 1
+    return x[i] < y[i] ? -1 : 1
+  }
+  return x.length - y.length
 }
 
 /**
@@ -57,8 +73,10 @@ export function versionRefusal(tag, tombstone) {
  * `--latest=false`, so GitHub's "latest", which stable 0.24 builds follow,
  * stays on the tombstone (§3). A dry run is always a draft.
  */
-export function releaseArgs({ tag, repo, title, notesFile, files, draft, target = null }) {
+export function releaseArgs({ tag, repo, title, notesFile, files, draft, target = null, prerelease = false }) {
   const args = ['release', 'create', tag, '--repo', repo, '--title', title, '--notes-file', notesFile, '--latest=false']
+  // A beta is a GitHub prerelease, and like every release never "latest" (MIP2-1497).
+  if (prerelease) args.push('--prerelease')
   // The tag is made on the public snapshot commit that holds this source, not on the remote's default branch (pass 9, M-2).
   if (target) args.push('--target', target)
   if (draft) args.push('--draft')
@@ -232,14 +250,58 @@ export function builderConfig({ identity, adhoc, repo }) {
  * Xcode selection the native rebuild uses. Signing, notarization and
  * GitHub credentials, and anything else, are left out. This is the
  * environment only: credentials in the login keychain, such as a `gh` login
- * or a notarytool profile, stay reachable to the same user (release plan §2).
+ * or a notarytool profile, stay reachable to the same user, as does
+ * ~/.npmrc (release plan §2).
+ *
+ * npm's settings are named one by one, not by prefix, so a new credential
+ * setting such as `npm_config_key` (a TLS client key) isn't admitted by
+ * default (pass 14, L-1). A URL value loses any user and password in it, so
+ * proxy and registry credentials don't reach install scripts; a release
+ * can't use a proxy that needs them.
  */
-const INSTALL_ENV = new Set(['PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TERM', 'LANG', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'DEVELOPER_DIR', 'SDKROOT'])
-const INSTALL_ENV_PREFIXES = ['LC_', 'npm_config_', 'NODE_', 'ELECTRON_']
+const INSTALL_ENV = new Set([
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TERM', 'LANG',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'DEVELOPER_DIR', 'SDKROOT',
+  // npm and node-gyp: the cache, the registry and proxy, certificates, and the native build's target.
+  'npm_config_cache', 'npm_config_registry', 'npm_config_proxy', 'npm_config_https_proxy', 'npm_config_noproxy', 'npm_config_cafile', 'npm_config_strict_ssl',
+  'npm_config_loglevel', 'npm_config_arch', 'npm_config_target_arch', 'npm_config_target', 'npm_config_runtime', 'npm_config_disturl', 'npm_config_build_from_source',
+])
+const INSTALL_ENV_PREFIXES = ['LC_', 'NODE_', 'ELECTRON_']
 
-/** Token-shaped names the prefixes would otherwise admit: NODE_AUTH_TOKEN, npm_config__authToken (pass 13, L-1). */
-const TOKEN_SHAPED = /(_AUTH|_TOKEN|_PASSWORD|_SECRET|authToken|_auth)/i
+/** Token-shaped names the prefixes would otherwise admit: NODE_AUTH_TOKEN (pass 13, L-1), and any *_KEY. */
+const TOKEN_SHAPED = /(_AUTH|_TOKEN|_PASSWORD|_SECRET|authToken|_auth|_KEY$)/i
+
+/** `value` without a user or password, when it's a URL that has one. */
+function withoutUserinfo(value) {
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return value
+  try {
+    const u = new URL(value)
+    if (!u.username && !u.password) return value
+    u.username = ''
+    u.password = ''
+    return u.toString()
+  } catch {
+    // Not a URL after all; it can't be checked for credentials, so it's left out.
+    return null
+  }
+}
 
 export function installEnv(env) {
-  return Object.fromEntries(Object.entries(env).filter(([k]) => (INSTALL_ENV.has(k) || INSTALL_ENV_PREFIXES.some(p => k.startsWith(p))) && !TOKEN_SHAPED.test(k)))
+  return Object.fromEntries(
+    Object.entries(env)
+      .filter(([k]) => (INSTALL_ENV.has(k) || INSTALL_ENV_PREFIXES.some(p => k.startsWith(p))) && !TOKEN_SHAPED.test(k))
+      .map(([k, v]) => [k, typeof v === 'string' ? withoutUserinfo(v) : v])
+      .filter(([, v]) => v !== null),
+  )
+}
+
+/**
+ * Why the version and the mode don't agree, or null (MIP2-1497): --prerelease
+ * publishes only an `X.Y.Z-beta.N` version, and a release only a plain one.
+ */
+export function prereleaseRefusal(version, prerelease) {
+  const beta = /^\d+\.\d+\.\d+-beta\.\d+$/.test(version)
+  if (prerelease && !beta) return `--prerelease publishes a beta version (X.Y.Z-beta.N), not ${version}`
+  if (!prerelease && /-/.test(version)) return `${version} is a prerelease; publish it with --prerelease`
+  return null
 }

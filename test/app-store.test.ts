@@ -177,6 +177,29 @@ describe('AppStoreService', () => {
       expect(s.get().settings.rollOffNotice).toEqual([D])
     })
 
+    it('keeps a pinned session from roll-off, and an unpin counts as activity (MIP2-1494)', () => {
+      const s = open()
+      s.touch(D, T, 'app')
+      s.observe([snap(D)], true, T)
+      s.setSwitcher([D], [], T)
+      s.observe([snap(D)], true, T + 30 * DAY)
+      expect(s.get().sessions[D]?.rolledOffAt).toBeUndefined()
+      s.setSwitcher([], [D], T + 30 * DAY)
+      expect(s.get().settings.switcherRecent).toEqual([D])
+      s.observe([snap(D)], true, T + 31 * DAY)
+      expect(s.get().sessions[D]?.rolledOffAt).toBeUndefined()
+      s.observe([snap(D)], true, T + 38 * DAY)
+      expect(s.get().sessions[D]?.rolledOffAt).toBe(T + 38 * DAY)
+    })
+
+    it('unpins and drops a session from the switcher when it is archived (MIP2-1494)', () => {
+      const s = open()
+      s.setSwitcher([D], [E], T)
+      s.archive(D, T)
+      s.archive(E, T)
+      expect(s.get().settings).toMatchObject({ switcherPins: [], switcherRecent: [] })
+    })
+
     it('links a child to its parent, rolls it off with the parent, and never notes contractors', () => {
       const s = open()
       s.touch(D, T, 'app')

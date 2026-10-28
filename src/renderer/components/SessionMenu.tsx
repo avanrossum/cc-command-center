@@ -31,6 +31,9 @@ export function SessionMenu({ e, openSignal = 0, buttonless = false }: { e: Entr
   }, [open])
 
   const id = e.session.sessionId
+  const pins = api.store?.settings.switcherPins ?? []
+  const recent = api.store?.settings.switcherRecent ?? []
+  const pinned = pins.includes(id)
   const run = async (p: Promise<{ ok: boolean; error?: string }>, done?: string, undo?: () => Promise<unknown>) => {
     setOpen(null)
     const r = await p
@@ -79,6 +82,9 @@ export function SessionMenu({ e, openSignal = 0, buttonless = false }: { e: Entr
           <button role="menuitemcheckbox" aria-checked={e.neverRollOff} onClick={() => void run(window.ccc.setNeverRollOff(id, !e.neverRollOff))}>
             <span className="check">{e.neverRollOff ? '✓' : ''}</span> Never roll off
           </button>
+          <button role="menuitem" onClick={() => (setOpen(null), api.togglePin(id))}>
+            <span className="check" /> {pinned ? 'Unpin from switcher' : 'Pin to switcher'}
+          </button>
           {e.contractor ? (
             <button
               role="menuitem"
@@ -98,7 +104,13 @@ export function SessionMenu({ e, openSignal = 0, buttonless = false }: { e: Entr
           <hr />
           <button
             role="menuitem"
-            onClick={() => void run(window.ccc.archive(id), `${e.name} archived.`, () => window.ccc.resurrect([id]))}
+            // Archiving unpins; Undo pins it again (MIP2-1494 §5.3).
+            onClick={() =>
+              void run(window.ccc.archive(id), pinned ? `${e.name} archived and unpinned.` : `${e.name} archived.`, async () => {
+                await window.ccc.resurrect([id])
+                if (pinned || recent.includes(id)) await window.ccc.setSwitcher(pins, recent)
+              })
+            }
           >
             <span className="check" /> Archive
           </button>

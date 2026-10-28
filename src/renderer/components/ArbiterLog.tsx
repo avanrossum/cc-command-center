@@ -10,7 +10,7 @@ export function ArbiterLogSheet({ onClose }: { onClose: () => void }) {
   const [entries, setEntries] = useState<ArbiterLogEntry[] | null>(null)
   useEffect(() => void window.ccc.arbiterLog().then(setEntries), [])
   const today = new Date().toDateString()
-  const spent = (entries ?? []).filter(e => (e.kind === 'call' || e.kind === 'summary') && new Date(e.at).toDateString() === today).reduce((s, e) => s + (e.usd ?? 0), 0)
+  const spent = (entries ?? []).filter(e => (e.kind === 'call' || e.kind === 'summary' || e.kind === 'wait' || e.kind === 'tips') && new Date(e.at).toDateString() === today).reduce((s, e) => s + (e.usd ?? 0), 0)
   return (
     <div className="sheet-veil" onMouseDown={ev => ev.target === ev.currentTarget && onClose()} onKeyDown={ev => ev.key === 'Escape' && onClose()}>
       <div className="sheet arb-log" role="dialog" aria-label="Arbiter log" tabIndex={-1}>
@@ -26,6 +26,10 @@ export function ArbiterLogSheet({ onClose }: { onClose: () => void }) {
                   ? `Ranked ${e.sessions ?? 0} sessions${e.start ? ` · start with ${e.start}` : ''}`
                   : e.kind === 'summary'
                     ? 'Summarized a turn for a card'
+                    : e.kind === 'wait'
+                    ? 'Said what a waiting session needs, for its card'
+                    : e.kind === 'tips'
+                    ? 'Gave usage tips for the help panel'
                     : e.kind === 'capped'
                     ? 'Stopped at the daily cap'
                     : `Error: ${e.error ?? 'unknown'}`}

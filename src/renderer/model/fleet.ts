@@ -41,6 +41,10 @@ export interface Entry {
   arbiterStart?: string[]
   /** The model's one-line summary of the session's current last turn, for opted-in categories (MIP2-1422). Untrusted text. */
   summary?: string
+  /** What a session blocked on Alex waits on, for opted-in categories, for its current turn only (MIP2-1485). Untrusted text. */
+  waitingOn?: string
+  /** `waitingOn` is the turn's own last question, read locally, not the Arbiter's line. */
+  waitingLastLine?: boolean
   /** Hosted by CC Command Center 0.24 and not moved in yet (MIP2-1425). */
   inElectron?: boolean
   /** An interactive session started outside the app, not moved in yet: a 0.24 import or a terminal session (MIP2-1466). */

@@ -3,7 +3,7 @@
 import { field, type PendingRequest, type SessionSnapshot } from '@ccc/contract'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { approveState, AskBlock, nextSeen, seenWhole, withinLines } from '../src/renderer/components/Card.tsx'
+import { approveState, AskBlock, nextSeen, NowLine, seenWhole, withinLines } from '../src/renderer/components/Card.tsx'
 import { cardView } from '../src/renderer/model/card-state.ts'
 import { UNCAT_REF, type Entry } from '../src/renderer/model/fleet.ts'
 
@@ -98,5 +98,20 @@ describe('the line limit counts newlines, not wrapping (MIP2-1442)', () => {
     expect(withinLines([{ value: 'a\nb\nc\nd\ne\nf\ng' }, { value: 'x' }])).toBe(true)
     expect(withinLines([{ value: 'a\nb\nc\nd\ne\nf\ng\nh' }, { value: 'x' }])).toBe(false)
     expect(html(req({ fields: [{ name: 'command', value: 'a\nb\nc\nd\ne\nf\ng\nh\ni' }] }))).not.toContain('>Allow<')
+  })
+})
+
+describe("a blocked card's line (MIP2-1485)", () => {
+  const blocked = (waitingOn?: string): Entry => {
+    const e = entry(req({}))
+    const session: SessionSnapshot = { ...e.session, needsYou: field({ kind: 'blocked', detail: null }, 'agents-json', NOW), pendingRequests: field([], 'mod', NOW) }
+    return { ...e, session, view: cardView(session, NOW), ...(waitingOn !== undefined ? { waitingOn } : {}) }
+  }
+
+  it("shows the Arbiter's line as plain text, and the old line where the category doesn't allow it", () => {
+    expect(renderToStaticMarkup(<NowLine e={blocked('Asks <b>which</b> branch to merge.')} />)).toBe('<p class="c-now">Asks &lt;b&gt;which&lt;/b&gt; branch to merge.</p>')
+    expect(renderToStaticMarkup(<NowLine e={blocked()} />)).toContain('Open the session to see what it needs.')
+    // The turn's own line, for a category not opted in, is labeled so it isn't taken for the Arbiter's.
+    expect(renderToStaticMarkup(<NowLine e={{ ...blocked('Run it <now>?'), waitingLastLine: true }} />)).toBe('<p class="c-now">Last line: &quot;Run it &lt;now&gt;?&quot;</p>')
   })
 })

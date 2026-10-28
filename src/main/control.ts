@@ -19,7 +19,7 @@ import { copyRefusal, movePreflight, terminalMessage } from './move.ts'
 import { ModStuck, ResumeGate, resumeFromApp } from './resume.ts'
 import { IPC, type LaunchRequest, type Result } from '../shared/ipc.ts'
 import { lookup as dnsLookup } from 'node:dns/promises'
-import { checkTerminalLink, hostReach, linkDecision, linkMismatch } from './policy.ts'
+import { openTerminalLink, type LinkResult } from './policy.ts'
 import { isTrustedSender } from './security.ts'
 import { checkAnswer, checkLaunch, droppedPaths, isSessionId, isSize, isText } from './validate.ts'
 
@@ -231,37 +231,19 @@ export function registerControl({
   on(IPC.focusResize, (id: unknown, cols: unknown, rows: unknown) => {
     if (isSessionId(id) && isSize(cols) && isSize(rows)) pool.resize(id, cols, rows)
   })
-  // A link clicked in a session's terminal view (MIP2-1471; pass 9, M-3, L-1): web links only, in the default
-  // browser. When an OSC 8 link's text names another host than it opens, main asks first.
-  invoke(IPC.openLink, async (url: unknown, text: unknown, atEdge: unknown): Promise<Result | { ok: false; error: string; canceled: true }> => {
+  // A link clicked in a session's terminal view: the steps are in policy.ts, openTerminalLink.
+  invoke(IPC.openLink, async (url: unknown, text: unknown, atEdge: unknown): Promise<LinkResult> => {
     if (typeof url !== 'string' || (text !== undefined && (typeof text !== 'string' || text.length > 4096))) return { ok: false, error: 'bad request' }
-    const link = checkTerminalLink(url)
-    if (!link.ok) return link
-    const ask = async (message: string): Promise<boolean> => {
-      const win = BrowserWindow.getFocusedWindow()
-      const opts = { type: 'warning' as const, buttons: ['Cancel', 'Open'], defaultId: 0, cancelId: 0, message, detail: link.href }
-      const { response } = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
-      return response === 1
-    }
-    // Two stages of linkDecision (pass 13, L-2): the text first, then, for plain http, where the name points.
-    // The lookup comes after any question, so a canceled link isn't looked up (pass 11, L-3).
-    const mismatch = linkMismatch(text, link.host, atEdge === true)
-    if (linkDecision(mismatch, null) === 'ask' && !(await ask(mismatch as string))) return { ok: false, error: 'canceled', canceled: true }
-    if (link.href.startsWith('http:')) {
-      const reach = await hostReach(link.host, h => dnsLookup(h, { all: true }))
-      const decision = linkDecision(null, reach)
-      // A plain-http name for this Mac or the local network is refused (pass 10, M-1); one that can't be checked asks (pass 12, M-3).
-      if (decision === 'refuse') return { ok: false, error: `plain http links to this Mac or the local network (${link.host}) don't open from the terminal` }
-      if (decision === 'ask' && !(await ask(`The app couldn't check where ${link.host} points. It may be this Mac or the local network.`))) {
-        return { ok: false, error: 'canceled', canceled: true }
-      }
-    }
-    try {
-      await shell.openExternal(link.href)
-      return { ok: true }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    }
+    return openTerminalLink(url, text, atEdge === true, {
+      ask: async (message, detail) => {
+        const win = BrowserWindow.getFocusedWindow()
+        const opts = { type: 'warning' as const, buttons: ['Cancel', 'Open'], defaultId: 0, cancelId: 0, message, detail }
+        const { response } = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
+        return response === 1
+      },
+      lookup: h => dnsLookup(h, { all: true }),
+      open: href => shell.openExternal(href),
+    })
   }, untrusted)
   on(IPC.copyText, (text: unknown) => {
     if (isText(text) && text !== '') clipboard.writeText(text)

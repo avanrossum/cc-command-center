@@ -1,7 +1,7 @@
 // The release script's checks (docs/release-plan.md §2–§5).
 
 import { describe, expect, it } from 'vitest'
-import { assetRefusal, branchRefusal, builderConfig, installEnv, PUBLIC_REPO, bundleIdRefusal, identityRefusal, latestFalseRefusal, remoteTagRefusal, targetRefusal, testFeedRefusal, untrackedRefusal, newerThan, releaseArgs, teamOf, teamRefusal, updateConfigRefusal, updateFileRefusal, versionRefusal, windowRefusal } from '../scripts/release-lib.mjs'
+import { assetRefusal, branchRefusal, builderConfig, comparePrerelease, installEnv, prereleaseRefusal, PUBLIC_REPO, bundleIdRefusal, identityRefusal, latestFalseRefusal, remoteTagRefusal, targetRefusal, testFeedRefusal, untrackedRefusal, newerThan, releaseArgs, teamOf, teamRefusal, updateConfigRefusal, updateFileRefusal, versionRefusal, windowRefusal } from '../scripts/release-lib.mjs'
 
 describe('the beta window (§3)', () => {
   const open = { tombstone: 'v0.24.3', closed: false }
@@ -138,8 +138,19 @@ describe('the dependency install (pass 11, L-2)', () => {
       GH_TOKEN: 'x', GITHUB_TOKEN: 'x', GH_ENTERPRISE_TOKEN: 'x', GITHUB_ENTERPRISE_TOKEN: 'x', AWS_SECRET_ACCESS_KEY: 'x', CCC_UPDATE_TEST_FEED: 'x',
       // Token-shaped names the NODE_ and npm_config_ prefixes would admit (pass 13, L-1).
       NODE_AUTH_TOKEN: 'x', npm_config__authToken: 'x', npm_config__auth: 'x', 'npm_config_//npm.example/:_authToken': 'x', npm_config_password: 'x',
+      // Credential settings without a token-shaped name: only named npm settings pass (pass 14, L-1).
+      npm_config_key: '-----BEGIN PRIVATE KEY-----', 'npm_config_//npm.example/:keyfile': '/k', npm_config_certfile: '/c', NODE_SIGNING_KEY: 'x',
     })
     expect(Object.keys(env).sort()).toEqual(['DEVELOPER_DIR', 'ELECTRON_MIRROR', 'HOME', 'LANG', 'LC_ALL', 'NODE_ENV', 'PATH', 'TMPDIR', 'npm_config_cache'])
+  })
+  it('passes URL settings without the user and password in them (pass 14, L-1)', () => {
+    const env = installEnv({
+      npm_config_registry: 'https://user:pass@npm.example/',
+      HTTPS_PROXY: 'http://me:secret@proxy.example:8080',
+      ELECTRON_MIRROR: 'https://mirror.example/electron/',
+      npm_config_proxy: 'http://u:p@[bad',
+    })
+    expect(env).toEqual({ npm_config_registry: 'https://npm.example/', HTTPS_PROXY: 'http://proxy.example:8080/', ELECTRON_MIRROR: 'https://mirror.example/electron/' })
   })
   it('names the public repository once', () => {
     expect(PUBLIC_REPO).toBe('avanrossum/cc-command-center')
@@ -150,5 +161,29 @@ describe("electron-builder's part (pass 13, M-1)", () => {
   it('packages and signs without rebuilding native modules, which npm run setup did under the allowlist', () => {
     expect(builderConfig({ identity: 'Someone (ABCDE12345)', adhoc: false, repo: null })).toContain('-c.npmRebuild=false')
     expect(builderConfig({ identity: null, adhoc: true, repo: 'o/r' })).toContain('-c.npmRebuild=false')
+  })
+})
+
+describe('betas (MIP2-1497)', () => {
+  it('are published as prereleases and never marked latest', () => {
+    const args = releaseArgs({ tag: 'v1.0.1-beta.1', repo: 'o/r', title: 't', notesFile: 'n.md', files: ['a.dmg'], draft: false, target: 'a'.repeat(40), prerelease: true })
+    expect(args).toContain('--prerelease')
+    expect(args).toContain('--latest=false')
+    expect(latestFalseRefusal(args)).toBeNull()
+    expect(releaseArgs({ tag: 'v1.0.1', repo: 'o/r', title: 't', notesFile: 'n.md', files: [], draft: false })).not.toContain('--prerelease')
+  })
+  it('match their mode: --prerelease takes X.Y.Z-beta.N only, and a release takes no prerelease', () => {
+    expect(prereleaseRefusal('1.0.1-beta.1', true)).toBeNull()
+    expect(prereleaseRefusal('1.0.1', false)).toBeNull()
+    expect(prereleaseRefusal('1.0.1', true)).toMatch(/publishes a beta version/)
+    expect(prereleaseRefusal('1.0.1-rc.1', true)).toMatch(/publishes a beta version/)
+    expect(prereleaseRefusal('1.0.1-beta.1', false)).toMatch(/publish it with --prerelease/)
+  })
+  it('order by semver, so beta.10 follows beta.2', () => {
+    expect(newerThan('v1.0.1-beta.10', 'v1.0.1-beta.2')).toBe(true)
+    expect(newerThan('v1.0.1', 'v1.0.1-beta.10')).toBe(true)
+    expect(comparePrerelease('beta.2', 'beta.10')).toBeLessThan(0)
+    // Above 1.0.0 and above the tombstone, so the version check passes a beta.
+    expect(versionRefusal('v1.0.1-beta.1', 'v0.25.0')).toBeNull()
   })
 })

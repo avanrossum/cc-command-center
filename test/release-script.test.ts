@@ -38,7 +38,9 @@ esac`)
     // electron-builder's arguments are recorded, then the run stops: nothing is built or signed.
     stub(bin, 'npx', `echo "npx $*" >> ${log}; exit 7`)
     stub(bin, 'gh', `echo "gh $*" >> ${log}; exit 9`)
-    const r = spawnSync(process.execPath, [join(root, 'scripts', 'release.mjs'), '--build-only'], {
+    // A beta version builds with --prerelease, as a beta is published (MIP2-1497).
+    const { version } = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')) as { version: string }
+    const r = spawnSync(process.execPath, [join(root, 'scripts', 'release.mjs'), '--build-only', ...(version.includes('-') ? ['--prerelease'] : [])], {
       cwd: root,
       encoding: 'utf8',
       env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir, CSC_NAME: 'Someone (ABCDE12345)', APPLE_ID: 'x', APPLE_APP_SPECIFIC_PASSWORD: 'x', APPLE_TEAM_ID: 'x' },

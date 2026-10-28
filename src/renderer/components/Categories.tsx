@@ -19,6 +19,8 @@ export interface StoreApi {
   openSheet: (kind: 'settings' | 'resume' | 'from', sessionId: string) => void
   /** The move sheet for 0.24's sessions, with one session picked or the idle ones (MIP2-1425). */
   openMove: (sessionId: string | null) => void
+  /** Pin or unpin a session in the switcher (MIP2-1494 §5.5). */
+  togglePin: (sessionId: string) => void
 }
 
 export interface NoticeAction {
@@ -26,7 +28,7 @@ export interface NoticeAction {
   run: () => void
 }
 
-export const StoreContext = createContext<StoreApi>({ store: null, entries: [], editCategory: () => {}, notice: () => {}, openSheet: () => {}, openMove: () => {} })
+export const StoreContext = createContext<StoreApi>({ store: null, entries: [], editCategory: () => {}, notice: () => {}, openSheet: () => {}, openMove: () => {}, togglePin: () => {} })
 
 export const useStore = () => useContext(StoreContext)
 

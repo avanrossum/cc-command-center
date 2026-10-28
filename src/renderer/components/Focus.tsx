@@ -45,8 +45,11 @@ export function Focus({
   onTitle,
   onTyping,
   selfCheck = null,
+  strip = null,
 }: {
   focused: string
+  /** The session switcher, above the session header (MIP2-1494 §5.1). */
+  strip?: React.ReactNode
   entries: Entry[]
   /** The self-check, for the security strip (spec MIP2-1379 §7.3). */
   selfCheck?: SelfCheckReport | null
@@ -164,6 +167,7 @@ export function Focus({
 
   return (
     <main className="main focus">
+      {strip}
       <header className="sess-h">
         <Glyph kind={current.view.glyph} />
         <b>{name}</b>

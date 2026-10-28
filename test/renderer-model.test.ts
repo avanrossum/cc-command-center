@@ -2,7 +2,7 @@
 
 import { field, type SessionSnapshot } from '@ccc/contract'
 import { describe, expect, it } from 'vitest'
-import { cardView, deadView, IDLE_AFTER_MS, isStale, withObservedIdle } from '../src/renderer/model/card-state.ts'
+import { cardView, deadView, IDLE_AFTER_MS, isStale, STARTING_MS, withObservedIdle } from '../src/renderer/model/card-state.ts'
 import { DEAD_AFTER_MS } from '../src/shared/lifecycle.ts'
 import { attentionLine, categoryLabel, categoryRef, countFleet, frameColor, groupFleet, nameOf, shownEntries, splitAttention, UNCAT_REF, type CatRef, type Entry } from '../src/renderer/model/fleet.ts'
 import { emptyStore, type AppStore } from '../src/shared/store.ts'
@@ -35,6 +35,16 @@ function snap(over: Partial<SessionSnapshot> & { activityValue?: SessionSnapshot
 const mod = <T>(v: T, at = NOW) => field(v, 'mod', at)
 
 describe('cardView', () => {
+  it("reads a new session the mod hasn't reported yet as starting, not outside the app (MIP2-1493)", () => {
+    const fresh = (ago: number) => cardView(snap({ model: undefined, tokens: undefined, startedAt: field(NOW - ago, 'agents-json', NOW) }), NOW)
+    expect(fresh(2_000)).toMatchObject({ state: 'working', label: 'STARTING', outside: false })
+    // Past the window with still no report, it was started outside the app.
+    expect(fresh(STARTING_MS + 1)).toMatchObject({ outside: true })
+    expect(fresh(STARTING_MS + 1).label).not.toBe('STARTING')
+    // A needs-you wait still comes first.
+    expect(cardView(snap({ model: undefined, tokens: undefined, startedAt: field(NOW - 1000, 'agents-json', NOW), activityValue: 'waiting' }), NOW).state).toBe('request')
+  })
+
   it('reads a session awaiting its first message as ready for it (MIP2-1426)', () => {
     const v = cardView(snap({ awaitingFirstPrompt: mod(true) }), NOW)
     expect([v.state, v.label]).toEqual(['turn', 'READY FOR YOUR FIRST MESSAGE'])

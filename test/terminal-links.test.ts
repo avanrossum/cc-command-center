@@ -3,7 +3,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { Terminal } from '@xterm/headless'
-import { checkTerminalLink, isAllowedExternal, hostReach, isPrivateHost, linkDecision, linkMismatch, textHost } from '../src/main/policy.ts'
+import { checkTerminalLink, isAllowedExternal, hostReach, isPrivateHost, linkMismatch, openTerminalLink, reachDecision, textHost, type LinkDeps } from '../src/main/policy.ts'
 
 const terminalLinkRefusal = (url: string) => {
   const r = checkTerminalLink(url)
@@ -252,16 +252,54 @@ describe('the DNS check (pass 11, L-3)', () => {
   })
 })
 
-describe('what a click does (pass 13, L-2)', () => {
+describe('what a click does (pass 14, L-2)', () => {
   it.each([
-    [null, null, 'open'],
-    [null, 'public', 'open'],
-    [null, 'unknown', 'ask'],
-    [null, 'private', 'refuse'],
-    ['This link\'s text says github.com, but it opens evil.example.', null, 'ask'],
-    ['This link\'s text says github.com, but it opens evil.example.', 'public', 'ask'],
-    ['This link\'s text says github.com, but it opens evil.example.', 'private', 'refuse'],
-  ] as const)('mismatch %j with reach %j: %s', (mismatch, reach, decision) => {
-    expect(linkDecision(mismatch, reach)).toBe(decision)
+    ['public', 'open'],
+    ['unknown', 'ask'],
+    ['private', 'refuse'],
+  ] as const)('a plain-http host that is %s: %s', (reach, decision) => {
+    expect(reachDecision(reach)).toBe(decision)
+  })
+
+  // The handler's steps, with the dialog, the lookup and the browser stubbed.
+  const run = (url: string, text: string | undefined, answers: boolean[], addresses: string[] | Error) => {
+    const asked: string[] = []
+    const looked: string[] = []
+    const opened: string[] = []
+    const deps: LinkDeps = {
+      ask: async message => (asked.push(message), answers.shift() ?? false),
+      lookup: async host => {
+        looked.push(host)
+        if (addresses instanceof Error) throw addresses
+        return addresses.map(address => ({ address }))
+      },
+      open: async href => void opened.push(href),
+    }
+    return openTerminalLink(url, text, false, deps).then(r => ({ r, asked, looked, opened }))
+  }
+
+  it('returns canceled on Cancel, and never looks up a canceled link', async () => {
+    const { r, looked, opened } = await run('http://evil.example/', 'github.com', [false], ['93.184.216.34'])
+    expect(r).toEqual({ ok: false, error: 'canceled', canceled: true })
+    expect(looked).toEqual([])
+    expect(opened).toEqual([])
+  })
+
+  it('asks a second time when the host could not be checked', async () => {
+    const { r, asked, opened } = await run('http://unchecked.example/', undefined, [true], new Error('ENOTFOUND'))
+    expect(asked).toEqual([expect.stringContaining("couldn't check where unchecked.example points")])
+    expect(r).toEqual({ ok: true })
+    expect(opened).toEqual(['http://unchecked.example/'])
+  })
+
+  it('refuses a plain-http name for the local network without opening, even after Open on the text question', async () => {
+    const { r, opened } = await run('http://evil.example/', 'github.com', [true], ['192.168.1.10'])
+    expect(r).toMatchObject({ ok: false, error: expect.stringContaining("don't open from the terminal") })
+    expect(opened).toEqual([])
+  })
+
+  it('opens https without a lookup or a question when the text matches', async () => {
+    const { r, asked, looked, opened } = await run('https://github.com/x', 'github.com/x', [], [])
+    expect([r, asked, looked, opened]).toEqual([{ ok: true }, [], [], ['https://github.com/x']])
   })
 })

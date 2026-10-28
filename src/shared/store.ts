@@ -97,6 +97,8 @@ export interface AppSettings {
   showOutside: boolean
   /** Show sessions parked in 0.24 in the sidebar; on unless turned off (MIP2-1465). */
   showParked?: boolean
+  /** Get beta updates (MIP2-1497). Unset: on in a beta build, off otherwise (shared/update-state.ts, betaUpdatesOn). */
+  betaUpdates?: boolean
   /**
    * 0.24's `hideUnmanaged`, kept from the import but not applied: outside
    * sessions start shown, and the N4 move-in step offers it once Alex's
@@ -120,7 +122,28 @@ export interface AppSettings {
   rollOffDays?: number
   /** Sessions the open roll-off notice covers; empty when dismissed. It survives restarts. */
   rollOffNotice?: string[]
+  /** Which spend the top bar shows (MIP2-1498 §5.2); absent is Real once a Console key is saved, else Simulated. */
+  spendSource?: 'real' | 'simulated'
+  /** The sidebar's width in px, SIDEBAR_WIDTH.min–max; absent is the default (MIP2-1495). */
+  sidebarWidth?: number
+  /** The switcher's pinned sessions, in Alex's order; kept from roll-off while pinned (MIP2-1494 §5.5). */
+  switcherPins?: string[]
+  /** The switcher's recent sessions, left to right, at most SWITCHER_RECENT_MAX (MIP2-1494 §5.3). */
+  switcherRecent?: string[]
 }
+
+/** The sidebar's width limits and default, px (MIP2-1495). */
+export const SIDEBAR_WIDTH = { min: 200, max: 480, default: 236 } as const
+
+/** A width the sidebar can take: rounded and kept within SIDEBAR_WIDTH. */
+export function clampSidebarWidth(px: number): number {
+  return Number.isFinite(px) ? Math.min(SIDEBAR_WIDTH.max, Math.max(SIDEBAR_WIDTH.min, Math.round(px))) : SIDEBAR_WIDTH.default
+}
+
+/** Recent sessions the switcher keeps (MIP2-1494 §5.3). */
+export const SWITCHER_RECENT_MAX = 5
+/** A bound on pins, so a bad write can't grow the store; the spec sets no cap. */
+export const SWITCHER_PINS_MAX = 50
 
 export interface AppStore {
   version: 1

@@ -4,7 +4,7 @@
 
 import type { AnswerRequest, LaunchRequest } from '../shared/ipc.ts'
 import { checkFlags } from '../shared/flags.ts'
-import type { Category } from '../shared/store.ts'
+import { SIDEBAR_WIDTH, type Category } from '../shared/store.ts'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** The largest single input, paste or prompt accepted from the renderer. */
@@ -108,8 +108,11 @@ export function checkSettings(v: unknown): Record<string, boolean | number | str
     } else if (k === 'terminalFontSize') {
       if (typeof val !== 'number' || !Number.isInteger(val) || val < FONT_SIZE.min || val > FONT_SIZE.max) return null
       out[k] = val
-    } else if (['notifyEnabled', 'notifyNeedsYou', 'notifyTurn', 'arbiterEnabled', 'showOutside', 'hideOutsideAsked', 'showParked'].includes(k)) {
+    } else if (['notifyEnabled', 'notifyNeedsYou', 'notifyTurn', 'arbiterEnabled', 'showOutside', 'hideOutsideAsked', 'showParked', 'betaUpdates'].includes(k)) {
       if (typeof val !== 'boolean') return null
+      out[k] = val
+    } else if (k === 'sidebarWidth') {
+      if (typeof val !== 'number' || !Number.isInteger(val) || val < SIDEBAR_WIDTH.min || val > SIDEBAR_WIDTH.max) return null
       out[k] = val
     } else if (k === 'rollOffDays') {
       if (typeof val !== 'number' || !Number.isInteger(val) || val < 7 || val > 14) return null

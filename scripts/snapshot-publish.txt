@@ -41,8 +41,14 @@ scripts/update-test.mjs
 tools/check-claude-env.ts
 docs/architecture.md
 docs/coupling-contract.md
+docs/media
+docs/media/approval-card.png
+docs/media/fleet.png
+docs/media/focus.png
+docs/media/question-card.png
 docs/qa-isolation.md
 docs/release-notes
 docs/release-notes/v1.0.0.md
+docs/release-notes/v1.0.1.md
 docs/release-plan.md
 test/fixtures/releases-0.24.atom

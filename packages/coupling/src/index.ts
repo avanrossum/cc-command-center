@@ -19,7 +19,7 @@ export {
 } from './claude-cli.ts'
 export { CHANNEL_SOCKETS, memoryStore, MOD_RELOAD, MOD_INTEGRITY, parseVersion, SelfCheck, type ChannelHealth, type SelfCheckStore } from './self-check.ts'
 export { hostedSessions, SupervisorWatchdog, type WatchdogOptions, type WatchdogState } from './watchdog.ts'
-export { FleetPoller, MOD_SILENCE_MS, type FleetListener, type FleetPollerOptions } from './fleet-poller.ts'
+export { ASK_GRACE_MS, FleetPoller, livePending, MOD_SILENCE_MS, type FleetListener, type FleetPollerOptions } from './fleet-poller.ts'
 export { DEFAULT_USAGE_DIR, readUsageDir } from './usage-files.ts'
 export {
   parseEnvelope,
@@ -56,5 +56,5 @@ export { SessionControl, type SessionControlOptions } from './session-control.ts
 export { AttachPool, bracketedPaste, KEPT_ATTACHED, quotePath, spawnAttach, type AttachEvents, type AttachProcess, type SpawnAttach } from './attach-view.ts'
 export { clearUserFlags } from './file-flags.ts'
 export { CommandLog, COMMAND_LOG_MAX_BYTES, COMMAND_LOG_STREAM_BYTES, redactArgs, type CommandEntry } from './command-log.ts'
-export { checkSupervisorPath, daemonPid, pathFromPs, sharedSupervisorStart, supervisorState, type SupervisorPath } from './supervisor-env.ts'
+export { checkSupervisorPath, daemonPid, processStartedAt, pathFromPs, sharedSupervisorStart, supervisorState, type SupervisorPath } from './supervisor-env.ts'
 export { terminalHostOf, terminalName } from './process-host.ts'

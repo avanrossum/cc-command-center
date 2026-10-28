@@ -82,6 +82,23 @@ const readPs = (pid: number): Promise<string> =>
     execFile('/bin/ps', ['eww', '-o', 'command=', '-p', String(pid)], { timeout: 5_000, maxBuffer: 1024 * 1024 }, (err, stdout) => (err ? reject(err) : resolve(stdout))),
   )
 
+const readStart = (pid: number): Promise<string> =>
+  new Promise((resolve, reject) =>
+    execFile('/bin/ps', ['-o', 'lstart=', '-p', String(pid)], { timeout: 5_000, env: { LC_ALL: 'C' } }, (err, stdout) => (err ? reject(err) : resolve(stdout))),
+  )
+
+/**
+ * When process `pid` started, Unix milliseconds, from `ps -o lstart=` in the
+ * C locale ("Wed Oct 28 12:53:01 2026", local time); null when unreadable.
+ * For the channel band's likely cause (MIP2-1488).
+ */
+export async function processStartedAt(pid: number, ps: (pid: number) => Promise<string> = readStart): Promise<number | null> {
+  const text = (await ps(pid).catch(() => '')).trim().replace(/\s+/g, ' ')
+  if (!/^\w{3} \w{3} \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/.test(text)) return null
+  const at = Date.parse(text)
+  return Number.isFinite(at) ? at : null
+}
+
 /** The running supervisor's PATH against the folder holding `binary`; null when no supervisor runs. */
 export async function checkSupervisorPath(run: ClaudeRunner, binary: string, ps: (pid: number) => Promise<string> = readPs): Promise<SupervisorPath | null> {
   // `daemon status` exits non-zero when no supervisor runs; its output still says so (MIP2-1463 live run).

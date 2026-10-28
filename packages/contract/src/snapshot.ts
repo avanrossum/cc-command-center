@@ -239,6 +239,10 @@ export interface SelfCheckReport {
   controlOff: ('card-answers' | 'prompt-relay')[]
   /** When the checks last ran, Unix milliseconds; null before the first poll (settings, MIP2-1424). */
   checkedAt: number | null
+  /** Sessions whose mod hasn't reached the app by the deadline, and since when (MIP2-1488). */
+  unconnected?: { sessionId: string | null; since: number }[]
+  /** What may have cut them off, when the app knows: Claude Code's install time and the supervisor's start, Unix milliseconds. */
+  causes?: { claudeInstalledAt: number | null; supervisorStartedAt: number | null }
 }
 
 /** What the coupling package publishes on each update. */

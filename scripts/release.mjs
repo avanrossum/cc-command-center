@@ -5,6 +5,8 @@
 //   The signed, notarized build only, checked as a release and published nowhere, from main (for
 //   the farewell release's copy of the new app's disk image, MIP2-61):
 //     node scripts/release.mjs --build-only
+//   A beta (MIP2-1497): the same as a real release, for an X.Y.Z-beta.N version, published as a
+//   GitHub prerelease and never "latest"; add --prerelease to the real-release command.
 //   A real release, only with the maintainer's go, from main, after this commit's snapshot is pushed to the
 //   public main (scripts/snapshot.mjs):
 //     node scripts/release.mjs --repo avanrossum/cc-command-center --notes <file> --target <public sha> --go
@@ -33,6 +35,7 @@ import {
   builderConfig,
   bundleIdRefusal,
   identityRefusal,
+  prereleaseRefusal,
   installEnv,
   latestFalseRefusal,
   PUBLIC_REPO,
@@ -63,6 +66,7 @@ const run = (file, args, opts = {}) => execFileSync(file, args, { cwd: ROOT, enc
 
 const dryRun = flag('--dry-run')
 const buildOnly = flag('--build-only')
+const prerelease = flag('--prerelease')
 const adhoc = flag('--adhoc')
 if (buildOnly && (dryRun || flag('--go'))) fail('--build-only publishes nothing; it takes neither --dry-run nor --go')
 const repo = buildOnly ? null : (value('--repo') ?? fail('--repo <owner>/<name> is required'))
@@ -77,6 +81,8 @@ const window = JSON.parse(readFileSync(join(ROOT, 'scripts', 'release-window.jso
 // Dry runs too: a draft is the release that would be made.
 const versionRefused = versionRefusal(tag, window.tombstone)
 if (versionRefused) fail(versionRefused)
+const prereleaseRefused = prereleaseRefusal(version, prerelease)
+if (prereleaseRefused) fail(prereleaseRefused)
 
 // 1. The tree is committed and pushed, so the release is a known commit.
 if (run('git', ['status', '--porcelain', '--untracked-files=no']).trim()) fail('the working tree has uncommitted changes')
@@ -117,7 +123,10 @@ const ghText = args => {
 const remoteTags = () => {
   const text = ghText(['api', `repos/${repo}/git/matching-refs/tags/${tag}`])
   if (text === null) fail(`couldn't read ${repo}'s tags; not tagging blind`)
-  return JSON.parse(text)
+  const refs = JSON.parse(text)
+  // An error object or {} isn't a list of tags (pass 14, L-4).
+  if (!Array.isArray(refs)) fail(`${repo}'s tags didn't read as a list; not tagging blind`)
+  return refs
 }
 if (!dryRun && !buildOnly) {
   const mainSha = ghText(['api', `repos/${repo}/branches/main`, '-q', '.commit.sha'])
@@ -213,7 +222,7 @@ if (buildOnly) {
 const assets = files.filter(f => /\.(dmg|zip|blockmap)$/.test(f) || f === 'ccc-mac.yml').map(f => join(out, f))
 const assetRefused = assetRefusal(assets.map(a => a.slice(out.length + 1)), version)
 if (assetRefused) fail(assetRefused)
-const args = releaseArgs({ tag, repo, title: `CC Command Center ${version}`, notesFile: notes, files: assets, draft: dryRun, target })
+const args = releaseArgs({ tag, repo, title: `CC Command Center ${version}`, notesFile: notes, files: assets, draft: dryRun, target, prerelease })
 const latestRefused = latestFalseRefusal(args)
 if (latestRefused) fail(latestRefused)
 // Once more right before the tag is made: the build took minutes, and gh reuses a tag that
@@ -229,7 +238,9 @@ if (target) {
   const text = ghText(['api', `repos/${repo}/git/matching-refs/tags/${tag}`])
   let refs = null
   try {
-    refs = text === null ? null : JSON.parse(text)
+    const parsed = text === null ? null : JSON.parse(text)
+    // An error object or {} reads as unreadable too, not a TypeError after the release is made (pass 14, L-4).
+    refs = Array.isArray(parsed) ? parsed : null
   } catch {
     // Not JSON: the same as unreadable, so the message below still prints (pass 13, L-4).
   }

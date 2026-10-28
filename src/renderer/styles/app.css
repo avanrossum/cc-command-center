@@ -22,8 +22,11 @@ button { font: inherit; color: inherit; }
 
 /* ---------- regions (spec §3) ---------- */
 .app { display: grid; grid-template-rows: 50px 1fr; grid-template-columns: minmax(0, 1fr); height: 100%; }
-.body { display: grid; grid-template-columns: 236px minmax(0, 1fr) 288px; min-height: 0; }
-.body.rail-off { grid-template-columns: 236px minmax(0, 1fr) 0; }
+.body { display: grid; grid-template-columns: var(--side-w, 236px) minmax(0, 1fr) 288px; min-height: 0; position: relative; }
+.body.rail-off { grid-template-columns: var(--side-w, 236px) minmax(0, 1fr) 0; }
+/* The sidebar's resize handle (MIP2-1495), over its right edge. */
+.side-grip { position: absolute; top: 0; bottom: 0; left: calc(var(--side-w, 236px) - 3px); width: 6px; z-index: 6; cursor: col-resize; }
+.side-grip:hover, .side-grip:focus-visible { background: color-mix(in srgb, var(--cc-focus) 40%, transparent); outline: none; }
 
 /* ---------- top bar (spec §12) ---------- */
 .top {
@@ -35,7 +38,7 @@ button { font: inherit; color: inherit; }
 .brand { font: 600 12px var(--f-mono); white-space: nowrap; display: flex; align-items: center; gap: 8px; }
 .brand .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cc-working); }
 .attn {
-  flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px;
+  flex: 1; min-width: 320px; display: flex; align-items: center; gap: 10px;
   background: var(--cc-surface-2); border: 1px solid var(--cc-border);
   border-radius: 7px; padding: 6px 10px;
 }
@@ -48,12 +51,26 @@ button { font: inherit; color: inherit; }
 .counts { font: 11px var(--f-mono); color: var(--cc-dim); white-space: nowrap; display: flex; gap: 10px; }
 .counts span { display: inline-flex; align-items: center; gap: 5px; }
 .counts .zero { opacity: .45; }
-.usage { display: grid; grid-template-columns: auto 64px auto auto; gap: 3px 8px; align-items: center; font: 10.5px var(--f-mono); color: var(--cc-dim); white-space: nowrap; }
+.usage { display: grid; grid-template-columns: auto 64px auto 8px auto; gap: 3px 8px; align-items: center; font: 10.5px var(--f-mono); color: var(--cc-dim); white-space: nowrap; }
 .usage i { height: 4px; border-radius: 2px; background: var(--cc-hairline); position: relative; overflow: hidden; display: block; }
 .usage i b { position: absolute; inset: 0 auto 0 0; background: var(--cc-meter); }
 .usage i.warm b { background: var(--cc-meter-warm); }
 .usage i.hot b { background: var(--cc-meter-hot); }
 .usage .r { color: var(--cc-meta); }
+/* The pace (MIP2-1498 §4.2): filled when it has a state, hollow while learning, dashed when stale. */
+.usage i.empty { background: none; outline: 1px dashed var(--cc-stale); outline-offset: -1px; }
+.usage .stale-u { text-decoration: underline dashed var(--cc-stale); text-underline-offset: 3px; }
+.pace-dot { width: 8px; height: 8px; border-radius: 50%; box-sizing: border-box; }
+.pace-dot.onpace { background: var(--cc-meter); }
+.pace-dot.tight { background: var(--cc-meter-warm); }
+.pace-dot.over { background: var(--cc-meter-hot); }
+.pace-dot.out { border: 2px solid var(--cc-meter-hot); box-shadow: 0 0 0 1px var(--cc-meter-hot); }
+.pace-dot.learning { border: 1.5px solid var(--cc-faint); }
+.pace-dot.stale, .pace-dot.reset { border: 1.5px dashed var(--cc-stale); }
+.pace-dot.never { border: 1.5px dashed var(--cc-faint); }
+.pace-w { font: 600 10.5px var(--f-mono); }
+.pace-w.tight { color: var(--cc-meter-warm); }
+.pace-w.over, .pace-w.out { color: var(--cc-meter-hot); }
 .rail-toggle {
   font: 600 11px var(--f-mono); color: var(--cc-dim); background: none;
   border: 1px solid var(--cc-border); border-radius: 5px; padding: 2px 7px; cursor: pointer;
@@ -79,17 +96,20 @@ button { font: inherit; color: inherit; }
 /* ---------- sidebar (spec §11) ---------- */
 .side { background: var(--cc-surface-2); border-right: 1px solid var(--cc-border); display: flex; flex-direction: column; overflow-y: auto; }
 .jump { margin: 10px; padding: 6px 9px; border: 1px solid var(--cc-border); border-radius: 6px; color: var(--cc-meta); font-size: 12px; display: flex; justify-content: space-between; }
-.cat-h { display: flex; align-items: center; gap: 7px; padding: 8px 12px 4px; font: 600 10.5px var(--f-mono); letter-spacing: .07em; text-transform: uppercase; color: var(--cc-dim); }
-.cat-h .sq { width: 8px; height: 8px; border-radius: 2px; background: var(--cat); }
-.cat-h .cnt { margin-left: auto; color: var(--cc-faint); font-weight: 400; }
-.srow { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 22px; position: relative; height: 28px; }
+.cat-h { display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; font: 600 12px var(--f-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--cc-text); background: color-mix(in srgb, var(--cat) 28%, var(--cc-surface-2)); }
+.cat-h .cnt { margin-left: auto; color: var(--cc-text); font-weight: 400; }
+/* Option D (MIP2-1494 §4): 10 px between blocks, and a 2 px category rule at x = 12 from the header's bottom to the block's. */
+.catblk { position: relative; }
+.catblk:not(:first-of-type) { margin-top: 10px; }
+.catblk::after { content: ""; position: absolute; left: 12px; top: 30px; bottom: 0; width: 2px; background: var(--cat); pointer-events: none; }
+.srow { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 28px; position: relative; height: 28px; }
 .srow.parked { opacity: .6; font-style: italic; }
 .srow.parked .glyph-gap { width: 10px; flex: none; }
 .srow b { font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .srow .age { font: 10px var(--f-mono); color: var(--cc-meta); }
 .srow.needs::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--cc-needs); }
 .srow.question::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--cc-question); }
-.folded { padding: 3px 12px 5px 22px; font: 11px var(--f-mono); color: var(--cc-faint); }
+.folded { padding: 3px 12px 5px 28px; font: 11px var(--f-mono); color: var(--cc-faint); }
 
 /* ---------- self-check band (D-014) ---------- */
 .band { display: flex; align-items: center; gap: 12px; margin: 10px 16px 0; padding: 8px 12px; border-radius: 7px;
@@ -264,7 +284,8 @@ button { font: inherit; color: inherit; }
 .composer-acts { display: flex; gap: 8px; }
 .composer-err { color: var(--cc-meter-hot); font-size: 12px; }
 .srow { cursor: pointer; }
-.srow.sel { background: var(--cc-sel); }
+/* The fill starts right of the category rule, so the rule runs unbroken (MIP2-1494 §4.2). */
+.srow.sel { background: linear-gradient(to right, transparent 14px, var(--cc-sel) 14px); }
 .kbd-mark { color: var(--cc-text); font-size: 12px; }
 .card { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
@@ -291,6 +312,7 @@ button { font: inherit; color: inherit; }
 .sheet .recent .fchip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sheet .seg span { color: var(--cc-dim); font-size: 12px; margin-right: 4px; }
 .sheet .note { margin: 0; color: var(--cc-dim); font-size: 12px; }
+.sheet .note.warn { color: var(--cc-alert); }
 .sheet .warn { margin: 0; color: var(--cc-meter-hot); font-size: 12px; }
 .link { background: none; border: 0; padding: 0; color: var(--cc-question); text-decoration: underline; cursor: pointer; font: inherit; align-self: flex-start; }
 .cmd { font: 11.5px/1.5 var(--f-mono); background: var(--cc-term-bg); border-radius: 6px; padding: 8px; overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -335,9 +357,10 @@ button.chip { background: none; cursor: pointer; }
 .menu .sq { width: 8px; height: 8px; border-radius: 2px; background: var(--cat); flex: none; }
 .menu hr { border: 0; border-top: 1px solid var(--cc-hairline); margin: 4px 0; width: 100%; }
 .cat-h { cursor: default; }
-.cat-h .chev, .cat-h .plus { background: none; border: 0; color: var(--cc-faint); font: inherit; padding: 0; width: 12px; cursor: pointer; flex: none; }
+.cat-h .chev, .cat-h .plus { background: none; border: 0; color: var(--cc-dim); font: inherit; padding: 0; width: 12px; cursor: pointer; flex: none; }
 .cat-h .plus { margin-left: 4px; opacity: 0; }
 .cat-h:hover .plus, .cat-h:focus-within .plus { opacity: 1; }
+.cat-h .plus { color: var(--cc-text); }
 .cat-h .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .cat-h .emoji { margin-right: 5px; text-transform: none; }
 .cat-h:focus-visible { outline: 2px solid var(--cc-focus); outline-offset: -2px; }
@@ -383,7 +406,7 @@ button.more:hover { color: var(--cc-text); background: var(--cc-sel); }
 .menu.right { left: auto; right: 0; }
 .menu.up { top: auto; bottom: calc(100% + 4px); }
 .card.picked { outline: 2px solid var(--cc-focus); outline-offset: -2px; }
-.srow.picked { background: var(--cc-sel); }
+.srow.picked { background: linear-gradient(to right, transparent 14px, var(--cc-sel) 14px); }
 .menu .check { width: 12px; flex: none; color: var(--cc-text); }
 .menu .rename { padding: 6px 8px; }
 .menu .rename input { width: 100%; box-sizing: border-box; font: 13px var(--f-ui); color: var(--cc-text); background: var(--cc-term-bg); border: 1px solid var(--cc-border); border-radius: 6px; padding: 6px 8px; }
@@ -501,3 +524,61 @@ button.arb { width: 100%; background: none; border: 0; border-top: 1px solid var
 
 /* The drawer's "Open anyway" question for an unknown file type (gate M-3). */
 .drawer-confirm { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--cc-text); }
+
+/* The session switcher (MIP2-1494 §5). */
+.switcher { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; flex: none; background: var(--cc-surface-2); border-bottom: 1px solid var(--cc-hairline); white-space: nowrap; overflow: visible; min-width: 0; position: relative; z-index: 5; }
+.sw-slot { position: relative; display: inline-flex; align-items: center; gap: 6px; }
+.sw-div { width: 1px; height: 16px; background: var(--cc-border); }
+.sw-chip { position: relative; display: inline-flex; align-items: center; height: 26px; max-width: 180px; border: 1px solid var(--cc-border); border-radius: 6px; background: transparent; }
+.sw-chip.cur { background: var(--cc-card); box-shadow: inset 0 -2px 0 var(--cat); }
+.sw-chip.drag { opacity: .5; }
+.sw-open { display: inline-flex; align-items: center; gap: 6px; height: 100%; min-width: 0; padding: 0 8px; background: none; border: 0; color: var(--cc-dim); font: 500 12.5px var(--f-ui); cursor: pointer; }
+.sw-chip.cur .sw-open { color: var(--cc-text); }
+.sw-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.sw-cat { width: 6px; height: 6px; border-radius: 1px; background: var(--cat); flex: none; }
+.sw-pin { color: var(--cc-meta); flex: none; }
+.sw-num { font: 10px var(--f-mono); color: var(--cc-meta); }
+/* The ⌘n hint sits over the chip's right end and takes no width (MIP2-1496 review). */
+.sw-badge { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); pointer-events: none; font: 10px var(--f-mono); color: var(--cc-text); background: var(--cc-surface); border: 1px solid var(--cc-border); border-radius: 4px; padding: 0 4px; line-height: 16px; }
+.sw-row { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; overflow: hidden; }
+/* Inline, so it never covers the name; it shows on hover and on a pinned chip's focus. */
+.sw-pinbtn { display: inline-flex; align-items: center; visibility: hidden; height: 100%; padding: 0 6px 0 0; background: none; border: 0; color: var(--cc-meta); cursor: pointer; }
+.sw-chip:hover .sw-pinbtn, .sw-chip:focus-within .sw-pinbtn { visibility: visible; }
+.sw-pinbtn:hover { color: var(--cc-text); }
+.sw-more { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; border: 1px solid var(--cc-border); border-radius: 6px; background: none; color: var(--cc-dim); font: 12px var(--f-mono); cursor: pointer; }
+.sw-drop-end { width: 24px; height: 26px; border: 1px dashed var(--cc-border); border-radius: 6px; }
+
+/* The usage help button and panel (MIP2-1498 §4.5). */
+.usage-wrap { position: relative; display: flex; align-items: center; gap: 8px; }
+.usage-help-btn { width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--cc-border); background: none; color: var(--cc-meta); font: 600 11px var(--f-mono); cursor: pointer; padding: 0; flex: none; }
+.usage-help-btn.tight { color: var(--cc-meter-warm); border-color: var(--cc-meter-warm); }
+.usage-help-btn.over, .usage-help-btn.out { color: var(--cc-meter-hot); border-color: var(--cc-meter-hot); }
+.usage-panel { position: absolute; top: calc(100% + 8px); right: 0; z-index: 30; width: 380px; max-height: 70vh; overflow-y: auto; background: var(--cc-surface); border: 1px solid var(--cc-border); border-radius: 8px; box-shadow: 0 8px 24px rgb(0 0 0 / .45); padding: 10px 12px; font-size: 12.5px; color: var(--cc-text); white-space: normal; }
+.usage-panel:focus { outline: none; }
+.usage-panel p { margin: 0 0 6px; line-height: 1.45; }
+.up-sec { padding: 6px 0; border-bottom: 1px solid var(--cc-hairline); }
+.up-sec:last-child { border-bottom: 0; }
+.up-h { font: 600 10px var(--f-mono); letter-spacing: .07em; text-transform: uppercase; color: var(--cc-meta); margin: 2px 0 6px; }
+.up-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: 0; border-radius: 5px; padding: 4px 6px; color: var(--cc-text); font: 12.5px var(--f-ui); cursor: pointer; }
+.up-row:hover { background: var(--cc-sel); }
+.up-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.up-meta { font: 11px var(--f-mono); color: var(--cc-meta); }
+.up-pct { font: 600 11px var(--f-mono); }
+.up-note { color: var(--cc-meta); font-size: 11.5px; }
+
+/* The spend indicator and panel (MIP2-1498 §5). */
+.spend-wrap { position: relative; }
+.spend { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; background: none; border: 0; padding: 0 2px; cursor: pointer; white-space: nowrap; }
+.spend-amt { font: 600 12px var(--f-mono); color: var(--cc-text); }
+.spend-sub { font: 10.5px var(--f-mono); color: var(--cc-meta); }
+.spend-big { font: 600 18px var(--f-mono); margin: 4px 0 8px; }
+.up-row.static { cursor: default; }
+.up-row.static:hover { background: none; }
+.seg { display: inline-flex; border: 1px solid var(--cc-border); border-radius: 6px; overflow: hidden; margin-bottom: 6px; }
+.seg button { background: none; border: 0; padding: 4px 12px; color: var(--cc-dim); font: 12px var(--f-ui); cursor: pointer; }
+.seg button.on { background: var(--cc-sel); color: var(--cc-text); }
+
+/* A narrow top bar (MIP2-1498 §6): the spend block's bottom line goes first, then the projection after the pace word.
+   The widths are estimates for both windows Over; QA's live check confirms them. */
+@media (max-width: 1440px) { .spend-sub { display: none; } }
+@media (max-width: 1320px) { .pace-detail { display: none; } }

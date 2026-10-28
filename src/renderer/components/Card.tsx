@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { CARD_APPROVE_LINES, type SessionSnapshot } from '@ccc/contract'
 import { NEEDS_YOU } from '../model/card-state.ts'
 import { frameColor, type Entry } from '../model/fleet.ts'
+import { blockedOnAlex } from '../../shared/summaries.ts'
 import { age, modelName, tildify, tokens } from '../model/format.ts'
 import { FieldText, Glyph, STATE_COLOR } from './bits.tsx'
 import { CatChip, SESSION_DRAG } from './Categories.tsx'
@@ -71,11 +72,12 @@ function MetaLine({ s, now }: { s: SessionSnapshot; now: number }) {
   )
 }
 
-function NowLine({ e }: { e: Entry }) {
+export function NowLine({ e }: { e: Entry }) {
   const s = e.session
-  // Blocked with nothing saying why (MIP2-1426): the session's own view shows it.
-  if (e.view.state === 'request' && s.needsYou.value?.kind === 'blocked' && !s.needsYou.value.detail && !s.pendingRequests?.value.length) {
-    return <p className="c-now">Open the session to see what it needs.</p>
+  // Blocked with nothing saying why (MIP2-1426): the Arbiter's line where the category allows it (MIP2-1485),
+  // as plain text; otherwise the session's own view shows it.
+  if (e.view.state === 'request' && blockedOnAlex(s)) {
+    return <p className="c-now">{e.waitingOn ? (e.waitingLastLine ? `Last line: "${e.waitingOn}"` : e.waitingOn) : 'Open the session to see what it needs.'}</p>
   }
   const tool = s.toolCalls?.value.filter(c => c.agentId === null).at(-1)
   if (e.view.state === 'working' && tool) {

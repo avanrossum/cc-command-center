@@ -19,6 +19,9 @@ export type CardState =
 export type Glyph = 'needs' | 'question' | 'working' | 'turn' | 'blocked' | 'idle' | 'ended' | 'dead'
 
 export const NEEDS_YOU: ReadonlySet<CardState> = new Set(['approval', 'question', 'sandbox', 'request'])
+/** Most urgent first: the sidebar's row order, and the switcher's +n glyph (MIP2-1496). */
+export const URGENCY: readonly CardState[] = ['approval', 'sandbox', 'request', 'question', 'working', 'asked', 'agents', 'turn']
+
 /** One-line rows in Fleet (spec §5.2). */
 export const QUIET: ReadonlySet<CardState> = new Set(['idle', 'ended'])
 
@@ -27,6 +30,12 @@ export const IDLE_AFTER_MS = 30 * 60 * 1000
 export const LIST_STALE_MS = 15_000
 /** Mod fields older than this read stale (spec §4: 60 s without a report). */
 export const MOD_STALE_MS = 60_000
+/**
+ * A session this new with no mod report yet reads STARTING: the agent list
+ * shows it a few seconds before its mod's first report, and until then it
+ * looks like one started outside the app (MIP2-1493).
+ */
+export const STARTING_MS = 20_000
 
 export interface CardView {
   state: CardState
@@ -78,7 +87,9 @@ function unanswered(s: SessionSnapshot): { peer: string; at: number } | null {
 }
 
 export function cardView(s: SessionSnapshot, now: number): CardView {
-  const outside = s.model === undefined && s.tokens === undefined
+  const unheard = s.model === undefined && s.tokens === undefined
+  const starting = unheard && s.pid.value !== null && now - s.startedAt.value < STARTING_MS
+  const outside = unheard && !starting
   const unreported = isStale(s.activity, now) && isStale(s.cwd, now)
   const runningAgents = (s.subagents?.value ?? []).filter(a => a.status === 'running').length
   const pending = s.pendingRequests?.value ?? []
@@ -113,6 +124,7 @@ export function cardView(s: SessionSnapshot, now: number): CardView {
     return view('ended', 'ENDED', null)
   }
 
+  if (starting) return view('working', 'STARTING', s.startedAt.value)
   if (s.activity.value === 'working' || turn?.running) return view('working', 'WORKING', turn?.running ? turn.startedAt : null)
 
   const asked = unanswered(s)

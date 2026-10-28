@@ -4,7 +4,7 @@
 
 import { useState } from 'react'
 import type { Category } from '../../shared/store.ts'
-import { NEEDS_YOU, type CardState } from '../model/card-state.ts'
+import { NEEDS_YOU, URGENCY } from '../model/card-state.ts'
 import { catFilter, UNCAT_REF, type CatRef, type Entry, type FilterId } from '../model/fleet.ts'
 import { age } from '../model/format.ts'
 import { selectClick, type Selection } from '../model/selection.ts'
@@ -14,10 +14,21 @@ import { SessionMenu } from './SessionMenu.tsx'
 import { parkedSessions, type Parked } from '../model/move.ts'
 
 /** Order inside a category: needs you, working, asked/waiting, your turn; quiet sessions fold. */
-const ORDER: CardState[] = ['approval', 'sandbox', 'request', 'question', 'working', 'asked', 'agents', 'turn']
+const ORDER = URGENCY
 const CAT_DRAG = 'application/x-ccc-category'
 
 const refOf = (c: Category): CatRef => ({ id: c.id, name: c.name, color: c.color, label: c.label, emoji: c.emoji, sort: c.sort, auto: false })
+
+/** The empty categories show and hide in place, so the control names its action and has no arrow (MIP2-1495). */
+export function emptyCategoriesLabel(showing: boolean): string {
+  return showing ? 'Hide empty categories' : 'Show empty categories'
+}
+
+/** The full name on hover, only while the name is cut short (MIP2-1495). */
+const titleIfCut = (ev: React.MouseEvent<HTMLElement>) => {
+  const el = ev.currentTarget
+  el.title = el.scrollWidth > el.clientWidth ? (el.textContent ?? '') : ''
+}
 
 export function Sidebar({
   entries,
@@ -125,10 +136,10 @@ export function Sidebar({
     const urgent = sorted[0]
     const key = cat.id ?? 'none'
     return (
-      <section key={key} className={dropOn === key ? 'drop' : ''} {...dropProps(cat)}>
+      // A tinted header and a category rule down the block (MIP2-1494 §4, option D).
+      <section key={key} className={`catblk${dropOn === key ? ' drop' : ''}`} style={{ '--cat': cat.color } as React.CSSProperties} {...dropProps(cat)}>
         <div
           className="cat-h"
-          style={{ '--cat': cat.color } as React.CSSProperties}
           tabIndex={0}
           draggable={!!source}
           onDragStart={ev => source && (ev.dataTransfer.setData(CAT_DRAG, source.id), (ev.dataTransfer.effectAllowed = 'move'))}
@@ -153,7 +164,6 @@ export function Sidebar({
           ) : (
             <span className="chev" />
           )}
-          <i className="sq" />
           <span
             className="nm"
             role="button"
@@ -193,7 +203,7 @@ export function Sidebar({
               onContextMenu={ev => (ev.preventDefault(), setMenuFor(m => ({ id: e.session.sessionId, n: (m?.n ?? 0) + 1 })))}
             >
               <Glyph kind={e.view.glyph} />
-              <b>{e.name}</b>
+              <b onMouseEnter={titleIfCut}>{e.name}</b>
               <span className="age">{since === null ? '' : age(now - since)}</span>
               {/* The one row receiving input (MIP2-1398 §5). */}
               {typing === e.session.sessionId && (
@@ -220,7 +230,7 @@ export function Sidebar({
               onContextMenu={ev => (ev.preventDefault(), setParkedMenu(p.id))}
             >
               <span className="glyph-gap" />
-              <b>{p.name}</b>
+              <b onMouseEnter={titleIfCut}>{p.name}</b>
               <span className="age">parked</span>
               {parkedMenu === p.id && (
                 <span className="chip-wrap">
@@ -262,7 +272,7 @@ export function Sidebar({
       <div className="side-foot">
         {empty.length > 0 && (
           <button type="button" className="link" onClick={() => setShowEmpty(s => !s)}>
-            {empty.length} empty categor{empty.length === 1 ? 'y' : 'ies'} {showEmpty ? '▾' : '▸'}
+            {emptyCategoriesLabel(showEmpty)}
           </button>
         )}
         <button type="button" className="link" onClick={() => api.editCategory(null)}>

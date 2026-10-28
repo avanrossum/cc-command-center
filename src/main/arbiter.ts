@@ -182,7 +182,7 @@ export function checkRanking(r: Ranking | null, items: readonly WaitingItem[]): 
 export class ArbiterLog {
   constructor(private readonly path: string) {}
 
-  append(entry: { at: number; kind: 'call' | 'summary' | 'capped' | 'error'; usd?: number; inputTokens?: number; outputTokens?: number; sessions?: number; start?: string | null; error?: string }): void {
+  append(entry: { at: number; kind: 'call' | 'summary' | 'wait' | 'tips' | 'capped' | 'error'; usd?: number; inputTokens?: number; outputTokens?: number; sessions?: number; start?: string | null; error?: string }): void {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
     appendFileSync(this.path, JSON.stringify(entry) + '\n', { mode: 0o600 })
   }
@@ -205,7 +205,7 @@ export class ArbiterLog {
   /** Spend on the local calendar day of `now`: rankings and turn summaries share the cap (MIP2-1422). */
   spentOn(now: number): number {
     const day = new Date(now).toDateString()
-    return this.entries(10_000).reduce((sum, e) => sum + ((e.kind === 'call' || e.kind === 'summary') && new Date(e.at).toDateString() === day ? (e.usd ?? 0) : 0), 0)
+    return this.entries(10_000).reduce((sum, e) => sum + ((e.kind === 'call' || e.kind === 'summary' || e.kind === 'wait' || e.kind === 'tips') && new Date(e.at).toDateString() === day ? (e.usd ?? 0) : 0), 0)
   }
 }
 

@@ -196,8 +196,9 @@ describe('FleetPoller with the reporter', () => {
     fields: [],
     refusal: null,
   }
+  // A waits on a permission prompt, so its offered prompt counts (MIP2-1492).
   const listing = JSON.stringify([
-    { pid: 1, cwd: '/a', kind: 'background', startedAt: 1, sessionId: A_ID, name: 'a', status: 'idle', state: 'done' },
+    { pid: 1, cwd: '/a', kind: 'background', startedAt: 1, sessionId: A_ID, name: 'a', status: 'waiting', state: 'blocked', waitingFor: 'permission prompt' },
     { cwd: '/b', kind: 'background', startedAt: 1, sessionId: B_ID, name: 'b', state: 'done' },
   ])
   const read = async () => ({

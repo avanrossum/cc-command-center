@@ -185,6 +185,48 @@ describe('SelfCheck', () => {
     expect([...check.degradedFields()]).toContain('tokens')
   })
 
+  it('names every late channel and fails while any is late, whatever the order (MIP2-1488)', () => {
+    const check = new SelfCheck(memoryStore())
+    check.setVersion(NEW)
+    const B = 'c0ffee05-0000-4000-8000-00000000000b'
+    const late = channel({ sessionId: B, contactAt: 0, createdAt: NOW - CHANNEL_DEADLINE_MS - 1 })
+    // A heard channel after a late one no longer turns the check back to pass.
+    for (const channels of [[late, channel()], [channel(), late]]) {
+      const r = run(check, { channels })
+      expect(states(r).channel).toBe('fail')
+      expect(r.unconnected).toEqual([{ sessionId: B, since: late.createdAt }])
+    }
+    // An untrusted channel has its own item, and isn't counted here.
+    const r = run(check, { channels: [{ ...late, untrusted: 'socket replaced' }, channel()] })
+    expect(states(r).channel).toBe('pass')
+    expect(r.unconnected).toEqual([])
+  })
+
+  it('Check again for the channel starts the deadline over and keeps the other results (MIP2-1488)', () => {
+    const check = new SelfCheck(memoryStore())
+    check.setVersion(NEW)
+    const late = channel({ contactAt: 0, createdAt: NOW - CHANNEL_DEADLINE_MS - 1 })
+    run(check, { channels: [late], files: [file(NEW, ['session.start', 'turn.start', 'turn.complete'])] })
+    const before = states(check.report())
+    check.recheckChannel(NOW)
+    const r = run(check, { channels: [late] })
+    expect(states(r).channel).toBe('pending')
+    expect(states(r)['event:turn.start']).toBe(before['event:turn.start'])
+    expect(r.controlOff).toEqual([])
+    expect(states(run(check, { channels: [late], now: NOW + CHANNEL_DEADLINE_MS + 1 })).channel).toBe('fail')
+    // The whole Check again starts it over too.
+    check.recheck(NOW + CHANNEL_DEADLINE_MS + 1)
+    expect(states(run(check, { channels: [late], now: NOW + CHANNEL_DEADLINE_MS + 2 })).channel).toBe('pending')
+  })
+
+  it('reports the likely causes it was given (MIP2-1488)', () => {
+    const check = new SelfCheck(memoryStore())
+    check.setVersion(NEW)
+    check.noteCauses({ claudeInstalledAt: NOW - 5000 })
+    check.noteCauses({ supervisorStartedAt: NOW - 4000 })
+    expect(check.report()?.causes).toEqual({ claudeInstalledAt: NOW - 5000, supervisorStartedAt: NOW - 4000 })
+  })
+
   it('Check again forgets the results, so a failed check is observed afresh (MIP2-1424)', () => {
     const check = new SelfCheck(memoryStore())
     check.setVersion(NEW)

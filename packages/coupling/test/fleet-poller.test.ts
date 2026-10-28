@@ -72,4 +72,31 @@ describe('FleetPoller', () => {
     poller.subscribe(s => seen.push(s.sessions.length))
     expect(seen).toEqual([6])
   })
+
+  it('keeps publishing to the other listeners when one throws (gate pass 15, M-2)', async () => {
+    const { host } = hostWith([FIXTURE, FIXTURE])
+    const poller = new FleetPoller({ host })
+    const seen: number[] = []
+    poller.subscribe(() => {
+      throw new TypeError('a broken listener')
+    })
+    poller.subscribe(s => seen.push(s.sessions.length))
+    await poller.pollOnce()
+    await poller.pollOnce()
+    expect(seen).toEqual([6, 6])
+  })
+
+  it('schedules the next poll after one that throws (gate pass 15, M-2)', async () => {
+    const { host } = hostWith([])
+    const poller = new FleetPoller({ host, intervalMs: 5 })
+    let polls = 0
+    poller.pollOnce = async () => {
+      polls++
+      throw new Error('a poll that throws')
+    }
+    poller.start()
+    await new Promise(r => setTimeout(r, 60))
+    poller.stop()
+    expect(polls).toBeGreaterThan(1)
+  })
 })

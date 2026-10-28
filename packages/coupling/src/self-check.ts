@@ -165,6 +165,12 @@ export class SelfCheck {
   private untrusted: { sessionId: string | null; why: string }[] = []
   /** Sessions whose mod reported reloading on, by the last evaluation; not saved. */
   private reloading: string[] = []
+  /** Sessions whose mod hasn't reached the app by the deadline, by the last evaluation; not saved (MIP2-1488). */
+  private unconnected: { sessionId: string | null; since: number }[] = []
+  /** Check again for the channel: the deadline counts from here for channels made before it (MIP2-1488). */
+  private channelSince = 0
+  /** What the app knows that may have cut sessions off: when Claude Code was installed and the supervisor started. */
+  private causes: { claudeInstalledAt: number | null; supervisorStartedAt: number | null } = { claudeInstalledAt: null, supervisorStartedAt: null }
 
   constructor(private readonly store: SelfCheckStore) {}
 
@@ -222,8 +228,11 @@ export class SelfCheck {
    * Check again (settings, MIP2-1424): forgets this version's results, so
    * each check is observed afresh. A failed check otherwise stays failed.
    */
-  recheck(): void {
+  recheck(now = Date.now()): void {
     if (!this.version) return
+    // The channel deadline starts over too, or a late channel fails again at once (MIP2-1488).
+    this.channelSince = now
+    this.unconnected = []
     this.results = {}
     this.unoffered.clear()
     this.persist()
@@ -332,12 +341,12 @@ export class SelfCheck {
         state: 'fail',
         detail: `${this.version} is older than this app supports`,
       }
-      return { claudeVersion: this.version, state: 'too-old', checks: [floor, ...checks, ...extra], controlOff: this.controlOff(), checkedAt: this.checkedAt }
+      return { claudeVersion: this.version, state: 'too-old', checks: [floor, ...checks, ...extra], controlOff: this.controlOff(), checkedAt: this.checkedAt, unconnected: this.unconnected, causes: this.causes }
     }
     // A changed mod is not a Claude Code change: it has its own band, not "degraded".
     const failed = checks.some(c => c.state === 'fail')
     const passed = REQUIRED.every(id => this.results[id]?.state === 'pass')
-    return { claudeVersion: this.version, state: failed ? 'degraded' : passed ? 'passed' : 'new', checks: [...checks, ...extra], controlOff: this.controlOff(), checkedAt: this.checkedAt }
+    return { claudeVersion: this.version, state: failed ? 'degraded' : passed ? 'passed' : 'new', checks: [...checks, ...extra], controlOff: this.controlOff(), checkedAt: this.checkedAt, unconnected: this.unconnected, causes: this.causes }
   }
 
   private set(id: CheckId, state: 'pass' | 'fail', detail: string | null = null): void {
@@ -381,18 +390,43 @@ export class SelfCheck {
     })
   }
 
+  /**
+   * Every channel the app expects to hear from (launched in this run, or its
+   * session running) must reach the app within CHANNEL_DEADLINE_MS. It fails
+   * while any is late, naming them, and passes once none is and one has been
+   * heard. An untrusted channel is left out: it has its own security item and
+   * band, and this check never clears it (MIP2-1488).
+   */
   private checkChannels({ channels, sessions, now }: SelfCheckInput): void {
     const alive = new Set(sessions.filter(s => s.pid.value !== null).map(s => s.sessionId))
-    for (const ch of channels) {
-      if (ch.contactAt > 0) {
-        this.set('channel', 'pass')
-        continue
-      }
-      const expected = ch.launched || (ch.sessionId !== null && alive.has(ch.sessionId))
-      if (expected && now - ch.createdAt > CHANNEL_DEADLINE_MS) {
-        this.set('channel', 'fail', `a hosted session's mod hasn't reached the app in ${Math.round(CHANNEL_DEADLINE_MS / 1000)} s`)
-      }
+    this.unconnected = channels
+      .filter(ch => !ch.untrusted && ch.contactAt === 0)
+      .filter(ch => ch.launched || (ch.sessionId !== null && alive.has(ch.sessionId)))
+      .filter(ch => now - Math.max(ch.createdAt, this.channelSince) > CHANNEL_DEADLINE_MS)
+      .map(ch => ({ sessionId: ch.sessionId, since: ch.createdAt }))
+    if (this.unconnected.length) {
+      const n = this.unconnected.length
+      this.set('channel', 'fail', `${n === 1 ? "a hosted session's mod hasn't" : `${n} hosted sessions' mods haven't`} reached the app in ${Math.round(CHANNEL_DEADLINE_MS / 1000)} s`)
+    } else if (channels.some(ch => ch.contactAt > 0)) {
+      this.set('channel', 'pass')
     }
+  }
+
+  /**
+   * Check again, for the channel only (MIP2-1488): a running session's mod
+   * reconnects by itself within a minute (Research, MIP2-1488), so the
+   * deadline starts over from now and the other results stand.
+   */
+  recheckChannel(now: number): void {
+    this.channelSince = now
+    delete this.results.channel
+    this.unconnected = []
+    this.persist()
+  }
+
+  /** When the running Claude Code was installed and the supervisor started, for the channel band's likely cause. */
+  noteCauses(c: Partial<{ claudeInstalledAt: number | null; supervisorStartedAt: number | null }>): void {
+    this.causes = { ...this.causes, ...c }
   }
 
   private checkEvents(files: ReporterFile[], now: number): void {

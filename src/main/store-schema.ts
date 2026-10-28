@@ -5,7 +5,7 @@
 // the window sends. A category or session that fails its core fields is
 // dropped; a bad optional field is dropped alone.
 
-import { emptyStore, type AppSettings, type AppStore, type Category, type SessionMeta } from '../shared/store.ts'
+import { emptyStore, SIDEBAR_WIDTH, SWITCHER_PINS_MAX, SWITCHER_RECENT_MAX, type AppSettings, type AppStore, type Category, type SessionMeta } from '../shared/store.ts'
 import { checkImportedSettings, FONT_NAME, isCategoryId, isSessionId } from './validate.ts'
 
 type Obj = Record<string, unknown>
@@ -89,12 +89,16 @@ function settings(v: unknown): AppSettings {
       ...(num(v.terminalFontSize) ? { terminalFontSize: v.terminalFontSize } : {}),
     }),
   )
-  for (const k of ['showOutside', 'notifyEnabled', 'showParked'] as const) if (bool(v[k])) out[k] = v[k]
+  for (const k of ['showOutside', 'notifyEnabled', 'showParked', 'betaUpdates'] as const) if (bool(v[k])) out[k] = v[k]
   for (const k of ['importedHideUnmanaged', 'hideOutsideAsked', 'notifyNeedsYou', 'notifyTurn', 'arbiterEnabled'] as const) if (bool(v[k])) out[k] = v[k]
   if (num(v.firstRunDoneAt)) out.firstRunDoneAt = v.firstRunDoneAt
   if (num(v.arbiterCapUsd) && v.arbiterCapUsd >= 0 && v.arbiterCapUsd <= 100) out.arbiterCapUsd = v.arbiterCapUsd
   if (Number.isInteger(v.rollOffDays) && (v.rollOffDays as number) >= 7 && (v.rollOffDays as number) <= 14) out.rollOffDays = v.rollOffDays as number
   if (Array.isArray(v.rollOffNotice)) out.rollOffNotice = v.rollOffNotice.filter(isSessionId).slice(0, 200)
+  if (v.spendSource === 'real' || v.spendSource === 'simulated') out.spendSource = v.spendSource
+  if (Number.isInteger(v.sidebarWidth) && (v.sidebarWidth as number) >= SIDEBAR_WIDTH.min && (v.sidebarWidth as number) <= SIDEBAR_WIDTH.max) out.sidebarWidth = v.sidebarWidth as number
+  if (Array.isArray(v.switcherPins)) out.switcherPins = [...new Set(v.switcherPins.filter(isSessionId))].slice(0, SWITCHER_PINS_MAX)
+  if (Array.isArray(v.switcherRecent)) out.switcherRecent = [...new Set(v.switcherRecent.filter(isSessionId))].filter(id => !out.switcherPins?.includes(id)).slice(-SWITCHER_RECENT_MAX)
   return out
 }
 
