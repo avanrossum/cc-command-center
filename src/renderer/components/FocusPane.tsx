@@ -8,6 +8,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import type { SessionSnapshot } from '@ccc/contract'
 import { categoryLabel, frameColor, type CatRef } from '../model/fleet.ts'
 import { terminalFont, tildify } from '../model/format.ts'
+import { linkTip, oscLinkHandler, textAt, webLinks, type LinkUi } from '../model/terminal-links.ts'
 import type { CardView } from '../model/card-state.ts'
 import { Glyph } from './bits.tsx'
 import { useStore } from './Categories.tsx'
@@ -76,6 +77,8 @@ export function FocusPane({
   /** The font at the terminal's creation; later changes go through the effect below. */
   const settingsRef = useRef(settings)
   settingsRef.current = settings
+  const noticeRef = useRef(store.notice)
+  noticeRef.current = store.notice
   const [state, setState] = useState<PaneState>({ kind: 'attaching' })
   const [nameCard, setNameCard] = useState(0)
   const reattachBtn = useRef<HTMLButtonElement>(null)
@@ -98,7 +101,36 @@ export function FocusPane({
 
   // The terminal, once per pane.
   useEffect(() => {
+    // Links (MIP2-1471): a plain click opens one in the default browser, as in 0.24; hovering
+    // shows the target on a line at the bottom of the view.
+    let tip: HTMLDivElement | null = null
+    const links: LinkUi = {
+      open: (url, text, atEdge) =>
+        void window.ccc
+          .openLink(url, text, atEdge)
+          .then(r => {
+            if (!r.ok && !('canceled' in r)) noticeRef.current(`The link didn't open: ${r.error}.`)
+          })
+          .catch(err => noticeRef.current(`The link didn't open: ${String(err)}.`)),
+      textAt: range => textAt(t.buffer.active, t.cols, range),
+      show: url => {
+        if (!tip && t.element) {
+          tip = document.createElement('div')
+          // xterm-hover keeps the mouse over the line from reaching links beneath it.
+          tip.className = 'xterm-hover link-tip'
+          t.element.appendChild(tip)
+        }
+        if (tip) {
+          tip.textContent = linkTip(url)
+          tip.hidden = false
+        }
+      },
+      hide: () => {
+        if (tip) tip.hidden = true
+      },
+    }
     const t = new Terminal({
+      linkHandler: oscLinkHandler(links),
       macOptionIsMeta: true,
       // Option-drag (and Shift-drag) select in the view itself while Claude Code has the mouse (MIP2-1385, Focus spec §2.4).
       macOptionClickForcesSelection: true,
@@ -109,6 +141,7 @@ export function FocusPane({
     })
     const f = new FitAddon()
     t.loadAddon(f)
+    t.loadAddon(webLinks(links))
     t.open(host.current!)
     term.current = t
     selections.set(id, () => (t.hasSelection() ? t.getSelection() : ''))

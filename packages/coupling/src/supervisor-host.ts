@@ -13,7 +13,7 @@
 
 import { realpathSync } from 'node:fs'
 import { parseAgentsJson, toSnapshot } from './agents-json.ts'
-import { daemonPid } from './supervisor-env.ts'
+import { supervisorState } from './supervisor-env.ts'
 import { ClaudeCommandError, type ClaudeRunner } from './claude-cli.ts'
 import type { AttachCommand, LaunchOptions, ListResult, SessionHost } from './session-host.ts'
 
@@ -188,6 +188,7 @@ export class SupervisorHost implements SessionHost {
   private readonly onStrays: (ids: string[]) => void
   private readonly onUnknown: NonNullable<SupervisorHostOptions['onUnknown']>
   private readonly startSupervisor: (() => void) | null
+  private ensuring: Promise<boolean> | null = null
   private readonly onSwitchUnconfirmed: () => void
   /** The last unknown shape reported per session, so a poll every 2 s doesn't repeat it. */
   private readonly unknownSeen = new Map<string, string>()
@@ -433,15 +434,22 @@ export class SupervisorHost implements SessionHost {
    * command run while no supervisor runs would start one itself, with the
    * command's environment, switches included.
    */
-  async ensureSupervisor(): Promise<boolean> {
-    const running = async () => daemonPid(await this.run(['daemon', 'status'], { timeoutMs: 10_000 }).catch(() => '')) !== null
-    if (await running()) return true
-    if (!this.startSupervisor) return false
+  ensureSupervisor(): Promise<boolean> {
+    // Commands at the same moment share one check and one start (pass 9, L-5).
+    this.ensuring ??= this.ensureOnce().finally(() => (this.ensuring = null))
+    return this.ensuring
+  }
+
+  private async ensureOnce(): Promise<boolean> {
+    const state = await supervisorState(this.run)
+    if (state === 'up') return true
+    // Only Claude Code saying it isn't running counts; a failed or timed-out check starts nothing (pass 9, L-5).
+    if (state === 'unknown' || !this.startSupervisor) return false
     this.startSupervisor()
     const deadline = this.now() + this.appearTimeoutMs
     while (this.now() < deadline) {
       await this.sleep(250)
-      if (await running()) return true
+      if ((await supervisorState(this.run)) === 'up') return true
     }
     return false
   }

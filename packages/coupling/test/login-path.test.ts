@@ -2,7 +2,8 @@
 
 import { describe, expect, it } from 'vitest'
 import { claudeEnv, cleanPath, resolveLoginPath, setLoginPath } from '../src/claude-cli.ts'
-import { checkSupervisorPath, daemonPid, pathFromPs } from '../src/supervisor-env.ts'
+import { checkSupervisorPath, daemonPid, pathFromPs, sharedSupervisorStart, supervisorState } from '../src/supervisor-env.ts'
+import { ClaudeCommandError as CommandError } from '../src/claude-cli.ts'
 
 const env = { HOME: '/Users/x', USER: 'x', SHELL: '/bin/zsh', PATH: '/usr/bin:/bin:/usr/sbin:/sbin' }
 
@@ -80,5 +81,27 @@ describe('checkSupervisorPath', () => {
     expect(pathFromPs('claude daemon run --x PATH=/evil PATH=/usr/bin:/opt/homebrew/bin')).toBe('/usr/bin:/opt/homebrew/bin')
     expect(pathFromPs('claude daemon run PATH=relative:also')).toBeNull()
     expect(await checkSupervisorPath(run, '/Users/x/.local/bin/claude', async () => 'claude daemon run')).toBeNull()
+  })
+})
+
+describe('the supervisor start the host and the watchdog share (pass 9, L-5)', () => {
+  it('starts at most once per gap, and answers with that start', () => {
+    let t = 0
+    let pid = 100
+    const spawned: number[] = []
+    const start = sharedSupervisorStart(() => (spawned.push(++pid), pid), 10_000, () => t)
+    expect(start()).toBe(101)
+    t = 9_999
+    expect(start()).toBe(101)
+    t = 10_000
+    expect(start()).toBe(102)
+    expect(spawned).toEqual([101, 102])
+  })
+  it('reads up, down only when Claude Code says so, and unknown otherwise', async () => {
+    expect(await supervisorState(async () => 'pid:     4242\n')).toBe('up')
+    expect(await supervisorState(async () => { throw new CommandError('claude daemon status', 1, 'Supervisor not running\n', '') })).toBe('down')
+    expect(await supervisorState(async () => { throw new Error('timed out') })).toBe('unknown')
+    expect(await supervisorState(async () => { throw new CommandError('claude daemon status', 2, 'something else', '') })).toBe('unknown')
+    expect(await supervisorState(async () => '')).toBe('unknown')
   })
 })

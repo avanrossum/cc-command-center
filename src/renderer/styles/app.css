@@ -96,6 +96,9 @@ button { font: inherit; color: inherit; }
   background: color-mix(in srgb, var(--cc-stale) 10%, var(--cc-surface-2)); border: 1px solid color-mix(in srgb, var(--cc-stale) 45%, transparent); }
 .band-t { flex: 1; min-width: 0; }
 .band-t b { color: var(--cc-stale); }
+/* App updates (MIP2-1469): the focus color, not the stale color. */
+.band.upd { background: color-mix(in srgb, var(--cc-focus) 10%, var(--cc-surface-2)); border-color: color-mix(in srgb, var(--cc-focus) 45%, transparent); }
+.band.upd .band-t b { color: var(--cc-text); }
 /* Security alerts: their own color, not the update band's violet (spec MIP2-1379 §7.3). */
 .band.sec { background: color-mix(in srgb, var(--cc-alert) 10%, var(--cc-surface-2)); border-color: color-mix(in srgb, var(--cc-alert) 45%, transparent); }
 .band.sec .band-t b { color: var(--cc-alert); }
@@ -230,6 +233,10 @@ button { font: inherit; color: inherit; }
 .pane.hidden { visibility: hidden; pointer-events: none; }
 .pane.framed { border-color: var(--frame); }
 .term-host { flex: 1; min-height: 0; padding: 6px 8px; }
+/* Where a hovered terminal link goes (MIP2-1471), like a browser's status line. */
+.term-host .xterm { position: relative; }
+.link-tip { position: absolute; left: 0; bottom: 0; z-index: 10; max-width: 100%; padding: 2px 8px; font: 11.5px/1.5 var(--f-mono); color: var(--cc-text); background: var(--cc-surface-2); border: 1px solid var(--cc-border); border-radius: 0 6px 0 0; pointer-events: none; white-space: nowrap; overflow: hidden; }
+.link-tip[hidden] { display: none; }
 .pane-msg { position: absolute; inset: 0 0 44px; display: grid; place-content: center; gap: 10px; text-align: center; color: var(--cc-dim); background: var(--cc-term-bg); }
 .pane-acts { display: flex; gap: 8px; justify-content: center; }
 .leftbar { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--cc-surface); border-bottom: 1px solid var(--cc-border); z-index: 2; }

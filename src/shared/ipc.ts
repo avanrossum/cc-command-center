@@ -6,6 +6,7 @@ import type { FleetSnapshot } from '@ccc/contract'
 import type { ArbiterLogEntry, ArbiterState } from './arbiter-state.ts'
 import type { TurnSummary } from './summaries.ts'
 import type { AppStore, Category } from './store.ts'
+import type { UpdateState } from './update-state.ts'
 
 export const IPC = {
   /** Renderer → main: the latest fleet snapshot, or null before the first poll. */
@@ -22,6 +23,7 @@ export const IPC = {
   sendPrompt: 'session:send-prompt',
   chooseFolder: 'session:choose-folder',
   copyText: 'app:copy-text',
+  openLink: 'app:open-link',
   copyLastOutput: 'session:copy-last-output',
 
   focusOpen: 'focus:open',
@@ -78,6 +80,14 @@ export const IPC = {
   openNeeds: 'app:open-needs',
   /** The app menu's Settings… item (MIP2-1459). */
   openSettings: 'app:open-settings',
+  /** App updates (MIP2-1469). */
+  updateGet: 'update:get',
+  updateCheck: 'update:check',
+  updateDownload: 'update:download',
+  updateLater: 'update:later',
+  updateRestart: 'update:restart',
+  /** Main → renderer: the update state changed. */
+  updateUpdate: 'update:update',
   /** Main → renderer: a one-line toast (a session removed outside the app). */
   appNotice: 'app:notice',
   lifeResurrect: 'life:resurrect',
@@ -169,6 +179,8 @@ export interface CccApi {
   chooseFolder(): Promise<string | null>
   /** Writes text to the system clipboard. */
   copyText(text: string): void
+  /** Opens a link clicked in a terminal view in the default browser: http and https only (MIP2-1471). `text` is an OSC 8 link's visible text, `atEdge` whether it touches the terminal's edge; main asks first when either hides where it goes. */
+  openLink(url: string, text?: string, atEdge?: boolean): Promise<Result | { ok: false; error: string; canceled: true }>
   /** Copies the session's last turn's whole final text as Markdown; main writes the clipboard, so the text never reaches the window (D-014 parity item 9). */
   copyLastOutput(sessionId: string): Promise<Result>
 
@@ -241,9 +253,9 @@ export interface CccApi {
   /** Archive by hand (MIP2-1370 §4.1). */
   archive(sessionId: string): Promise<Result>
   setNeverRollOff(sessionId: string, on: boolean): Promise<Result>
-  /** `Keep as my session`, or `Treat as a contractor` with a parent or none (MIP2-1393 §3). */
   /** Hides or shows parked 0.24 sessions in the sidebar; `all` with false shows every hidden one (MIP2-1465). */
   setParkedHidden(ids: string[] | 'all', hidden: boolean): Promise<Result<{ count: number }>>
+  /** `Keep as my session`, or `Treat as a contractor` with a parent or none (MIP2-1393 §3). */
   setSessionKind(sessionId: string, kind: 'session' | 'contractor', parentId: string | null): Promise<Result>
   dismissRollOffNotice(): Promise<Result>
   setRollOffDays(days: number): Promise<Result>
@@ -269,6 +281,14 @@ export interface CccApi {
   /** Undo for the last delete, while its toast shows. */
   undoDeleteCategory(id: string): Promise<Result>
   reorderCategories(ids: string[]): Promise<Result>
+  /** App updates (MIP2-1469): nothing downloads until Download is pressed. */
+  getUpdate(): Promise<UpdateState | null>
+  onUpdate(listener: (state: UpdateState) => void): () => void
+  /** Check for updates, by hand. */
+  checkForUpdate(): Promise<Result>
+  downloadUpdate(): Promise<Result>
+  updateLater(): Promise<Result>
+  restartToUpdate(): Promise<Result>
 }
 
 /** The settings window's About, Claude Code and Arbiter key lines (MIP2-1424). */

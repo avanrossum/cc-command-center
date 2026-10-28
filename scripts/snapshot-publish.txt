@@ -1,0 +1,48 @@
+# What the public repository's snapshots publish, by name (pass 10, M-4; pass
+# 11, M-2). Classified entry by entry: the top level, and everything under
+# tools/, scripts/, docs/, docs/release-notes/ and test/fixtures/. Each is in
+# this list or in scripts/snapshot-exclude.txt; test/snapshot.test.ts and
+# scripts/snapshot.mjs refuse one in neither. Under the other published
+# directories (src/, test/, packages/, mod/, build/, resources/), new files
+# are published with their directory; scripts/snapshot.mjs prints every
+# change, and asks for each added path outside src/ and test/, and for each
+# new fixture, to be confirmed by name before it commits.
+.gitignore
+LICENSE
+README.md
+build
+changelog.json
+docs
+mod
+package-lock.json
+package.json
+packages
+resources
+scripts
+src
+test
+tools
+tsconfig.json
+vitest.config.ts
+scripts/build.mjs
+scripts/check-fuses.mjs
+scripts/fuses.mjs
+scripts/mod-hash.d.mts
+scripts/mod-hash.mjs
+scripts/release-lib.d.mts
+scripts/release-lib.mjs
+scripts/release.mjs
+scripts/snapshot-exclude.txt
+scripts/snapshot-lib.d.mts
+scripts/snapshot-lib.mjs
+scripts/snapshot-publish.txt
+scripts/snapshot.mjs
+scripts/update-test.mjs
+tools/check-claude-env.ts
+docs/architecture.md
+docs/coupling-contract.md
+docs/qa-isolation.md
+docs/release-notes
+docs/release-notes/v1.0.0.md
+docs/release-plan.md
+test/fixtures/releases-0.24.atom

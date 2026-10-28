@@ -445,6 +445,46 @@ describe('SupervisorHost lifecycle', () => {
     expect(unconfirmed).toBe(1)
   })
 
+  it("starts nothing when daemon status fails without saying it isn't running (pass 9, L-5)", async () => {
+    let started = 0
+    let unconfirmed = 0
+    const host = new SupervisorHost({
+      sleep: async () => {},
+      startSupervisor: () => void started++,
+      onSwitchUnconfirmed: () => void unconfirmed++,
+      run: async args => {
+        if (args[0] === 'daemon') throw new Error('timed out after 10000 ms')
+        return args[0] === 'agents' ? LISTED : 'respawned c0ffee01'
+      },
+    })
+    expect(await host.ensureSupervisor()).toBe(false)
+    expect(started).toBe(0)
+    // The exit-1 answer that says so does count as down.
+    const down = new SupervisorHost({ sleep: async () => {}, appearTimeoutMs: 0, startSupervisor: () => void started++, run: async () => { throw new ClaudeCommandError('claude daemon status', 1, 'Supervisor not running\n', '') } })
+    await down.ensureSupervisor()
+    expect(started).toBe(1)
+    expect(unconfirmed).toBe(0)
+  })
+
+  it('shares one check and one start among commands at the same moment (pass 9, L-5)', async () => {
+    let running = false
+    let started = 0
+    let statuses = 0
+    const host = new SupervisorHost({
+      sleep: async () => {},
+      appearTimeoutMs: 1_000,
+      startSupervisor: () => void (started++, (running = true)),
+      run: async args => {
+        if (args[0] === 'daemon') return (statuses++, running ? 'pid:     4242\n' : 'not running\n')
+        return args[0] === 'agents' ? LISTED : 'ok'
+      },
+    })
+    const all = await Promise.all([host.ensureSupervisor(), host.ensureSupervisor(), host.ensureSupervisor()])
+    expect(all).toEqual([true, true, true])
+    expect(started).toBe(1)
+    expect(statuses).toBe(2)
+  })
+
   it("gives the attach command, run in the session's own folder", async () => {
     const { host } = fake()
     await host.list()

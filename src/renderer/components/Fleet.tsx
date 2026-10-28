@@ -7,6 +7,7 @@ import type { SelfCheckReport } from '@ccc/contract'
 import { Card, SessionRow } from './Card.tsx'
 import { useStore } from './Categories.tsx'
 import { SelfCheckBand } from './SelfCheckBand.tsx'
+import { UpdateBand } from './UpdateBand.tsx'
 
 export function Fleet({
   entries,
@@ -87,6 +88,7 @@ export function Fleet({
       </div>
 
       <SelfCheckBand report={selfCheck} />
+      <UpdateBand />
       {entries.length === 0 && <div className="empty">No Claude Code sessions are running.</div>}
 
       {g.needs.length > 0 && (

@@ -7,6 +7,7 @@ import { IPC, type CccApi } from '../shared/ipc.ts'
 import type { ArbiterState } from '../shared/arbiter-state.ts'
 import type { TurnSummary } from '../shared/summaries.ts'
 import type { AppStore } from '../shared/store.ts'
+import type { UpdateState } from '../shared/update-state.ts'
 
 function listen<A extends unknown[]>(channel: string, listener: (...args: A) => void): () => void {
   const handler = (_event: IpcRendererEvent, ...args: unknown[]) => listener(...(args as A))
@@ -27,6 +28,7 @@ const api: CccApi = {
   sendPrompt: (id, text) => ipcRenderer.invoke(IPC.sendPrompt, id, text),
   chooseFolder: () => ipcRenderer.invoke(IPC.chooseFolder),
   copyText: text => ipcRenderer.send(IPC.copyText, text),
+  openLink: (url, text, atEdge) => ipcRenderer.invoke(IPC.openLink, url, text, atEdge),
   copyLastOutput: id => ipcRenderer.invoke(IPC.copyLastOutput, id),
 
   focusOpen: (id, cols, rows) => ipcRenderer.invoke(IPC.focusOpen, id, cols, rows),
@@ -88,6 +90,12 @@ const api: CccApi = {
   deleteCategory: id => ipcRenderer.invoke(IPC.categoryDelete, id),
   undoDeleteCategory: id => ipcRenderer.invoke(IPC.categoryUndoDelete, id),
   reorderCategories: ids => ipcRenderer.invoke(IPC.categoryReorder, ids),
+  getUpdate: () => ipcRenderer.invoke(IPC.updateGet),
+  onUpdate: listener => listen<[UpdateState]>(IPC.updateUpdate, listener),
+  checkForUpdate: () => ipcRenderer.invoke(IPC.updateCheck),
+  downloadUpdate: () => ipcRenderer.invoke(IPC.updateDownload),
+  updateLater: () => ipcRenderer.invoke(IPC.updateLater),
+  restartToUpdate: () => ipcRenderer.invoke(IPC.updateRestart),
 }
 
 contextBridge.exposeInMainWorld('ccc', api)

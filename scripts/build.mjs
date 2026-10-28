@@ -39,6 +39,11 @@ function gitCommit() {
 }
 const BUILD = { commit: gitCommit(), builtAt: new Date().toISOString() }
 
+// A dry-run build's local stand-in for the release repository (MIP2-1469).
+// The release script refuses to build with it set.
+const UPDATE_TEST_FEED = process.env.CCC_UPDATE_TEST_FEED || null
+if (UPDATE_TEST_FEED && !/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(UPDATE_TEST_FEED)) throw new Error('CCC_UPDATE_TEST_FEED must be http://127.0.0.1:<port>')
+
 // The reporter mod beside the build: its manifest and hooks, not the types
 // the engine lays down on load.
 mkdirSync(`${out}/mod/.claude-plugin`, { recursive: true })
@@ -60,7 +65,7 @@ await Promise.all([
     target: 'node22',
     // node-pty is a native module; it stays in node_modules.
     external: ['electron', 'node-pty'],
-    define: { __CCC_BUILD__: JSON.stringify(BUILD), __CCC_MOD_HASH__: JSON.stringify(MOD_HASH) },
+    define: { __CCC_BUILD__: JSON.stringify(BUILD), __CCC_MOD_HASH__: JSON.stringify(MOD_HASH), __CCC_UPDATE_TEST_FEED__: JSON.stringify(UPDATE_TEST_FEED) },
   }),
   build({
     ...common,

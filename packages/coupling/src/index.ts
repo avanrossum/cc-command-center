@@ -56,5 +56,5 @@ export { SessionControl, type SessionControlOptions } from './session-control.ts
 export { AttachPool, bracketedPaste, KEPT_ATTACHED, quotePath, spawnAttach, type AttachEvents, type AttachProcess, type SpawnAttach } from './attach-view.ts'
 export { clearUserFlags } from './file-flags.ts'
 export { CommandLog, COMMAND_LOG_MAX_BYTES, COMMAND_LOG_STREAM_BYTES, redactArgs, type CommandEntry } from './command-log.ts'
-export { checkSupervisorPath, daemonPid, pathFromPs, type SupervisorPath } from './supervisor-env.ts'
+export { checkSupervisorPath, daemonPid, pathFromPs, sharedSupervisorStart, supervisorState, type SupervisorPath } from './supervisor-env.ts'
 export { terminalHostOf, terminalName } from './process-host.ts'

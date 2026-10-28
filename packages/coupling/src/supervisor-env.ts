@@ -28,10 +28,48 @@ export function daemonPid(status: string): number | null {
 }
 
 /**
+ * The supervisor's state from `claude daemon status`, run through `run`:
+ * `up` with a pid, `down` only when Claude Code says it isn't running
+ * (it exits non-zero then, and says so), and `unknown` for anything else,
+ * such as a timeout. Unknown is never taken as down (pass 9, L-5).
+ */
+export async function supervisorState(run: ClaudeRunner): Promise<'up' | 'down' | 'unknown'> {
+  let text: string
+  try {
+    text = await run(['daemon', 'status'], { timeoutMs: 10_000 })
+  } catch (err) {
+    if (!(err instanceof ClaudeCommandError)) return 'unknown'
+    text = `${err.stdout}\n${err.stderr}`
+  }
+  if (/not running/.test(text)) return 'down'
+  return daemonPid(text) !== null ? 'up' : 'unknown'
+}
+
+/**
+ * Starts `claude daemon run` through `spawn`, at most once per `gapMs`: the
+ * session host and the watchdog share one, so they never start two
+ * supervisors at once (pass 9, L-5). Returns the pid of the start, or of
+ * the one still within its gap.
+ */
+export function sharedSupervisorStart(spawn: () => number | undefined, gapMs = 10_000, now: () => number = Date.now): () => number | undefined {
+  let lastAt = Number.NEGATIVE_INFINITY
+  let lastPid: number | undefined
+  return () => {
+    if (now() - lastAt < gapMs) return lastPid
+    lastAt = now()
+    lastPid = spawn()
+    return lastPid
+  }
+}
+
+/**
  * PATH from `ps eww` output: the command, then its environment, with no
  * delimiter. The last `PATH=` is the environment's; one inside the command
  * line comes first (pass 8, L-5). Null when absent, or when it holds no
- * absolute folder: then it's unknown, not a failure.
+ * absolute folder: then it's unknown, not a failure. A later variable whose
+ * value contains ` PATH=` can still win; this feeds an advisory self-check
+ * item only, so that residual is accepted rather than reading the
+ * environment NUL-delimited (pass 9, L-6).
  */
 export function pathFromPs(text: string): string | null {
   const all = [...text.matchAll(/(?:^|\s)PATH=(\S*)/g)]

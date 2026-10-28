@@ -8,6 +8,7 @@ import type { AppStatus } from '../../shared/ipc.ts'
 import { ARBITER_MODEL, type ArbiterState } from '../../shared/arbiter-state.ts'
 import { TERMINAL_FONT_SIZE, terminalFont } from '../model/format.ts'
 import { useStore } from './Categories.tsx'
+import { checkLine, useUpdate } from './UpdateBand.tsx'
 
 const SECTIONS = ['General', 'Terminal', 'Notifications', 'Arbiter', 'Claude Code', 'About'] as const
 type Section = (typeof SECTIONS)[number]
@@ -50,6 +51,7 @@ export function SettingsSheet({
   const [replacing, setReplacing] = useState(false)
   const [font, setFont] = useState(s?.terminalFont ?? '')
   const [status, setStatus] = useState<AppStatus | null>(null)
+  const update = useUpdate()
   const refresh = () => void window.ccc.appStatus().then(setStatus)
   useEffect(refresh, [])
   if (!s) return null
@@ -280,6 +282,28 @@ export function SettingsSheet({
               <button type="button" className="fchip" onClick={() => (window.ccc.copyText(buildInfo(status, claudeVersion)), api.notice('Build info copied.'))}>
                 Copy build info
               </button>
+              <p>{checkLine(update, Date.now())}</p>
+              {update?.testOrigin && <p className="note">Test build: updates come from {update.testOrigin}, not GitHub.</p>}
+              {update && update.phase !== 'off' && (
+                <button
+                  type="button"
+                  className="fchip"
+                  disabled={update.phase === 'checking' || update.phase === 'downloading' || update.phase === 'downloaded'}
+                  onClick={() => void window.ccc.checkForUpdate()}
+                >
+                  Check for updates
+                </button>
+              )}
+              {update?.phase === 'available' && (
+                <button type="button" className="fchip on" onClick={() => void window.ccc.downloadUpdate()}>
+                  Download
+                </button>
+              )}
+              {update?.phase === 'downloaded' && (
+                <button type="button" className="fchip on" onClick={() => void window.ccc.restartToUpdate()}>
+                  Restart to update
+                </button>
+              )}
             </>
           )}
 

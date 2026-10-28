@@ -2,6 +2,8 @@
 // package's fleet poller, self-check and supervisor watchdog, and shows the
 // window. It reads Claude Code only through @ccc/coupling.
 
+import { chmodSync, lstatSync, mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import {
   AttachPool,
@@ -25,6 +27,7 @@ import {
   resolveLoginPath,
   setLoginPath,
   checkSupervisorPath,
+  sharedSupervisorStart,
   awaitLoginPath,
   terminalHostOf,
 } from '@ccc/coupling'
@@ -50,6 +53,9 @@ import { modVerdict } from './mod-verdict.ts'
 import { checkModFolders, MOD_FOLDERS_MAX, modDir, type ModHealed } from './reporter-mod.ts'
 import { moveRequest } from './move.ts'
 import { registerSettings } from './settings-control.ts'
+import { setUpUpdates } from './update-setup.ts'
+import { isolatedEnv, runFolderRefusal, TEST_RUN_FOLDER, testIsolation, UPDATE_TEST_FEED } from './test-isolation.ts'
+import { registerUpdates } from './updater.ts'
 
 // The build writes main.cjs, preload.cjs and renderer/ side by side in dist/.
 const DIST = __dirname
@@ -62,6 +68,26 @@ function fatal(err: unknown): never {
   dialog.showErrorBox("CC Command Center App can't start", why)
   app.exit(1)
   process.exit(1)
+}
+
+// A dry-run test build isolates itself, environment or not (MIP2-1469): a ShipIt relaunch has none.
+const isolation = testIsolation(UPDATE_TEST_FEED, homedir())
+if (isolation) {
+  try {
+    try {
+      mkdirSync(TEST_RUN_FOLDER, { mode: 0o700 })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+    }
+    // lstat, so a planted symlink is refused rather than followed (pass 9, L-3).
+    const st = lstatSync(TEST_RUN_FOLDER)
+    const refused = runFolderRefusal({ isDirectory: st.isDirectory(), isSymbolicLink: st.isSymbolicLink(), uid: st.uid, mode: st.mode }, process.getuid?.() ?? -1)
+    if (refused) throw new Error(refused)
+    if ((st.mode & 0o777) !== 0o700) chmodSync(TEST_RUN_FOLDER, 0o700)
+  } catch (err) {
+    fatal(err)
+  }
+  Object.assign(process.env, isolatedEnv(process.env, isolation))
 }
 
 // Before anything opens the profile: never Electron CCCC's folder, and an
@@ -85,7 +111,7 @@ app.on('second-instance', () => {
 // this file, and only a copy (CCC_CLAUDE_SETTINGS) during development.
 let claudeSettings = ''
 try {
-  claudeSettings = claudeSettingsPath(process.env, app.isPackaged)
+  claudeSettings = isolation ? isolation.claudeSettings : claudeSettingsPath(process.env, app.isPackaged)
 } catch (err) {
   fatal(err)
 }
@@ -306,11 +332,13 @@ async function start(): Promise<void> {
   setInterval(readSupervisorPath, 5 * 60_000).unref()
   // `claude daemon run`, as the watchdog starts it: the user's environment, none of the session switches (MIP2-1463).
   const spawnClaude = commandLog.wrapSpawner(createClaudeSpawner())
+  // One start for the host and the watchdog, at most one per 10 s, so they never start two at once (pass 9, L-5).
+  const startDaemon = sharedSupervisorStart(() => spawnClaude(['daemon', 'run']))
   const host = new SupervisorHost({
     run,
     binary,
     channels,
-    startSupervisor: () => void spawnClaude(['daemon', 'run']),
+    startSupervisor: () => void startDaemon(),
     // A session command ran with its reload switch in its settings file only (MIP2-1463).
     onSwitchUnconfirmed: () => selfCheck.noteSwitchUnconfirmed(Date.now()),
     // A state, status or wait the app doesn't know, raw, for the record (MIP2-1447).
@@ -338,7 +366,8 @@ async function start(): Promise<void> {
   // Keeps Claude Code's supervisor up while the app hosts sessions (DECISION item 2, MIP2-1377 §3).
   watchdog = new SupervisorWatchdog({
     exitCode: createClaudeExitCode(),
-    spawn: spawnClaude,
+    // The watchdog spawns only `daemon run`; it goes through the shared start.
+    spawn: args => (args[0] === 'daemon' && args[1] === 'run' ? startDaemon() : spawnClaude(args)),
     // Through the host, so the respawn carries the session's reload switch (MIP2-1463).
     respawn: id => host.respawn(id),
     sessions: () => fleet.current()?.sessions ?? [],
@@ -447,6 +476,10 @@ async function start(): Promise<void> {
   ipcMain.handle(IPC.arbiterGet, event => (isTrustedSender(event) ? arbiter.current() : null))
   ipcMain.handle(IPC.arbiterLog, event => (isTrustedSender(event) ? arbiterLog.entries(200) : []))
   registerSettings({ key: arbiterKey, selfCheck, watchdog: () => watchdog })
+  // App updates (MIP2-1469): checked at start and every few hours; nothing downloads until Download.
+  const updates = setUpUpdates(app.isPackaged, s => broadcast(IPC.updateUpdate, s))
+  registerUpdates(updates)
+  updates.start()
   registerFirstRun({
     store,
     key: arbiterKey,

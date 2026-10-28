@@ -1,5 +1,5 @@
 // The Electron fuses a packaged build must have (gate H-2, MIP2-1429).
-// Defaults let any process running as Alex take the main process with
+// Defaults let any process running as the user take the main process with
 // --inspect, NODE_OPTIONS or ELECTRON_RUN_AS_NODE, and with it every card
 // approval, relayed prompt and the Arbiter key. electron-builder flips them
 // (package.json build.electronFuses) before signing; check-fuses.mjs reads

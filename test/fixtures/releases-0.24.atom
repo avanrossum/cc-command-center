@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/" xml:lang="en-US">
+  <id>tag:github.com,2008:https://github.com/avanrossum/cc-command-center/releases</id>
+  <link type="text/html" rel="alternate" href="https://github.com/avanrossum/cc-command-center/releases"/>
+  <link type="application/atom+xml" rel="self" href="https://github.com/avanrossum/cc-command-center/releases.atom"/>
+  <title>Release notes from cc-command-center</title>
+  <updated>2026-09-19T19:33:24Z</updated>
+  <entry>
+    <id>tag:github.com,2008:Repository/1306204747/v0.24.2-beta.2</id>
+    <updated>2026-09-19T19:38:26Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/avanrossum/cc-command-center/releases/tag/v0.24.2-beta.2"/>
+    <title>v0.24.2-beta.2</title>
+    <content type="html">&lt;p&gt;Release v0.24.2-beta.2. See changelog.json for details.&lt;/p&gt;</content>
+    <author>
+      <name>avanrossum</name>
+    </author>
+    <media:thumbnail height="30" width="30" url="https://avatars.githubusercontent.com/u/25301314?s=60&amp;v=4"/>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1306204747/electron-final</id>
+    <updated>2026-09-19T19:24:35Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/avanrossum/cc-command-center/releases/tag/electron-final"/>
+    <title>electron-final: Final state of the Electron implementation.</title>
+    <content type="html">&lt;p&gt;Stable release:  v0.24.1     (2026-07-30)&lt;br&gt;
+Beta release:    v0.24.2-beta.1 (2026-08-03)&lt;br&gt;
+Unreleased here: 16 commits, never built, signed or installed.&lt;/p&gt;
+&lt;p&gt;Registry schema at user_version 18. See docs/STATE-OF-THE-APP.md for the&lt;br&gt;
+feature inventory with verification levels, the Claude Code coupling surface,&lt;br&gt;
+and the gotchas worth inheriting.&lt;/p&gt;
+&lt;p&gt;The Swift port begins after this point.&lt;/p&gt;</content>
+    <author>
+      <name>avanrossum</name>
+    </author>
+    <media:thumbnail height="30" width="30" url="https://avatars.githubusercontent.com/u/25301314?s=60&amp;v=4"/>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1306204747/pre-voice-2026-09-01</id>
+    <updated>2026-09-01T19:00:49Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/avanrossum/cc-command-center/releases/tag/pre-voice-2026-09-01"/>
+    <title>pre-voice-2026-09-01: Rollback point before the voice-input / local-model work.</title>
+    <content type="html">&lt;p&gt;Known-good state, all verified this session:&lt;br&gt;
+&lt;a class=&quot;commit-link&quot; data-hovercard-type=&quot;commit&quot; data-hovercard-url=&quot;https://github.com/avanrossum/cc-command-center/commit/0184ba73b86d0ce755465155cabf19ff736c4bc8/hovercard&quot; href=&quot;https://github.com/avanrossum/cc-command-center/commit/0184ba73b86d0ce755465155cabf19ff736c4bc8&quot;&gt;&lt;tt&gt;0184ba7&lt;/tt&gt;&lt;/a&gt; recent-folder height&lt;br&gt;
+&lt;a class=&quot;commit-link&quot; data-hovercard-type=&quot;commit&quot; data-hovercard-url=&quot;https://github.com/avanrossum/cc-command-center/commit/1fc21c71e8f240d0ded08f1f8f19eb60947b4543/hovercard&quot; href=&quot;https://github.com/avanrossum/cc-command-center/commit/1fc21c71e8f240d0ded08f1f8f19eb60947b4543&quot;&gt;&lt;tt&gt;1fc21c7&lt;/tt&gt;&lt;/a&gt; bulk cleanup UI (multi-select, select-all-like-this, archive/remove)&lt;br&gt;
+&lt;a class=&quot;commit-link&quot; data-hovercard-type=&quot;commit&quot; data-hovercard-url=&quot;https://github.com/avanrossum/cc-command-center/commit/966a7d2003f47a03e5313ad23542b971600823d4/hovercard&quot; href=&quot;https://github.com/avanrossum/cc-command-center/commit/966a7d2003f47a03e5313ad23542b971600823d4&quot;&gt;&lt;tt&gt;966a7d2&lt;/tt&gt;&lt;/a&gt; soft archive + registry v18&lt;br&gt;
+&lt;a class=&quot;commit-link&quot; data-hovercard-type=&quot;commit&quot; data-hovercard-url=&quot;https://github.com/avanrossum/cc-command-center/commit/e2ac1b57edbd4cbdd53f13840c6da4452a2114cc/hovercard&quot; href=&quot;https://github.com/avanrossum/cc-command-center/commit/e2ac1b57edbd4cbdd53f13840c6da4452a2114cc&quot;&gt;&lt;tt&gt;e2ac1b5&lt;/tt&gt;&lt;/a&gt; permission gate + CSP&lt;br&gt;
+&lt;a class=&quot;commit-link&quot; data-hovercard-type=&quot;commit&quot; data-hovercard-url=&quot;https://github.com/avanrossum/cc-command-center/commit/43b1d55bd4e3060e3b3138d92364bfe5b1babae4/hovercard&quot; href=&quot;https://github.com/avanrossum/cc-command-center/commit/43b1d55bd4e3060e3b3138d92364bfe5b1babae4&quot;&gt;&lt;tt&gt;43b1d55&lt;/tt&gt;&lt;/a&gt; / &lt;a class=&quot;commit-link&quot; data-hovercard-type=&quot;commit&quot; data-hovercard-url=&quot;https://github.com/avanrossum/cc-command-center/commit/1a5a6be7a5be67aa33271fd143fb2b773fcdfea0/hovercard&quot; href=&quot;https://github.com/avanrossum/cc-command-center/commit/1a5a6be7a5be67aa33271fd143fb2b773fcdfea0&quot;&gt;&lt;tt&gt;1a5a6be&lt;/tt&gt;&lt;/a&gt; background agents&lt;/p&gt;
+&lt;p&gt;Roll back with: git reset --hard pre-voice-2026-09-01&lt;br&gt;
+Registry note: v18 has already been applied to any profile that launched this&lt;br&gt;
+build. Rolling the CODE back below v18 is safe (the column is simply unused),&lt;br&gt;
+but the DB does not roll back.&lt;/p&gt;</content>
+    <author>
+      <name>avanrossum</name>
+    </author>
+    <media:thumbnail height="30" width="30" url="https://avatars.githubusercontent.com/u/25301314?s=60&amp;v=4"/>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1306204747/v0.24.2-beta.1</id>
+    <updated>2026-08-03T15:00:27Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/avanrossum/cc-command-center/releases/tag/v0.24.2-beta.1"/>
+    <title>v0.24.2-beta.1</title>
+    <content type="html">&lt;p&gt;Release v0.24.2-beta.1. See changelog.json for details.&lt;/p&gt;</content>
+    <author>
+      <name>avanrossum</name>
+    </author>
+    <media:thumbnail height="30" width="30" url="https://avatars.githubusercontent.com/u/25301314?s=60&amp;v=4"/>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1306204747/v0.24.1</id>
+    <updated>2026-07-30T18:12:05Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/avanrossum/cc-command-center/releases/tag/v0.24.1"/>
+    <title>v0.24.1</title>
+    <content type="html">&lt;p&gt;Release v0.24.1. See changelog.json for details.&lt;/p&gt;</content>
+    <author>
+      <name>avanrossum</name>
+    </author>
+    <media:thumbnail height="30" width="30" url="https://avatars.githubusercontent.com/u/25301314?s=60&amp;v=4"/>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1306204747/v0.24.0</id>
+    <updated>2026-07-30T05:10:50Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/avanrossum/cc-command-center/releases/tag/v0.24.0"/>
+    <title>v0.24.0</title>
+    <content type="html">&lt;p&gt;Release v0.24.0. See changelog.json for details.&lt;/p&gt;</content>
+    <author>
+      <name>avanrossum</name>
+    </author>
+    <media:thumbnail height="30" width="30" url="https://avatars.githubusercontent.com/u/25301314?s=60&amp;v=4"/>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1306204747/v0.23.2</id>
+    <updated>2026-07-29T23:17:28Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/avanrossum/cc-command-center/releases/tag/v0.23.2"/>
+    <title>chore(release): v0.23.2</title>
+    <content type="html">&lt;p&gt;Co-Authored-By: Claude Opus 4.8 &lt;a href=&quot;mailto:noreply@anthropic.com&quot;&gt;noreply@anthropic.com&lt;/a&gt;&lt;/p&gt;</content>
+    <author>
+      <name>avanrossum</name>
+    </author>
+    <media:thumbnail height="30" width="30" url="https://avatars.githubusercontent.com/u/25301314?s=60&amp;v=4"/>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1306204747/v0.23.1</id>
+    <updated>2026-07-29T23:04:17Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/avanrossum/cc-command-center/releases/tag/v0.23.1"/>
+    <title>chore(release): v0.23.1</title>
+    <content type="html">&lt;p&gt;Co-Authored-By: Claude Opus 4.8 &lt;a href=&quot;mailto:noreply@anthropic.com&quot;&gt;noreply@anthropic.com&lt;/a&gt;&lt;/p&gt;</content>
+    <author>
+      <name>avanrossum</name>
+    </author>
+    <media:thumbnail height="30" width="30" url="https://avatars.githubusercontent.com/u/25301314?s=60&amp;v=4"/>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1306204747/v0.23.0</id>
+    <updated>2026-07-29T21:27:52Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/avanrossum/cc-command-center/releases/tag/v0.23.0"/>
+    <title>chore(release): v0.23.0</title>
+    <content type="html">&lt;p&gt;Co-Authored-By: Claude Opus 4.8 &lt;a href=&quot;mailto:noreply@anthropic.com&quot;&gt;noreply@anthropic.com&lt;/a&gt;&lt;/p&gt;</content>
+    <author>
+      <name>avanrossum</name>
+    </author>
+    <media:thumbnail height="30" width="30" url="https://avatars.githubusercontent.com/u/25301314?s=60&amp;v=4"/>
+  </entry>
+  <entry>
+    <id>tag:github.com,2008:Repository/1306204747/v0.22.2</id>
+    <updated>2026-07-29T18:32:34Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/avanrossum/cc-command-center/releases/tag/v0.22.2"/>
+    <title>chore(release): v0.22.2</title>
+    <content type="html">&lt;p&gt;Co-Authored-By: Claude Opus 4.8 &lt;a href=&quot;mailto:noreply@anthropic.com&quot;&gt;noreply@anthropic.com&lt;/a&gt;&lt;/p&gt;</content>
+    <author>
+      <name>avanrossum</name>
+    </author>
+    <media:thumbnail height="30" width="30" url="https://avatars.githubusercontent.com/u/25301314?s=60&amp;v=4"/>
+  </entry>
+</feed>

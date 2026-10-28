@@ -23,7 +23,8 @@ function importsOf(file: string): string[] {
 describe('module boundaries', () => {
   it('the renderer imports only the contract, React, xterm.js and its own files', () => {
     // xterm.js draws the attached session (Focus); it reads nothing but what main sends it.
-    const allowed = new Set(['@ccc/contract', 'react', 'react-dom/client', '@xterm/xterm', '@xterm/addon-fit'])
+    // The web-links addon finds URLs in that text; its clicks go to main (MIP2-1471).
+    const allowed = new Set(['@ccc/contract', 'react', 'react-dom/client', '@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-web-links'])
     for (const file of sourceFiles('src/renderer')) {
       for (const spec of importsOf(file)) {
         const target = spec.startsWith('.') ? resolve(ROOT, dirname(file), spec) : ''

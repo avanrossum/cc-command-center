@@ -1,0 +1,19 @@
+# What the public repository's snapshots leave out of this repository's tree
+# (release plan §4). scripts/snapshot.mjs builds each snapshot from HEAD minus
+# these paths, and scripts/release.mjs refuses to tag a public commit whose
+# tree isn't exactly that. Checked against the first snapshot, 61601f7
+# (tree 42340178), made from 6d3e008.
+.adversary
+.claude
+BRIEF.md
+CHANGELOG.md
+CLAUDE.md
+DECISIONS.md
+tools/githooks
+tools/hooks
+tools/linear-ledger.sh
+# Release state, edited by hand when the beta window closes; private, and kept out
+# so closing the window doesn't change the snapshot the release tags.
+scripts/release-window.json
+# The farewell release's verification (MIP2-61): it runs 0.24 copies against this Mac's paths.
+tools/verify-tombstone.sh
