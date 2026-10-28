@@ -25,7 +25,7 @@
 //     APPLE_TEAM_ID). The updater refuses unsigned builds, so this is required.
 //   - A clean tree on a release tag (run npm run bump first).
 import { execFileSync, execSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -37,8 +37,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 // Builds from v0.24.0 check the main repo. Publishing to BOTH bridges the gap; the old
 // entry can be dropped once nobody is running a build older than v0.24.0.
 const RELEASES_REPOS = ['avanrossum/claude-command-center-releases', 'avanrossum/cc-command-center']
-// Old builds fetch changelog.json from the OLD repo, so it still has to be synced
-// there. New builds read it from the main repo, where it is simply committed.
+// Builds before v0.24.0 fetch changelog.json from the OLD repo, so it's synced there
+// below. Builds from v0.24.0 read it from cc-command-center's main, which is the new
+// app now: that copy goes there with the new app's 1.0.0 snapshot (MIP2-61), not
+// from this script.
 const CHANGELOG_REPO = RELEASES_REPOS[0]
 const OUT = join(root, 'release')
 
@@ -95,8 +97,17 @@ if (!existsSync(extra)) {
   process.exit(1)
 }
 
-// The new app's disk image is checked before anything is built (MIP2-1478, M-2): scripts/verify-new-app-dmg.mjs.
-verifyNewAppDmg(extra)
+// The new app's disk image is copied once into a private folder, checked there before anything
+// is built (scripts/verify-new-app-dmg.mjs, which hashes it before and after), and that same copy
+// is what's uploaded: the bytes checked are the bytes published (MIP2-1478, M-1 and M-2).
+// `extra` isn't read again.
+const privateDir = mkdtempSync(join(tmpdir(), 'ccc-farewell-dmg-'))
+chmodSync(privateDir, 0o700)
+process.on('exit', () => rmSync(privateDir, { recursive: true, force: true }))
+const newAppDmg = join(privateDir, NEW_APP_DMG)
+copyFileSync(extra, newAppDmg)
+chmodSync(newAppDmg, 0o400)
+const newAppSha = verifyNewAppDmg(newAppDmg)
 
 // 1. Build locally (no --publish). This produces the DMG/ZIP/blockmaps and,
 //    crucially, latest-mac.yml under release/.
@@ -141,7 +152,7 @@ if (isBeta) console.log(`\n  ${tag} is a PRERELEASE — published as beta, not m
 for (const repo of RELEASES_REPOS) {
   console.log(`\n▶ Publishing ${tag} to ${repo}…`)
   // The new app's disk image goes on cc-command-center only, where the notice links.
-  const repoFiles = repo === 'avanrossum/cc-command-center' ? [...assets, extra] : assets
+  const repoFiles = repo === 'avanrossum/cc-command-center' ? [...assets, newAppDmg] : assets
   let exists = false
   try {
     out('gh', ['release', 'view', tag, '--repo', repo])
@@ -150,10 +161,22 @@ for (const repo of RELEASES_REPOS) {
     exists = false
   }
   if (exists) {
-    // No --clobber: a re-run adds what's missing and fails rather than replace an asset the notice
-    // already links to (MIP2-1478, M-1).
-    console.log(`   release exists — uploading what's missing into it; nothing already there is replaced`)
-    run('gh', ['release', 'upload', tag, '--repo', repo, ...repoFiles])
+    // A re-run (MIP2-1478, M-2): only missing assets are uploaded, and nothing is replaced. An asset
+    // this run rebuilt that's already there came from an earlier build and doesn't match this one,
+    // so the run stops instead of publishing a mix.
+    const have = new Set(out('gh', ['release', 'view', tag, '--repo', repo, '--json', 'assets', '-q', '.assets[].name']).split('\n').filter(Boolean))
+    const rebuiltThere = assets.map((f) => f.slice(OUT.length + 1)).filter((n) => have.has(n))
+    if (rebuiltThere.length) {
+      console.error(`${repo}'s ${tag} already has ${rebuiltThere.join(', ')} from an earlier build, and this run rebuilt them.`)
+      console.error(`Recover by hand: check the release on GitHub, delete those assets (gh release delete-asset ${tag} <name> --repo ${repo}), then run this again.`)
+      process.exit(1)
+    }
+    const missing = repoFiles.filter((f) => !have.has(f.split('/').pop()))
+    if (repo === 'avanrossum/cc-command-center' && have.has(NEW_APP_DMG)) {
+      console.log(`   ${NEW_APP_DMG} is already there and isn't replaced; this run's copy has SHA-256 ${newAppSha}`)
+    }
+    console.log(`   release exists: uploading the ${missing.length} missing asset(s); nothing already there is replaced`)
+    if (missing.length) run('gh', ['release', 'upload', tag, '--repo', repo, ...missing])
     run('gh', ['release', 'edit', tag, '--repo', repo, '--draft=false', releaseFlags])
   } else {
     run('gh', [

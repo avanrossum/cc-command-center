@@ -4,7 +4,8 @@
 // checkForUpdates and downloadAndInstall return at once, so this version never
 // checks a feed or downloads again. Check for Updates shows the farewell
 // notice instead, and the post-update modal is skipped, since the notice
-// replaces it. The code below it is 0.24's updater, kept unchanged and unused.
+// replaces it; justUpdatedPayload still records the version on each launch.
+// The rest below UPDATER_OFF is 0.24's updater, unchanged and unused.
 //
 // In 0.24, electron-updater read latest-mac.yml from the public releases repo
 // (via the app-update.yml electron-builder embeds) and downloaded on request,
