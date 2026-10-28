@@ -5615,7 +5615,7 @@ app.whenReady().then(() => {
   createWindow()
   initUpdater(() => win) // off in 0.25.0, the farewell release (MIP2-61)
   // The farewell notice, once per launch, after the window has had a moment to appear.
-  setTimeout(() => void showFarewell(win), 1500)
+  setTimeout(() => showFarewell(win), 1500)
   pollTimer = setInterval(pushSessions, 1500)
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

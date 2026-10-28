@@ -24,11 +24,12 @@
 //   - Signing + notarization env (APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD /
 //     APPLE_TEAM_ID). The updater refuses unsigned builds, so this is required.
 //   - A clean tree on a release tag (run npm run bump first).
-import { execSync } from 'node:child_process'
+import { execFileSync, execSync } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { verifyNewAppDmg } from './verify-new-app-dmg.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 // Transition: builds up to v0.23.2 have the OLD repo baked into their app-update.yml,
@@ -47,11 +48,14 @@ const version = pkg.version
 const sh = (cmd, opts = {}) =>
   execSync(cmd, { cwd: root, stdio: 'inherit', env: process.env, ...opts })
 const cap = (cmd) => execSync(cmd, { cwd: root, env: process.env }).toString().trim()
-const q = (p) => `"${p}"` // quote a path for the shell
+// gh and every command that takes a path run with an argument list, never through a shell, so no
+// path is ever interpolated (MIP2-1478, L-1).
+const run = (file, args, opts = {}) => execFileSync(file, args, { cwd: root, stdio: 'inherit', env: process.env, ...opts })
+const out = (file, args) => execFileSync(file, args, { cwd: root, env: process.env, encoding: 'utf8' }).trim()
 
 if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
   try {
-    process.env.GH_TOKEN = cap('gh auth token')
+    process.env.GH_TOKEN = out('gh', ['auth', 'token'])
   } catch {
     console.error('No GH_TOKEN / GITHUB_TOKEN and `gh auth token` failed.')
     console.error('Auth with `gh auth login` or export GH_TOKEN, then retry.')
@@ -90,6 +94,9 @@ if (!existsSync(extra)) {
   console.error(`no file at ${extra}`)
   process.exit(1)
 }
+
+// The new app's disk image is checked before anything is built (MIP2-1478, M-2): scripts/verify-new-app-dmg.mjs.
+verifyNewAppDmg(extra)
 
 // 1. Build locally (no --publish). This produces the DMG/ZIP/blockmaps and,
 //    crucially, latest-mac.yml under release/.
@@ -130,29 +137,30 @@ const tag = `v${version}`
 // a beta latest and every stable user is offered it immediately.
 const isBeta = /-beta\./.test(version)
 const releaseFlags = isBeta ? '--prerelease' : '--latest'
-const fileArgs = assets.map(q).join(' ')
 if (isBeta) console.log(`\n  ${tag} is a PRERELEASE — published as beta, not marked latest.`)
 for (const repo of RELEASES_REPOS) {
   console.log(`\n▶ Publishing ${tag} to ${repo}…`)
   // The new app's disk image goes on cc-command-center only, where the notice links.
-  const repoFiles = repo === 'avanrossum/cc-command-center' ? `${fileArgs} ${q(extra)}` : fileArgs
+  const repoFiles = repo === 'avanrossum/cc-command-center' ? [...assets, extra] : assets
   let exists = false
   try {
-    cap(`gh release view ${tag} --repo ${repo}`)
+    out('gh', ['release', 'view', tag, '--repo', repo])
     exists = true
   } catch {
     exists = false
   }
   if (exists) {
-    console.log(`   release exists — uploading (clobber) into it`)
-    sh(`gh release upload ${tag} --repo ${repo} --clobber ${repoFiles}`)
-    sh(`gh release edit ${tag} --repo ${repo} --draft=false ${releaseFlags}`)
+    // No --clobber: a re-run adds what's missing and fails rather than replace an asset the notice
+    // already links to (MIP2-1478, M-1).
+    console.log(`   release exists — uploading what's missing into it; nothing already there is replaced`)
+    run('gh', ['release', 'upload', tag, '--repo', repo, ...repoFiles])
+    run('gh', ['release', 'edit', tag, '--repo', repo, '--draft=false', releaseFlags])
   } else {
-    sh(
-      `gh release create ${tag} --repo ${repo} --target ${TARGETS[repo]} ${releaseFlags} ` +
-        `--title ${q(`v${version}`)} --notes ${q(`Release v${version}. See changelog.json for details.`)} ` +
-        repoFiles,
-    )
+    run('gh', [
+      'release', 'create', tag, '--repo', repo, '--target', TARGETS[repo], releaseFlags,
+      '--title', `v${version}`, '--notes', `Release v${version}. See changelog.json for details.`,
+      ...repoFiles,
+    ])
   }
 }
 
@@ -163,7 +171,7 @@ console.log(`\n▶ Syncing changelog.json to ${CHANGELOG_REPO} (for builds older
 const b64 = readFileSync(join(root, 'changelog.json')).toString('base64')
 let sha = ''
 try {
-  sha = JSON.parse(cap(`gh api repos/${CHANGELOG_REPO}/contents/changelog.json`)).sha ?? ''
+  sha = JSON.parse(out('gh', ['api', `repos/${CHANGELOG_REPO}/contents/changelog.json`])).sha ?? ''
 } catch {
   // First publish — no existing file, no sha.
 }
@@ -171,7 +179,7 @@ const body = { message: `changelog: v${version}`, content: b64, ...(sha ? { sha 
 const bodyPath = join(tmpdir(), `ccc-changelog-${version}.json`)
 writeFileSync(bodyPath, JSON.stringify(body))
 try {
-  sh(`gh api --method PUT repos/${CHANGELOG_REPO}/contents/changelog.json --input ${q(bodyPath)}`, {
+  run('gh', ['api', '--method', 'PUT', `repos/${CHANGELOG_REPO}/contents/changelog.json`, '--input', bodyPath], {
     stdio: ['ignore', 'ignore', 'inherit'],
   })
 } finally {

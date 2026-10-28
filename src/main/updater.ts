@@ -1,20 +1,15 @@
-// Auto-update manager.
+// Auto-update manager, switched off in 0.25.0.
 //
-// electron-updater owns the mechanics: it reads latest-mac.yml from the public
-// releases repo (via the app-update.yml electron-builder embeds), verifies the
-// signature — it REQUIRES the app to be signed + notarized — downloads, and can
-// install on quit. It is the authority on WHETHER an update exists.
+// 0.25.0 is the farewell release (MIP2-61): UPDATER_OFF makes initUpdater,
+// checkForUpdates and downloadAndInstall return at once, so this version never
+// checks a feed or downloads again. Check for Updates shows the farewell
+// notice instead, and the post-update modal is skipped, since the notice
+// replaces it. The code below it is 0.24's updater, kept unchanged and unused.
 //
-// The rich UI (per-version feature list, full changelog, the "critical" flag
-// that hides "Skip this update") is not something electron-updater provides, so
-// we fetch a changelog.json from the releases repo and merge it in. If that
-// fetch fails, the flow still works — it just degrades to no feature list.
-//
-// Nothing here runs in dev (no app-update.yml), and downloads are user-driven:
-// autoDownload is off, so a check never pulls bytes until the user asks.
-//
-// 0.25.0, the farewell release (MIP2-61): the updater is off. This version
-// never checks again; Check for Updates shows the farewell notice instead.
+// In 0.24, electron-updater read latest-mac.yml from the public releases repo
+// (via the app-update.yml electron-builder embeds) and downloaded on request,
+// and the update window merged in the feature list and "critical" flag from
+// changelog.json.
 import { app, BrowserWindow } from 'electron'
 import electronUpdater from 'electron-updater'
 import { APP_VERSION } from '../shared/version'
@@ -140,7 +135,7 @@ export function initUpdater(getMain: () => BrowserWindow | null): void {
 
 export async function checkForUpdates(manual: boolean): Promise<void> {
   if (UPDATER_OFF) {
-    if (manual) void showFarewell(getMainWin?.() ?? null)
+    if (manual) showFarewell(getMainWin?.() ?? null)
     return
   }
   if (!app.isPackaged) {
@@ -182,6 +177,11 @@ export async function justUpdatedPayload(): Promise<UpdatePayload | null> {
   // Only meaningful for installed builds. In dev, bumping the version and
   // running would otherwise pop a spurious "you've been updated" modal.
   if (!app.isPackaged) return null
+  // The farewell window takes the post-update modal's place: one notice, not two on first launch (MIP2-1478, M-4).
+  if (UPDATER_OFF) {
+    setAppState('lastRunVersion', APP_VERSION)
+    return null
+  }
   const last = getAppState('lastRunVersion')
   setAppState('lastRunVersion', APP_VERSION)
   if (!last || cmpVersion(APP_VERSION, last) <= 0) return null
