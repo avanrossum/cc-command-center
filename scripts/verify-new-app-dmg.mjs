@@ -5,7 +5,8 @@
 // stapler, carry this team's Team ID (APPLE_TEAM_ID), and be
 // com.mipyip.cc-command-center-app 1.0.0, built for arm64. The image may hold
 // only that app (a real directory, not a symlink), the Applications link and
-// the Finder layout files. Its SHA-256 is taken before mounting and again
+// electron-builder's Finder layout files (.DS_Store, .VolumeIcon.icns,
+// .background.tiff). Its SHA-256 is taken before mounting and again
 // after, and must not change; it's printed, to compare with the public
 // v1.0.0's disk image on October 28, and returned, so the caller uploads the
 // bytes that were checked. Every tool is called by absolute path with an
@@ -25,8 +26,12 @@ const XCRUN = '/usr/bin/xcrun'
 const SHASUM = '/usr/bin/shasum'
 const LIPO = '/usr/bin/lipo'
 const PLISTBUDDY = '/usr/libexec/PlistBuddy'
-/** What an image may hold beside the app: the Applications link and Finder's layout files. */
-const LAYOUT = new Set(['.background', '.DS_Store', '.VolumeIcon.icns', '.fseventsd', '.Trashes'])
+/**
+ * What an image may hold beside the app and the Applications link: the files electron-builder's
+ * disk image carries for Finder's layout, as listed from the real 1.0.0 image on 2026-10-28
+ * (MIP2-61). Each must be a regular file.
+ */
+const LAYOUT = new Set(['.DS_Store', '.VolumeIcon.icns', '.background.tiff'])
 
 const out = (file, args) => execFileSync(file, args, { encoding: 'utf8' }).trim()
 const quiet = (file, args) => execFileSync(file, args, { stdio: 'ignore' })
@@ -70,8 +75,9 @@ function check(dmg, team) {
     const st = lstatSync(app)
     if (st.isSymbolicLink() || !st.isDirectory()) fail(`${apps[0]} is not a real app folder`)
     for (const e of entries) {
-      if (e === apps[0] || LAYOUT.has(e)) continue
+      if (e === apps[0]) continue
       const p = join(mount, e)
+      if (LAYOUT.has(e) && lstatSync(p).isFile()) continue
       if (e === 'Applications' && lstatSync(p).isSymbolicLink() && readlinkSync(p) === '/Applications') continue
       fail(`unexpected ${e} in the image`)
     }
