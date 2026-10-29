@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 import type { ReporterEvent, ReporterFile } from '../../../mod/hooks/wire.ts'
 import { FleetPoller } from '../src/fleet-poller.ts'
 import { parseReporterFile } from '../src/reporter.ts'
-import { CHANNEL_DEADLINE_MS, CHANNEL_SOCKETS, memoryStore, MOD_INTEGRITY, MOD_RELOAD, OFFER_DEADLINE_MS, parseVersion, SelfCheck, STRAY_SESSIONS, SUPERVISOR_PATH, UNKNOWN_GRACE_MS, type ChannelHealth } from '../src/self-check.ts'
+import { CHANNEL_DEADLINE_MS, CHANNEL_SOCKETS, memoryStore, MOD_INTEGRITY, MOD_RELOAD, OFFER_DEADLINE_MS, parseVersion, SelfCheck, STRAY_SESSIONS, SUPERVISOR_PATH, UNKNOWN_GRACE_MS, versionBefore, type ChannelHealth } from '../src/self-check.ts'
 import { SupervisorHost } from '../src/supervisor-host.ts'
 import { SupervisorWatchdog } from '../src/watchdog.ts'
 
@@ -474,19 +474,62 @@ describe("the supervisor's PATH (MIP2-1457)", () => {
     expect(run(check).checks.find(c => c.id === SUPERVISOR_PATH)!.state).toBe('pass')
   })
 
-describe('the PATH item (MIP2-1518)', () => {
-  it('warns only while running sessions lack the folder, and keeps the supervisor as a plain line', () => {
+describe('sessions on reply signatures (MIP2-1543)', () => {
+  const on = (version: string) => {
+    const f = file(NEW, ['session.start'])
+    return { ...f, plugin: { ...f.plugin, version } } as ReporterFile
+  }
+  it('lists a running session whose mod is older than 0.7.0 as checking replies by its secret alone', () => {
+    const check = new SelfCheck(memoryStore())
+    check.setVersion(NEW)
+    expect(run(check, { files: [on('0.6.1')] }).hmacOnly).toEqual([A_ID])
+    expect(run(check, { files: [on('0.7.0')] }).hmacOnly).toEqual([])
+    expect(run(check, { files: [on('0.8.0')] }).hmacOnly).toEqual([])
+    expect(run(check, { files: [on('garbled')] }).hmacOnly).toEqual([A_ID])
+    // Not running: nothing to say.
+    expect(run(check, { sessions: [session({ pid: field(null, 'agents-json', NOW) } as never)], files: [on('0.6.1')] }).hmacOnly).toEqual([])
+  })
+
+  it('compares versions by number', () => {
+    expect(versionBefore('0.6.10', [0, 7, 0])).toBe(true)
+    expect(versionBefore('0.10.0', [0, 7, 0])).toBe(false)
+    expect(versionBefore('1.0.0', [0, 7, 0])).toBe(false)
+  })
+})
+
+describe('the PATH item (MIP2-1518, MIP2-1539)', () => {
+  const withPath = (path: ReporterFile['latest']['path']) => {
+    const f = file(NEW, ['session.start'])
+    return { ...f, latest: { ...f.latest, path } } as ReporterFile
+  }
+
+  it("warns only for a running session whose mod measured a PATH without ~/.local/bin, and keeps the supervisor as a plain line", () => {
     const check = new SelfCheck(memoryStore())
     check.setVersion(NEW)
     check.noteSupervisorPath({ pid: 9, path: '/usr/bin', claudeDir: '/Users/x/.local/bin', ok: false })
-    const quiet = run(check).checks.find(c => c.id === SUPERVISOR_PATH)!
+    // The full PATH, as a session dispatched from Alex's terminal has, whatever ps shows: not listed.
+    const full = run(check, { files: [withPath({ localBin: true, homebrew: true, entries: 16 })] })
+    const quiet = full.checks.find(c => c.id === SUPERVISOR_PATH)!
     expect(quiet.state).toBe('pass')
     expect(quiet.detail).toContain('supervisor runs without ~/.local/bin')
-    check.noteSessionPaths([A_ID])
-    const r = run(check)
+    expect(full.pathMissing).toEqual([])
+    expect(full.pathUnknown).toEqual([])
+    // A minimal one: listed.
+    const r = run(check, { files: [withPath({ localBin: false, homebrew: false, entries: 4 })] })
     expect(r.checks.find(c => c.id === SUPERVISOR_PATH)?.state).toBe('fail')
     expect(r.pathMissing).toEqual([A_ID])
     expect(r.supervisorPathLacking).toBe(true)
+  })
+
+  it('a mod too old to measure leaves the session as may be missing, not missing; a stopped one is neither', () => {
+    const check = new SelfCheck(memoryStore())
+    check.setVersion(NEW)
+    const r = run(check, { files: [withPath(undefined)] })
+    expect(r.pathMissing).toEqual([])
+    expect(r.pathUnknown).toEqual([A_ID])
+    expect(r.checks.find(c => c.id === SUPERVISOR_PATH)?.state).toBe('pass')
+    const stopped = run(check, { sessions: [session({ pid: field(null, 'agents-json', NOW) } as never)], files: [withPath({ localBin: false, homebrew: false, entries: 4 })] })
+    expect(stopped.pathMissing).toEqual([])
   })
 })
 })

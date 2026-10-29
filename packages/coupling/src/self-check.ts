@@ -171,6 +171,8 @@ export class SelfCheck {
   private untrusted: { sessionId: string | null; why: string }[] = []
   /** Running sessions whose own process PATH lacks the folder holding claude (MIP2-1518). */
   private pathMissing: string[] = []
+  private pathUnknown: string[] = []
+  private hmacOnly: string[] = []
   /** Sessions whose mod reported reloading on, by the last evaluation; not saved. */
   private reloading: string[] = []
   /** Sessions whose mod hasn't reached the app by the deadline, by the last evaluation; not saved (MIP2-1488). */
@@ -205,11 +207,6 @@ export class SelfCheck {
   }
 
   /** The latest read of the supervisor's PATH; null when no supervisor runs (MIP2-1457). */
-  /** Running sessions whose own PATH lacks the folder holding claude, read once a minute (MIP2-1518). */
-  noteSessionPaths(missing: string[]): void {
-    this.pathMissing = [...missing]
-  }
-
   noteSupervisorPath(r: { pid: number; path: string | null; claudeDir: string; ok: boolean } | null): void {
     this.supervisorPath = r && !r.ok ? { pid: r.pid, path: r.path, claudeDir: r.claudeDir } : null
   }
@@ -232,6 +229,13 @@ export class SelfCheck {
     // didn't carry the switch: it would reload a changed mod folder while it runs (gate run 2, L-3; MIP2-1457).
     const live = new Set(input.sessions.filter(s => s.pid.value !== null).map(s => s.sessionId))
     this.reloading = [...input.files.values()].filter(f => live.has(f.sessionId) && f.latest.pluginDirWatch !== undefined && f.latest.pluginDirWatch !== '0').map(f => f.sessionId)
+    // The PATH each running session's tools have, as its mod measured it (mod 0.8.0, MIP2-1539): lacking the
+    // folder that holds claude, it's missing; a mod too old to say leaves it unknown.
+    const files = [...input.files.values()].filter(f => live.has(f.sessionId))
+    this.pathMissing = files.filter(f => f.latest.path?.localBin === false).map(f => f.sessionId)
+    this.pathUnknown = files.filter(f => f.latest.path === undefined).map(f => f.sessionId)
+    // A mod older than 0.7.0 doesn't verify reply signatures, and a resume keeps the session on it (MIP2-1543).
+    this.hmacOnly = files.filter(f => versionBefore(f.plugin.version, [0, 7, 0])).map(f => f.sessionId)
     this.checkEvents(onVersion, input.now)
     this.checkControls(input)
     this.persist()
@@ -367,12 +371,12 @@ export class SelfCheck {
         state: 'fail',
         detail: `${this.version} is older than this app supports`,
       }
-      return { claudeVersion: this.version, state: 'too-old', checks: [floor, ...checks, ...extra], controlOff: this.controlOff(), controlOffFor: this.controlOffFor(), checkedAt: this.checkedAt, unconnected: this.unconnected, causes: this.causes, untrusted: this.untrusted, pathMissing: this.pathMissing, supervisorPathLacking: sp !== null }
+      return { claudeVersion: this.version, state: 'too-old', checks: [floor, ...checks, ...extra], controlOff: this.controlOff(), controlOffFor: this.controlOffFor(), checkedAt: this.checkedAt, unconnected: this.unconnected, causes: this.causes, untrusted: this.untrusted, pathMissing: this.pathMissing, pathUnknown: this.pathUnknown, hmacOnly: this.hmacOnly, supervisorPathLacking: sp !== null }
     }
     // A changed mod is not a Claude Code change: it has its own band, not "degraded".
     const failed = checks.some(c => c.state === 'fail')
     const passed = REQUIRED.every(id => this.results[id]?.state === 'pass')
-    return { claudeVersion: this.version, state: failed ? 'degraded' : passed ? 'passed' : 'new', checks: [...checks, ...extra], controlOff: this.controlOff(), controlOffFor: this.controlOffFor(), checkedAt: this.checkedAt, unconnected: this.unconnected, causes: this.causes, untrusted: this.untrusted, pathMissing: this.pathMissing, supervisorPathLacking: sp !== null }
+    return { claudeVersion: this.version, state: failed ? 'degraded' : passed ? 'passed' : 'new', checks: [...checks, ...extra], controlOff: this.controlOff(), controlOffFor: this.controlOffFor(), checkedAt: this.checkedAt, unconnected: this.unconnected, causes: this.causes, untrusted: this.untrusted, pathMissing: this.pathMissing, pathUnknown: this.pathUnknown, hmacOnly: this.hmacOnly, supervisorPathLacking: sp !== null }
   }
 
   private set(id: CheckId, state: 'pass' | 'fail', detail: string | null = null): void {
@@ -526,4 +530,13 @@ function modDetail(
   }
   if (failed) parts.push(`the check of ${failed.what} failed (${failed.why}), so it's unchecked`)
   return parts.length ? parts.join('. ') : null
+}
+
+/** Whether a mod version (`major.minor.patch`) is before `than`; an unreadable one counts as before. */
+export function versionBefore(version: string, than: readonly [number, number, number]): boolean {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(version)
+  if (!m) return true
+  const v = [Number(m[1]), Number(m[2]), Number(m[3])]
+  for (let i = 0; i < 3; i++) if (v[i] !== than[i]) return v[i]! < than[i]!
+  return false
 }

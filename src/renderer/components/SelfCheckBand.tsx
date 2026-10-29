@@ -97,6 +97,41 @@ export function SecurityBands({ report, rows = new Map(), onOpen = () => {} }: {
           </div>
         </div>
       ))}
+      {/* Sessions whose mod is too old to measure their PATH: they may be missing it, so a plain band, not a warning (MIP2-1539). */}
+      {report?.pathUnknown?.length ? (
+        <div className="band info" role="status">
+          <div className="band-t">
+            <b>
+              {report.pathUnknown.length === 1 ? 'A running session' : `${report.pathUnknown.length} running sessions`} may be missing your PATH.
+            </b>{' '}
+            They were started before the app was updated, so it doesn't know which PATH they run with. If one lacks it, it can't find <code>claude</code> or your tools. Resume restarts one with your PATH
+            once it isn't working or waiting on you.
+            <ul className="band-d">
+              {report.pathUnknown.map(id => (
+                <PathRow key={id} sessionId={id} row={rows.get(id)} />
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : null}
+      {/* Sessions on a mod from before reply signatures: a resume keeps them on it, so only a copy moves them (MIP2-1543). */}
+      {report?.hmacOnly?.length ? (
+        <div className="band info" role="status">
+          <div className="band-t">
+            <b>
+              {report.hmacOnly.length === 1 ? "A running session doesn't" : `${report.hmacOnly.length} running sessions don't`} check that replies come from this app.
+            </b>{' '}
+            {report.hmacOnly.length === 1
+              ? "It was started before the app was updated. It accepts any reply that carries its channel's secret; newer sessions also check that each reply is signed by this app, which stops another process that learned the secret from answering for it. Resuming keeps the older check. A copy, or a new session, gets the newer one. A copy is a separate session; this one keeps running until you stop it."
+              : "They were started before the app was updated. They accept any reply that carries their channel's secret; newer sessions also check that each reply is signed by this app, which stops another process that learned the secret from answering for it. Resuming keeps the older check. A copy, or a new session, gets the newer one. A copy is a separate session; the original keeps running until you stop it."}
+            <ul className="band-d">
+              {report.hmacOnly.map(id => (
+                <CopyRow key={id} sessionId={id} row={rows.get(id)} />
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : null}
       {/* No running session affected: a plain line, not a warning (MIP2-1518, UX review). */}
       {report?.supervisorPathLacking && !report.pathMissing?.length && (
         <div className="band info" role="status">
@@ -197,6 +232,19 @@ function MarkedRow({ sessionId, why, row, onOpen }: { sessionId: string | null; 
           {busy ? 'Resuming…' : 'Resume'}
         </button>
       )}
+    </li>
+  )
+}
+
+/** A session to move onto signed replies: only a copy can (MIP2-1543). */
+function CopyRow({ sessionId, row }: { sessionId: string; row: ChannelRow | undefined }) {
+  const api = useStore()
+  return (
+    <li>
+      <Who sessionId={sessionId} row={row} />{' '}
+      <button className="fchip" onClick={() => api.openSheet('resume', sessionId)}>
+        Start a copy
+      </button>
     </li>
   )
 }

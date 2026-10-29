@@ -58,4 +58,23 @@ describe('security rows (MIP2-1518)', () => {
     expect(html).not.toMatch(/>Open<\/button>/)
     expect(html).toMatch(/>Resume<\/button>/)
   })
+
+  it("lists sessions whose mod can't say as may be missing your PATH, in a plain band with Resume (MIP2-1539)", () => {
+    const html = renderToStaticMarkup(<SecurityBands report={report({ pathUnknown: [A] })} rows={new Map([[A, row()]])} />)
+    expect(html).toContain('class="band info"')
+    expect(html).toContain('A running session</b>'.replace('</b>', '') )
+    expect(html).toContain('may be missing your PATH.')
+    expect(html).toMatch(/>Resume<\/button>/)
+    expect(html).toContain('started before the app was updated')
+    expect(html).toContain('<code>claude</code>')
+    expect(html).not.toContain('reporter mod')
+  })
+
+  it('lists sessions that check replies by their secret alone, with Start a copy (MIP2-1543)', () => {
+    const html = renderToStaticMarkup(<SecurityBands report={report({ hmacOnly: [A] })} rows={new Map([[A, row()]])} />)
+    expect(html).toContain('check that replies come from this app.')
+    expect(html).toContain('Resuming keeps the older check.')
+    expect(html).toContain('this one keeps running until you stop it.')
+    expect(html).toMatch(/>Start a copy<\/button>/)
+  })
 })

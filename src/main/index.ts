@@ -31,7 +31,6 @@ import {
   claudeConfigDir,
   readSavedOptions,
   processStartedAt,
-  processPathOk,
   sharedSupervisorStart,
   awaitLoginPath,
   terminalHostOf,
@@ -460,15 +459,8 @@ async function start(): Promise<void> {
     )
   readSupervisorPath()
   setInterval(readSupervisorPath, 5 * 60_000).unref()
-  // Which running sessions' own processes lack the folder holding claude, once a minute (MIP2-1518). Each session's
-  // PATH is the PATH of whatever last started it, so this names the ones to resume; nothing else is read.
-  const readSessionPaths = async () => {
-    const running = (poller?.current()?.sessions ?? []).filter(s => s.pid.value !== null && !s.pid.stale)
-    const missing: string[] = []
-    for (const s of running) if ((await processPathOk(s.pid.value!, dirname(binary))) === false) missing.push(s.sessionId)
-    selfCheck.noteSessionPaths(missing)
-  }
-  setInterval(() => void readSessionPaths().catch(err => console.warn(`session PATH: ${String(err)}`)), 60_000).unref()
+  // Each running session's PATH comes from its mod's report at session.start (MIP2-1539), not from `ps`, which shows
+  // the pre-started process's environment rather than the PATH the session runs with (Research MIP2-1534).
   // `claude daemon run`, as the watchdog starts it: the user's environment, none of the session switches (MIP2-1463).
   const spawnClaude = commandLog.wrapSpawner(createClaudeSpawner())
   // One start for the host and the watchdog, at most one per 10 s, so they never start two at once (pass 9, L-5).

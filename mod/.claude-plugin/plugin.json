@@ -1,6 +1,6 @@
 {
   "name": "ccc-reporter",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "CC Command Center's reporter: sends this session's state to the app over an authenticated channel, relays the app's answers to prompts, and submits prompts the app relays. Loaded with --plugin-dir on sessions the app launches.",
   "userConfig": {
     "socketPath": {

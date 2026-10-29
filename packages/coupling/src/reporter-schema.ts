@@ -86,6 +86,8 @@ export function validateReporterFile(data: unknown): Validated {
     throw new Error('latest is invalid')
   }
   if (!(latest.pluginDirWatch === undefined || strOrNull(latest.pluginDirWatch))) throw new Error('latest.pluginDirWatch is invalid')
+  const path = latest.path
+  if (!(path === undefined || (isObj(path) && typeof path.localBin === 'boolean' && typeof path.homebrew === 'boolean' && isNum(path.entries)))) throw new Error('latest.path is invalid')
   if (!(latest.measure === null || isMeasure(latest.measure))) throw new Error('latest.measure is invalid')
   if (!Array.isArray(latest.agents) || !latest.agents.every(isAgent)) throw new Error('latest.agents is invalid')
   if (!isTokens(latest.tokens)) throw new Error('latest.tokens is invalid')

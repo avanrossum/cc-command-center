@@ -99,17 +99,6 @@ export async function processStartedAt(pid: number, ps: (pid: number) => Promise
   return Number.isFinite(at) ? at : null
 }
 
-/**
- * Whether a session's own process has the folder holding `claude` on its
- * PATH (MIP2-1518), read as the supervisor's is: `ps eww`, the last
- * `PATH=`. Null when it can't be read. Only PATH is looked at; nothing else
- * from the environment is kept.
- */
-export async function processPathOk(pid: number, claudeDir: string, ps: (pid: number) => Promise<string> = readPs): Promise<boolean | null> {
-  const path = pathFromPs(await ps(pid).catch(() => ''))
-  return path === null ? null : path.split(':').includes(claudeDir)
-}
-
 /** The running supervisor's PATH against the folder holding `binary`; null when no supervisor runs. */
 export async function checkSupervisorPath(run: ClaudeRunner, binary: string, ps: (pid: number) => Promise<string> = readPs): Promise<SupervisorPath | null> {
   // `daemon status` exits non-zero when no supervisor runs; its output still says so (MIP2-1463 live run).

@@ -28,6 +28,7 @@ import {
   type PromptRelay,
 } from './channel-wire.ts'
 import { backgroundedChildren } from './children.ts'
+import { measurePath } from './path.ts'
 import { finishedCallSettles } from './offers.ts'
 import { governorUsage } from './usage.ts'
 import {
@@ -41,7 +42,7 @@ import {
   type ReporterFile,
 } from './wire.ts'
 
-const VERSION = '0.7.0'
+const VERSION = '0.8.0'
 const WRITTEN_FILE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit', 'Artifact'])
 /** How long a prompt is offered to the app before the mod stops asking. The dialog stays open throughout. */
 const PERMISSION_WAIT_MS = 30 * 60 * 1000
@@ -247,6 +248,9 @@ export const register: Register = (on, options) => {
     f.latest.version = version.version
     // What this session sees for mod reloading: the app sets it off for every session it starts (gate run 2, L-3).
     f.latest.pluginDirWatch = (await $.env.get('CLAUDE_CODE_PLUGIN_DIR_WATCH')) ?? null
+    // The PATH this session's tools run with: a child of the mod gets it, as Bash, hooks and MCP servers do. `ps`
+    // shows only the pre-started process's, not the dispatching shell's PATH it runs with (Research MIP2-1534).
+    f.latest.path = await measurePath($)
     await emit($, undefined, { type: 'session.start', model: await $.session.model(), cwd: e.cwd, version: version.version })
     return r
   })

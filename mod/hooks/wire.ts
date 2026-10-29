@@ -91,6 +91,13 @@ export interface ReporterFile {
     version?: string
     /** CLAUDE_CODE_PLUGIN_DIR_WATCH as the session sees it, null when unset (gate run 2, L-3). Absent from mod 0.6.0 and earlier. */
     pluginDirWatch?: string | null
+    /**
+     * The PATH this session's commands run with, measured at session.start
+     * through a child of the mod (MIP2-1539): whether it holds ~/.local/bin and
+     * /opt/homebrew/bin, and how many entries it has. Never the PATH itself.
+     * Absent from mod 0.7.0 and earlier, or when the measure failed.
+     */
+    path?: { localBin: boolean; homebrew: boolean; entries: number }
     model: string | null
     effort: string | null
     measure: Measure | null

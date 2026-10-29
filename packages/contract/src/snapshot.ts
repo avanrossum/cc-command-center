@@ -258,6 +258,14 @@ export interface SelfCheckReport {
   untrusted?: { sessionId: string | null; why: string }[]
   /** Running sessions whose own process PATH lacks the folder holding claude (MIP2-1518). */
   pathMissing?: string[]
+  /** Running sessions whose mod can't say what PATH they run with (older than 0.8.0): they may be missing it (MIP2-1539). */
+  pathUnknown?: string[]
+  /**
+   * Running sessions on a mod from before reply signatures (older than
+   * 0.7.0): they check the app's replies by their secret alone, and a resume
+   * keeps them on that mod (MIP2-1543).
+   */
+  hmacOnly?: string[]
   /** The supervisor's own PATH lacks that folder, so sessions Claude Code restarts by itself will too (MIP2-1518). */
   supervisorPathLacking?: boolean
   /** Sessions with card answers and prompt relay off because their own channel hasn't connected (MIP2-1502). */

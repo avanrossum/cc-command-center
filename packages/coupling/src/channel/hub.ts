@@ -389,7 +389,9 @@ export class ChannelHub {
         // A file the store recorded at an older version that fails is reported by what's wrong at that version.
         if (altered !== null && this.versions.get(id) !== undefined && version < SETTINGS_VERSION && atStored !== null) altered = atStored
         if (altered !== null && version < SETTINGS_VERSION && atStored === null) {
-          // A file from before reply keys gets one now; its running session keeps MAC-only replies until its next start.
+          // A file from before reply keys gets one now. Its session's mod is from before reply keys too, and a resume
+          // restarts it on that same mod copy, so it keeps MAC-only replies until it's replaced by a new session or a
+          // copy (MIP2-1543); the self-check lists it (hmacOnly).
           ch.replyKey = this.newKeyFor(id)
           await this.migrate(ch, settings.data, version)
           altered = null

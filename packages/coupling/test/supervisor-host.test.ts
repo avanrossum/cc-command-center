@@ -291,7 +291,9 @@ describe('SupervisorHost lifecycle', () => {
     expect(await mk('', '', notListed).moveIn(SID, { cwd: '/w' }).catch(e => e)).toBeInstanceOf(ResumedAsCopy)
   })
 
-  it("resumes with no flags at all, from the session's own folder", async () => {
+  // Flags on a hosted background session's --resume start a copy under a new id (Research MIP2-1377), so a resume
+  // restarts on the saved --plugin-dir: a session stays on the mod copy it was launched with (MIP2-1543).
+  it("resumes with no flags at all, from the session's own folder, so it keeps its saved mod copy", async () => {
     const { host, calls } = fake({ '--resume': 'backgrounded · c0ffee01 · app' })
     await host.resume(SID)
     expect(calls.filter(c => c.args[0] === '--resume')).toEqual([{ args: ['--resume', SID, '--bg'], cwd: '/w' }])
