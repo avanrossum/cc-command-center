@@ -1,9 +1,12 @@
 // Where a packaged app runs the reporter mod from (MIP2-1404).
 
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { ChannelHub } from '../packages/coupling/src/channel/hub.ts'
+import { newReplyKey } from '../packages/coupling/src/channel/crypto.ts'
 import { modVerdict } from '../src/main/mod-verdict.ts'
 import { checkModFolders, installMod, MOD_FOLDERS_MAX, modDir, modHash, unpackedPath } from '../src/main/reporter-mod.ts'
 
@@ -21,6 +24,25 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
 describe('reporter mod', () => {
+  it("declares every option the app writes in plugin.json's userConfig, since the engine passes only declared fields (MIP2-1436, QA MIP2-1529)", () => {
+    const manifest = JSON.parse(readFileSync(new URL('../mod/.claude-plugin/plugin.json', import.meta.url), 'utf8')) as { version: string; userConfig: Record<string, unknown> }
+    const hub = new ChannelHub({ modDir: '/mod', root: '/tmp/ccc-x', log: () => {} })
+    const settings = hub.settingsFor({ secret: 'ab'.repeat(32), replyKey: newReplyKey() }, '/tmp/ccc-x/a/s.sock') as { pluginConfigs: Record<string, { options: Record<string, unknown> }> }
+    const written = Object.keys(Object.values(settings.pluginConfigs)[0]!.options).sort()
+    expect(written).toContain('replyKey')
+    expect(Object.keys(manifest.userConfig).sort()).toEqual(written)
+    // The manifest's version is the mod's own.
+    const register = readFileSync(new URL('../mod/hooks/register.ts', import.meta.url), 'utf8')
+    expect(manifest.version).toBe(/const VERSION = '([^']+)'/.exec(register)?.[1])
+  })
+
+  it("vendors @noble/ed25519 3.2.0's index.js unchanged: the file Research tested, pinned by hash (MIP2-1436 item 1)", () => {
+    const file = readFileSync(new URL('../mod/hooks/vendor/noble-ed25519-3.2.0.js', import.meta.url))
+    expect(createHash('sha256').update(file).digest('hex')).toBe('a4f631d1876b5d9e43a86cd71194ca27b5e1451edf4ba4db9a418f40a475569a')
+    // Imported statically, and nothing in it loads code at run time (the engine has no require or import()).
+    expect(file.toString()).not.toMatch(/\brequire\(|\bimport\(/)
+  })
+
   it('maps a path inside app.asar to the unpacked copy', async () => {
     expect(unpackedPath('/A.app/Contents/Resources/app.asar/dist')).toBe('/A.app/Contents/Resources/app.asar.unpacked/dist')
     expect(unpackedPath('/repo/dist')).toBe('/repo/dist')

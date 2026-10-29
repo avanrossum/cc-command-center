@@ -7,8 +7,13 @@
 // Plain functions taking `$` first: the engine's scanner follows `$` into a
 // module's functions, not into class methods (`claude plugin validate`).
 
-import { CHANNEL_PATHS, HEADER, MAC_HEX, MAX_BODY_BYTES, SECRET_HEX, bytesEqual, fromHex, replyText, requestText, toHex } from './channel-wire.ts'
+import { CHANNEL_PATHS, HEADER, MAC_HEX, MAX_BODY_BYTES, REPLY_KEY_HEX, SECRET_HEX, SIG_HEX, bytesEqual, fromHex, replyText, requestText, toHex } from './channel-wire.ts'
 import { hmacSha256 } from './hmac.ts'
+// @noble/ed25519 3.2.0's index.js from the npm tarball, unchanged and pinned by hash
+// (test/reporter-mod.test.ts). The engine has no Ed25519 of its own (Research MIP2-1436).
+import { verifyAsync } from './vendor/noble-ed25519-3.2.0.js'
+
+const encoder = new TextEncoder()
 
 /**
  * The two engine calls the client makes. The mod passes its `$`; the tests
@@ -27,6 +32,8 @@ export interface ChannelEngine {
 
 export interface Channel {
   readonly key: Uint8Array
+  /** The app's Ed25519 public key; every reply must carry its signature. Null in settings from before it (version 3). */
+  readonly replyKey: Uint8Array | null
   readonly socketPath: string
   /** The folder holding every session's channel; "remember" never grants it. */
   readonly channelRoot: string
@@ -45,8 +52,11 @@ export function channelFrom(options: Readonly<Record<string, unknown>>): Channel
   const socketPath = typeof options.socketPath === 'string' ? options.socketPath : ''
   const channelRoot = typeof options.channelRoot === 'string' ? options.channelRoot.replace(/\/+$/, '') : ''
   const key = typeof options.secret === 'string' ? fromHex(options.secret, SECRET_HEX) : null
+  // A reply key that's there but malformed is no channel, never a channel without signatures.
+  const replyKey = options.replyKey === undefined ? null : typeof options.replyKey === 'string' ? fromHex(options.replyKey, REPLY_KEY_HEX) : null
+  if (options.replyKey !== undefined && !replyKey) return null
   if (!key || !channelRoot.startsWith('/') || !socketPath.startsWith(`${channelRoot}/`)) return null
-  return { key, socketPath, channelRoot, trusted: false }
+  return { key, replyKey, socketPath, channelRoot, trusted: false }
 }
 
 /** One signed call. Undefined for any failure; the caller falls back. */
@@ -69,14 +79,27 @@ export async function channelCall(
       body: body || undefined,
       socketPath: ch.socketPath,
     })
+    const text = replyText(nonce, r.status, r.text)
     const got = fromHex(r.headers[HEADER.mac] ?? '', MAC_HEX)
-    const want = await hmacSha256(ch.key, replyText(nonce, r.status, r.text))
+    const want = await hmacSha256(ch.key, text)
     if (!got || !bytesEqual(got, want)) return distrust(ch)
+    if (ch.replyKey && !(await signedByApp(ch.replyKey, text, r.headers[HEADER.sig]))) return distrust(ch)
     if (r.status === 204) return trust(ch, { status: 204, body: undefined })
     if (r.status !== 200) return distrust(ch)
     return trust(ch, { status: 200, body: JSON.parse(r.text) })
   } catch {
     return distrust(ch)
+  }
+}
+
+/** The reply text's Ed25519 signature under the app's key, strictly (RFC 8032, not ZIP-215). Anything malformed is false. */
+async function signedByApp(replyKey: Uint8Array, text: string, sigHex: string | undefined): Promise<boolean> {
+  const sig = fromHex(sigHex ?? '', SIG_HEX)
+  if (!sig) return false
+  try {
+    return await verifyAsync(sig, encoder.encode(text), replyKey, { zip215: false })
+  } catch {
+    return false
   }
 }
 

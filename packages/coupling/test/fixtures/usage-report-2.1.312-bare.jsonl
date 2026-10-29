@@ -1,0 +1,4 @@
+{"type": "system", "subtype": "ui_invalidate", "session_id": "00000000-0000-4000-8000-000000000000"}
+{"type": "system", "subtype": "init", "session_id": "00000000-0000-4000-8000-000000000000"}
+{"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "(text not read)"}]}, "session_id": "00000000-0000-4000-8000-000000000000"}
+{"type": "result", "subtype": "success", "is_error": false, "total_cost_usd": 0, "session_id": "00000000-0000-4000-8000-000000000000"}

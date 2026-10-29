@@ -3,15 +3,15 @@
 // sockets. `$` is stood in by a clock and an http.fetch that speaks over a
 // socket, the two engine calls the client makes.
 
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { createServer, request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { channelCall, channelFrom, channelHello, channelSend, type Channel, type ChannelEngine } from '../../../mod/hooks/channel.ts'
 import { ANSWER_CHARS, CHANNEL_PATHS, HEADER, requestText, type PermissionAsk } from '../../../mod/hooks/channel-wire.ts'
-import { ChannelHub } from '../src/channel/hub.ts'
-import { newSecret, sign } from '../src/channel/crypto.ts'
+import { ChannelHub, memoryReplyKeys, type ReplyKeys } from '../src/channel/hub.ts'
+import { importReplyKey, newReplyKey, newSecret, sign } from '../src/channel/crypto.ts'
 import { ChannelServer } from '../src/channel/server.ts'
 
 const A_TEXT = readFileSync(new URL('./fixtures/reporter-2.1.311-scratch-a.json', import.meta.url), 'utf8')
@@ -57,7 +57,7 @@ function fakeEngine(): ChannelEngine {
 
 function settingsOf(path: string) {
   return JSON.parse(readFileSync(path, 'utf8')) as {
-    pluginConfigs: Record<string, { options: { socketPath: string; secret: string; channelRoot: string } }>
+    pluginConfigs: Record<string, { options: { socketPath: string; secret: string; channelRoot: string; replyKey?: string } }>
     permissions: { deny: string[] }
   }
 }
@@ -86,6 +86,7 @@ const ASK: PermissionAsk = {
 describe('ChannelHub', () => {
   let base: string
   let hub: ChannelHub
+  let keys: ReplyKeys
   let $: ChannelEngine
   const logs: string[] = []
 
@@ -93,7 +94,8 @@ describe('ChannelHub', () => {
   beforeEach(() => {
     base = realpathSync(mkdtempSync(join(tmpdir(), 'ccc-')))
     answers.length = 0
-    hub = new ChannelHub({ modDir: '/mod', root: join(base, 'ch'), longPollMs: 300, log: l => logs.push(l), onAnswer: (id, post) => answers.push({ id, at: post.at }) })
+    keys = memoryReplyKeys()
+    hub = new ChannelHub({ modDir: '/mod', root: join(base, 'ch'), longPollMs: 300, log: l => logs.push(l), replyKeys: keys, onAnswer: (id, post) => answers.push({ id, at: post.at }) })
     $ = fakeEngine()
     logs.length = 0
   })
@@ -278,7 +280,8 @@ describe('ChannelHub', () => {
   it('recovers a channel after the app restarts, and close removes it', async () => {
     const { id, ch } = await launch()
     await hub.closeAll()
-    const again = new ChannelHub({ modDir: '/mod', root: hub.root, longPollMs: 300, log: () => {} })
+    // The app keeps the reply key, so the session's mod still verifies replies after the restart.
+    const again = new ChannelHub({ modDir: '/mod', root: hub.root, longPollMs: 300, log: () => {}, replyKeys: keys })
     expect(await again.recover()).toEqual([id])
     expect(await channelHello($, ch)).toBe(true)
     await again.close(id)
@@ -334,6 +337,80 @@ describe('ChannelHub', () => {
     expect(timed.pendingRequests().get(A_ID)).toBeUndefined()
     expect(timed.health()[0]).toMatchObject({ sessionId: A_ID, launched: true, offered: 1 })
     await timed.closeAll()
+  })
+
+  describe('reply signatures (MIP2-1436 item 1)', () => {
+    it('writes the public reply key in the settings, never the private one', async () => {
+      const l = await hub.prepareLaunch()
+      const text = readFileSync(l.settingsPath, 'utf8')
+      const opts = JSON.parse(text).pluginConfigs['ccc-reporter@inline'].options
+      expect(Object.keys(opts).sort()).toEqual(['channelRoot', 'replyKey', 'secret', 'socketPath'])
+      expect(opts.replyKey).toMatch(/^[0-9a-f]{64}$/)
+      expect(text).not.toMatch(/PRIVATE|[0-9a-f]{96}/)
+      const kept = importReplyKey(keys.get(l.channelId)!)
+      expect(kept?.publicHex).toBe(opts.replyKey)
+    })
+
+    it("refuses an impostor that holds the secret but not the app's key", async () => {
+      const { ch, socketPath, secret } = await launch()
+      expect(await channelHello($, ch)).toBe(true)
+      // A server that signs with the secret (a session's Bash read it), as it would after squatting the socket. The
+      // mod's path is what it reaches; the swap itself is caught by the watcher (gate run 2, M-1).
+      const at = (path: string) => ({ ...ch, socketPath: path })
+      const impostor = new ChannelServer({ socketPath: `${socketPath}.imp`, secret, handlers: { report: () => {} } as never })
+      // One with a key pair of its own: its signature doesn't verify either.
+      const keyed = new ChannelServer({ socketPath: `${socketPath}.key`, secret, replyKey: newReplyKey(), handlers: { report: () => {} } as never })
+      await impostor.listen()
+      await keyed.listen()
+      try {
+        const fooled = at(`${socketPath}.imp`)
+        expect(await channelHello($, fooled)).toBe(false)
+        expect(fooled.trusted).toBe(false)
+        expect(await channelHello($, at(`${socketPath}.key`))).toBe(false)
+        // The same mod channel without a reply key, as in version 3, would have taken the impostor's reply.
+        expect(await channelHello($, { ...at(`${socketPath}.imp`), replyKey: null })).toBe(true)
+      } finally {
+        await impostor.close()
+        await keyed.close()
+      }
+    })
+
+    it('a mod with no reply key in its settings (version 3) still verifies by MAC alone', async () => {
+      const { ch } = await launch()
+      expect(await channelHello($, { ...ch, replyKey: null })).toBe(true)
+    })
+
+    it('a reply key that is there but malformed is no channel', async () => {
+      const { settings } = await launch()
+      const opts = settings.pluginConfigs['ccc-reporter@inline']!.options as Record<string, unknown>
+      expect(channelFrom({ ...opts, replyKey: 'zz' })).toBeNull()
+      expect(channelFrom({ ...opts, replyKey: 7 })).toBeNull()
+      expect(channelFrom({ ...opts, replyKey: 'AB'.repeat(32) })).toBeNull()
+    })
+
+    it("recovered without a kept key, it gets a new one in place: the old public key's mod is refused, the new file's isn't", async () => {
+      const { id, ch } = await launch()
+      await hub.closeAll()
+      const lines: string[] = []
+      const again = new ChannelHub({ modDir: '/mod', root: hub.root, longPollMs: 300, log: l => lines.push(l) })
+      expect(await again.recover()).toEqual([id])
+      expect(lines.join('\n')).toMatch(/no reply key was kept/)
+      expect(await channelHello($, ch)).toBe(false)
+      // Not connected until the session restarts on the new key, though its hellos still reach the app.
+      expect(again.health()[0]).toMatchObject({ keyPending: true })
+      const fresh = channelFrom(settingsOf(join(hub.root, id, 'settings.json')).pluginConfigs['ccc-reporter@inline']!.options)!
+      expect(await channelHello($, fresh)).toBe(true)
+      await channelSend($, fresh, CHANNEL_PATHS.report, JSON.parse(A_TEXT))
+      expect(again.health()[0]?.keyPending).toBeUndefined()
+      await again.closeAll()
+    })
+
+    it('a launch fails, writing nothing, when its key can\'t be kept', async () => {
+      const failing = new ChannelHub({ modDir: '/mod', root: join(base, 'ch3'), log: () => {}, replyKeys: { get: () => null, set: () => { throw new Error('no keychain') }, delete: () => {} } })
+      await expect(failing.prepareLaunch()).rejects.toThrow('no keychain')
+      expect(existsSync(join(base, 'ch3')) ? readdirSync(join(base, 'ch3')) : []).toEqual([])
+      await failing.closeAll()
+    })
   })
 
   it('records the bound session in the channel folder, so recovery knows it', async () => {

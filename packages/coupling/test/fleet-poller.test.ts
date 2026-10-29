@@ -112,7 +112,7 @@ describe('FleetPoller', () => {
   })
 
   describe('the usage meter (MIP2-1520)', () => {
-    type R = { value: { fiveHour: { usedPercent: number; resetsAt: number } | null; sevenDay: null }; source: 'statusline' | 'mod'; observedAt: number; stale: boolean }
+    type R = { value: { fiveHour: { usedPercent: number; resetsAt: number } | null; sevenDay: null }; source: 'statusline' | 'mod' | 'usage-report'; observedAt: number; stale: boolean }
     const at = (used: number, observedAt: number, source: R['source'] = 'statusline', resetsAt = 2_000_000_000): R => ({ value: { fiveHour: { usedPercent: used, resetsAt }, sevenDay: null }, source, observedAt, stale: false })
     const meterOf = (p: FleetPoller) => (p as unknown as { usage: (s: unknown[]) => R | null }).usage.bind(p)
 
@@ -121,6 +121,19 @@ describe('FleetPoller', () => {
       const p = new FleetPoller({ host, readUsage: async () => at(91, 1000) })
       await p.pollOnce().catch(() => {})
       expect(meterOf(p)([{ rateLimits: at(5, 9999, 'mod') }])?.value.fiveHour?.usedPercent).toBe(91)
+    })
+
+    it("takes the newer of Claude Code's /usage and the files (MIP2-1522)", async () => {
+      const { host } = hostWith([FIXTURE])
+      let report: R | null = at(33, 9000, 'usage-report')
+      const p = new FleetPoller({ host, readUsage: async () => at(20, 5000), readReport: () => report as never })
+      await p.pollOnce()
+      expect(meterOf(p)([])?.value.fiveHour?.usedPercent).toBe(33)
+      // No report: the file's reading, but never back to an older one than shown.
+      report = null
+      const q = new FleetPoller({ host, readUsage: async () => at(20, 5000), readReport: () => report as never })
+      await q.pollOnce()
+      expect(meterOf(q)([])?.value.fiveHour?.usedPercent).toBe(20)
     })
 
     it('passes the listed sessions to the file read', async () => {

@@ -16,7 +16,7 @@ export interface SpendDeps {
   state: () => SpendState
   real: RealSpendPoller
   adminKey: ArbiterKey
-  setSource: (source: 'real' | 'simulated') => void
+  setSource: (source: 'real' | 'simulated' | 'credits') => void
   /** The spend state changed; tell the window. */
   changed: () => void
 }
@@ -35,7 +35,7 @@ export function registerSpend({ state, real, adminKey, setSource, changed }: Spe
 
   invoke(IPC.spendGet, () => state(), null)
   invoke(IPC.spendSource, (source: unknown): Result => {
-    if (source !== 'real' && source !== 'simulated') return { ok: false, error: 'bad request' }
+    if (source !== 'real' && source !== 'simulated' && source !== 'credits') return { ok: false, error: 'bad request' }
     setSource(source)
     changed()
     return { ok: true }

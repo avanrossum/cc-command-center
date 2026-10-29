@@ -8,6 +8,11 @@
 //   reply    "rep\n" + nonce + "\n" + status + "\n" + body
 // The reply is bound to the request's nonce, so an old reply can't answer a
 // new request.
+//
+// A reply also carries an Ed25519 signature over the same reply text, under a
+// key only the app holds; the session's settings carry just the public key
+// (MIP2-1436 item 1). A process that read the secret can then sign requests
+// but not replies, so it can't act as the app.
 
 export const CHANNEL_PATHS = {
   /** The app proves it holds the secret before the mod sends anything sensitive. */
@@ -26,7 +31,7 @@ export const CHANNEL_PATHS = {
   answer: '/v1/answer',
 } as const
 
-export const HEADER = { nonce: 'x-ccc-nonce', ts: 'x-ccc-ts', mac: 'x-ccc-mac' } as const
+export const HEADER = { nonce: 'x-ccc-nonce', ts: 'x-ccc-ts', mac: 'x-ccc-mac', sig: 'x-ccc-sig' } as const
 
 /** How far a request's timestamp may be from the app's clock. */
 export const TIMESTAMP_WINDOW_MS = 60_000
@@ -46,6 +51,10 @@ export interface AnswerPost {
 export const SECRET_HEX = /^[0-9a-f]{64}$/
 export const NONCE_HEX = /^[0-9a-f]{32}$/
 export const MAC_HEX = /^[0-9a-f]{64}$/
+/** The app's Ed25519 reply key, raw 32 bytes. */
+export const REPLY_KEY_HEX = /^[0-9a-f]{64}$/
+/** An Ed25519 signature, 64 bytes. */
+export const SIG_HEX = /^[0-9a-f]{128}$/
 
 export function requestText(method: string, path: string, nonce: string, ts: string, body: string): string {
   return `req\n${method}\n${path}\n${nonce}\n${ts}\n${body}`

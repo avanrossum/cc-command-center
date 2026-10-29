@@ -10,6 +10,7 @@ import { autoAssign, folderKeyOf } from '../shared/auto-assign.ts'
 import { AMBIGUOUS, classify, inArchive, lastActivityOf, lifeOf, parentsOf } from '../shared/lifecycle.ts'
 import type { ImportParts, ImportSummary } from '../shared/ipc.ts'
 import { emptyStore, PICKABLE_COLORS, type AppStore, type Category, type SessionMeta } from '../shared/store.ts'
+import type { QuitReport } from '../shared/quit.ts'
 import { importRegistry } from './registry-import.ts'
 import { checkStore, uniqueCategoryId } from './store-schema.ts'
 import { checkImportedSettings } from './validate.ts'
@@ -303,7 +304,7 @@ export class AppStoreService {
   }
 
   /** Which spend the top bar shows (MIP2-1498 §5.2). */
-  setSpendSource(source: 'real' | 'simulated'): void {
+  setSpendSource(source: 'real' | 'simulated' | 'credits'): void {
     this.data.settings.spendSource = source
     this.save()
   }
@@ -371,10 +372,26 @@ export class AppStoreService {
 
   /** The settings sheet's switches, each already checked (validate.ts checkSettings). */
   updateSettings(
-    patch: Partial<Pick<AppStore['settings'], 'notifyEnabled' | 'notifyNeedsYou' | 'notifyTurn' | 'rollOffDays' | 'arbiterEnabled' | 'arbiterCapUsd' | 'showOutside' | 'hideOutsideAsked' | 'terminalFont' | 'terminalFontSize' | 'betaUpdates' | 'sidebarWidth'>>,
+    patch: Partial<Pick<AppStore['settings'], 'notifyEnabled' | 'notifyNeedsYou' | 'notifyTurn' | 'rollOffDays' | 'arbiterEnabled' | 'arbiterCapUsd' | 'showOutside' | 'hideOutsideAsked' | 'terminalFont' | 'terminalFontSize' | 'betaUpdates' | 'sidebarWidth' | 'quitSessions' | 'quitClosedNoticed'>>,
   ): void {
     Object.assign(this.data.settings, patch)
     this.save()
+  }
+
+  /** What the quit did, written as the app quits, for the next launch's toast (MIP2-1528). */
+  setLastQuit(r: QuitReport): void {
+    this.data.lastQuit = r
+    this.save()
+  }
+
+  /** The last quit's report, once: it's cleared as it's read. */
+  takeLastQuit(): QuitReport | null {
+    const r = this.data.lastQuit ?? null
+    if (r) {
+      delete this.data.lastQuit
+      this.save()
+    }
+    return r
   }
 
   dismissRollOffNotice(): void {

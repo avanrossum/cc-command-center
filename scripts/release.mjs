@@ -214,7 +214,7 @@ if (!adhoc) {
 console.log(`release: checks passed for ${tag} (${adhoc ? 'ad hoc' : `Team ID ${appTeam}`}, ${machO.length} native binaries)`)
 
 if (buildOnly) {
-  console.log(`release: ${tag} built and checked from ${head.slice(0, 7)}; published nowhere. The disk image: ${join(out, `cc-command-center-app-${version}-arm64.dmg`)}`)
+  console.log(`release: ${tag} built and checked from ${head.slice(0, 7)}; published nowhere. The disk image: ${join(out, `CC-Command-Center-${version}-arm64.dmg`)}`)
   process.exit(0)
 }
 

@@ -3,6 +3,8 @@
 // folder; the renderer reads them through window.ccc. Nothing here comes from
 // Claude Code; imported values come from Electron CCCC's registry, read only.
 
+import type { QuitReport, QuitSessions } from './quit.ts'
+
 export type Isolation = 'none' | 'worktree'
 export type NotifyOverride = 'auto' | 'on' | 'off'
 
@@ -124,7 +126,11 @@ export interface AppSettings {
   /** Sessions the open roll-off notice covers; empty when dismissed. It survives restarts. */
   rollOffNotice?: string[]
   /** Which spend the top bar shows (MIP2-1498 §5.2); absent is Real once a Console key is saved, else Simulated. */
-  spendSource?: 'real' | 'simulated'
+  spendSource?: 'real' | 'simulated' | 'credits'
+  /** Settings → General → "When the app quits" (MIP2-1528); absent is `ask`. */
+  quitSessions?: QuitSessions
+  /** The toast for a remembered close has shown once (§6); cleared when a close is remembered again. */
+  quitClosedNoticed?: boolean
   /** The sidebar's width in px, SIDEBAR_WIDTH.min–max; absent is the default (MIP2-1495). */
   sidebarWidth?: number
   /** The switcher's pinned sessions, in Alex's order; kept from roll-off while pinned (MIP2-1494 §5.5). */
@@ -155,6 +161,8 @@ export interface AppStore {
   importedAt: number | null
   /** Each channel's settings version, by channel id: kept here, outside the channel's folder (pass 7, M-1). */
   channelVersions?: Record<string, number>
+  /** What the last quit closed and failed to, for the toast on the next launch (MIP2-1528); cleared once shown. */
+  lastQuit?: QuitReport
 }
 
 export function emptyStore(): AppStore {

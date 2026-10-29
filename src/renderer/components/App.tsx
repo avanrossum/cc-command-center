@@ -16,6 +16,8 @@ import { Archive, RollOffNotice } from './Archive.tsx'
 import { ArbiterLogSheet } from './ArbiterLog.tsx'
 import { MoveSheet } from './MoveSheet.tsx'
 import { SettingsSheet, type Section } from './Settings.tsx'
+import { QuitSheet } from './QuitSheet.tsx'
+import type { QuitRow } from '../../shared/quit.ts'
 import type { SpendState } from '../../shared/spend.ts'
 import { CategoryEditor, StoreContext, type NoticeAction, type StoreApi } from './Categories.tsx'
 import { FirstRun } from './FirstRun.tsx'
@@ -56,6 +58,8 @@ export function App() {
   /** The move sheet for 0.24's sessions (MIP2-1425). */
   const [move, setMove] = useState<{ preselect: string | null } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  /** The quit modal's sessions, while main asks (MIP2-1528). */
+  const [quitRows, setQuitRows] = useState<QuitRow[] | null>(null)
   /** The usage help panel (MIP2-1498 §4.5). */
   const [usageHelp, setUsageHelp] = useState(false)
   const [spend, setSpend] = useState<SpendState | null>(null)
@@ -102,7 +106,10 @@ export function App() {
     void window.ccc.startupNotices().then(all => all.length && setNotice(all.join(' ')))
     const offOpen = window.ccc.onOpenSession(id => openRef.current(id))
     const offNeeds = window.ccc.onOpenNeeds(() => (setFocused(null), setFilter('needs')))
-    const offSettings = window.ccc.onOpenSettings(() => setSettingsOpen(true))
+    const offQuit = window.ccc.onQuitAsk(rows => setQuitRows(rows))
+    // A window opened to ask (none was open on ⌘Q) reads the rows it missed (MIP2-1528).
+    void window.ccc.quitPending().then(rows => rows && setQuitRows(rows))
+    const offSettings = window.ccc.onOpenSettings(section => (section && setSettingsSection(section), setSettingsOpen(true)))
     void window.ccc.getArbiter().then(a => a && setArbiter(a))
     const offArbiter = window.ccc.onArbiter(setArbiter)
     void window.ccc.getSummaries().then(setSummaries)
@@ -111,7 +118,7 @@ export function App() {
     const offSpend = window.ccc.onSpend(setSpend)
     void window.ccc.getWaits().then(setWaits)
     const offWaits = window.ccc.onWaits(setWaits)
-    return () => (offStore(), offNotice(), offOpen(), offArbiter(), offSummaries(), offWaits(), offSpend(), offNeeds(), offSettings())
+    return () => (offStore(), offNotice(), offOpen(), offArbiter(), offSummaries(), offWaits(), offSpend(), offNeeds(), offSettings(), offQuit())
   }, [])
 
   useEffect(() => {
@@ -346,6 +353,7 @@ export function App() {
         line={line}
         counts={counts}
         usage={fleet?.usage ?? null}
+        usageExtra={fleet?.usageExtra ?? null}
         now={now}
         railOpen={railOpen}
         onToggleRail={() => setRailOpen(o => !o)}
@@ -395,8 +403,9 @@ export function App() {
       {arbiterLogOpen && <ArbiterLogSheet onClose={() => setArbiterLogOpen(false)} />}
       {move && <MoveSheet entries={entries} preselect={move.preselect} onClose={() => setMove(null)} onOpen={id => void open(id)} />}
       {settingsOpen && (
-        <SettingsSheet initialSection={settingsSection} onClose={() => (setSettingsOpen(false), setSettingsSection(undefined))} onMove={() => (setSettingsOpen(false), setMove({ preselect: null }))} onArbiterLog={() => setArbiterLogOpen(true)} arbiter={arbiter} selfCheck={fleet?.selfCheck ?? null} />
+        <SettingsSheet key={settingsSection ?? ''} initialSection={settingsSection} onClose={() => (setSettingsOpen(false), setSettingsSection(undefined))} onMove={() => (setSettingsOpen(false), setMove({ preselect: null }))} onArbiterLog={() => setArbiterLogOpen(true)} arbiter={arbiter} selfCheck={fleet?.selfCheck ?? null} />
       )}
+      {quitRows && <QuitSheet rows={quitRows} entries={entries} now={now} onClose={() => setQuitRows(null)} onError={text => setNotice(text)} />}
       <RollOffNotice onReview={ids => (setArchiveOnly(ids), setSheet('archive'))} />
       {/* Until it's finished; 0.24's sessions are its interactive ones with a process (step 3). */}
       {store && store.settings.firstRunDoneAt == null && !firstRunHidden && (

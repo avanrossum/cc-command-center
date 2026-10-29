@@ -16,6 +16,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { CardQuestion, PendingRequest } from '@ccc/contract'
 import {
   LONG_POLL_MS,
+  REPLY_KEY_HEX,
   SECRET_HEX,
   answersValid,
   type AnswerPost,
@@ -26,7 +27,7 @@ import {
 } from '../../../../mod/hooks/channel-wire.ts'
 import { REPORTER_NAME, type ReporterFile } from '../../../../mod/hooks/wire.ts'
 import type { ReporterRead } from '../reporter.ts'
-import { newSecret } from './crypto.ts'
+import { exportReplyKey, importReplyKey, newReplyKey, newSecret, type ReplyKey } from './crypto.ts'
 import { cardInput, summarize } from './messages.ts'
 import { PeerResolver } from './peer.ts'
 import type { ChannelHealth } from '../self-check.ts'
@@ -107,6 +108,10 @@ class SessionChannel {
    * (pass 5, M-2).
    */
   settingsSeen: SettingsSeen | null = null
+  /** Signs this channel's replies; its public half is in the settings file (MIP2-1436 item 1). */
+  replyKey: ReplyKey | null = null
+  /** The reply key was replaced at recovery; cleared by the first report, which the mod sends only after a reply verified. */
+  keyPending = false
   readonly createdAt: number
 
   constructor(
@@ -129,11 +134,12 @@ const SESSION_FILE = 'session'
  * The version of what settingsFor() writes (MIP2-1444; pass 6, M-2). 1: the
  * channel root and the mod folders denied. 2: the app's data folder too
  * (pass 5, M-3). 3: `env` turns off mod reload for the session
- * (MIP2-1457). Each channel's version is kept in the app's store,
+ * (MIP2-1457). 4: the app's Ed25519 reply key, public half (MIP2-1436
+ * item 1). Each channel's version is kept in the app's store,
  * which sessions are denied, not in the channel's folder, which the actor
  * a check guards against can write (pass 7, M-1).
  */
-export const SETTINGS_VERSION = 3
+export const SETTINGS_VERSION = 4
 /** The version a channel with no stored version is checked against: what 1d3208c, the last build before the store kept versions, wrote (pass 8, M-1). */
 const LAST_UNRECORDED_VERSION = 2
 
@@ -158,6 +164,24 @@ export interface SettingsVersions {
 export function memoryVersions(): SettingsVersions {
   const m = new Map<string, number>()
   return { get: id => m.get(id), set: (id, v) => void m.set(id, v), delete: id => void m.delete(id) }
+}
+
+/**
+ * Where each channel's reply private key is kept, as PKCS#8 DER, so a
+ * channel recovered after an app restart still signs with the key its
+ * session started with (MIP2-1436 item 1). The app encrypts them with
+ * safeStorage; tests and a build without it keep them in memory. `set`
+ * may throw.
+ */
+export interface ReplyKeys {
+  get(channelId: string): Buffer | null
+  set(channelId: string, der: Buffer): void
+  delete(channelId: string): void
+}
+
+export function memoryReplyKeys(): ReplyKeys {
+  const m = new Map<string, Buffer>()
+  return { get: id => m.get(id) ?? null, set: (id, der) => void m.set(id, der), delete: id => void m.delete(id) }
 }
 /** Marks a channel that stopped being trustworthy, with why, so the mark outlives an app restart (gate run 3, M-1). */
 const UNTRUSTED_FILE = 'untrusted'
@@ -219,6 +243,8 @@ export interface ChannelHubOptions {
   versions?: SettingsVersions
   /** A channel's settings file was brought up to date at recovery, for the self-check (pass 7, M-1). */
   onMigrated?: (channelId: string, from: number, to: number) => void
+  /** Each channel's reply private key (MIP2-1436 item 1); a map in memory without one. */
+  replyKeys?: ReplyKeys
 }
 
 export interface LaunchOptions {
@@ -253,6 +279,7 @@ export class ChannelHub {
   private readonly untrustedSessions = new Map<string, string>()
   private readonly launchOf: (sessionId: string) => LaunchOptions | null
   private readonly versions: SettingsVersions
+  private readonly replyKeys: ReplyKeys
   private readonly onMigrated: (channelId: string, from: number, to: number) => void
   /** Watches the channel root, where a channel's whole folder could be swapped (gate run 3, M-3). */
   private rootWatcher: FSWatcher | null = null
@@ -275,6 +302,7 @@ export class ChannelHub {
     this.longPollMs = opts.longPollMs ?? LONG_POLL_MS
     this.launchOf = opts.launchOf ?? (() => null)
     this.versions = opts.versions ?? memoryVersions()
+    this.replyKeys = opts.replyKeys ?? memoryReplyKeys()
     this.onMigrated = opts.onMigrated ?? (() => {})
   }
 
@@ -296,8 +324,11 @@ export class ChannelHub {
     if (Buffer.byteLength(socketPath) > SOCKET_PATH_LIMIT) {
       throw new Error(`socket path is ${Buffer.byteLength(socketPath)} bytes, over ${SOCKET_PATH_LIMIT}`)
     }
+    // Kept first, so a key the app couldn't keep leaves nothing behind.
+    const replyKey = this.newKeyFor(id)
     await mkdir(dir, { mode: 0o700 })
     const ch = new SessionChannel(id, dir, newSecret(), this.now(), true)
+    ch.replyKey = replyKey
     const settingsPath = join(dir, SETTINGS_FILE)
     // `wx`: never write through a file or link already there.
     const text = JSON.stringify(this.settingsFor(ch, socketPath, opts.isolation ?? 'none', opts.ultracode === true), null, 2)
@@ -309,11 +340,12 @@ export class ChannelHub {
   }
 
   /** The session's --settings file. */
-  settingsFor(ch: { secret: string }, socketPath: string, isolation: 'none' | 'worktree' = 'none', ultracode = false): object {
+  settingsFor(ch: { secret: string; replyKey: ReplyKey | null }, socketPath: string, isolation: 'none' | 'worktree' = 'none', ultracode = false): object {
     // The reporter mod's folder too: a session that edits it changes every session's mod (gate M-2).
     const deny = denyRules([this.root, this.modDir, ...(this.modRoot ? [this.modRoot] : []), ...this.denyAlso])
+    if (!ch.replyKey) throw new Error('a channel needs its reply key before its settings are written')
     return {
-      pluginConfigs: { [PLUGIN_KEY]: { options: { socketPath, secret: ch.secret, channelRoot: this.root } } },
+      pluginConfigs: { [PLUGIN_KEY]: { options: { socketPath, secret: ch.secret, channelRoot: this.root, replyKey: ch.replyKey.publicHex } } },
       permissions: { deny },
       env: { ...SESSION_ENV },
       // Edit in place unless the category says otherwise (D-011 item 2).
@@ -353,9 +385,28 @@ export class ChannelHub {
         // kept them in the folder): it's taken as version 2, the last shape a released build wrote, which already
         // has every deny rule. Only an exact v2 file migrates; anything else is marked (pass 8, M-1).
         const version = this.versions.get(id) ?? LAST_UNRECORDED_VERSION
-        if (altered !== null && version < SETTINGS_VERSION && this.settingsAltered(settings.data, join(dir, SOCKET_FILE), version) === null) {
+        const atStored = altered !== null && version < SETTINGS_VERSION ? this.settingsAltered(settings.data, join(dir, SOCKET_FILE), version) : altered
+        // A file the store recorded at an older version that fails is reported by what's wrong at that version.
+        if (altered !== null && this.versions.get(id) !== undefined && version < SETTINGS_VERSION && atStored !== null) altered = atStored
+        if (altered !== null && version < SETTINGS_VERSION && atStored === null) {
+          // A file from before reply keys gets one now; its running session keeps MAC-only replies until its next start.
+          ch.replyKey = this.newKeyFor(id)
           await this.migrate(ch, settings.data, version)
           altered = null
+        } else if (altered === null) {
+          // The key the session starts with must be the one the app holds (MIP2-1436 item 1).
+          const filed = settings.data.pluginConfigs?.[PLUGIN_KEY]?.options?.replyKey
+          const stored = this.storedKey(id)
+          if (stored && stored.publicHex === filed) ch.replyKey = stored
+          else if (stored) altered = 'its reply key'
+          else {
+            // None kept (a build without safeStorage, or a lost key): a new one, written in place. A session already
+            // running holds the old public key and refuses every reply until it restarts; the band offers that.
+            ch.replyKey = this.newKeyFor(id)
+            await this.migrate(ch, settings.data, SETTINGS_VERSION)
+            ch.keyPending = true
+            this.log(`channel ${id}: no reply key was kept for it; a new one is in its settings`)
+          }
         }
         // While the app was closed nothing should answer the socket. Something that does held the
         // secret and may have answered the session's prompts (gate run 2, M-1).
@@ -379,6 +430,7 @@ export class ChannelHub {
     const ch = this.channels.get(channelId)
     this.channels.delete(channelId)
     this.versions.delete(channelId)
+    this.replyKeys.delete(channelId)
     ch?.watcher?.close()
     await ch?.server?.close()
     const dir = join(this.root, channelId)
@@ -448,6 +500,8 @@ export class ChannelHub {
     const launch = this.launchOf(sessionId) ?? (await launchOptionsIn(settingsPath))
     const ch = new SessionChannel(old.id, old.dir, newSecret(), this.now(), true)
     ch.sessionId = sessionId
+    // A new reply key with the new secret (MIP2-1436 item 1).
+    ch.replyKey = newReplyKey()
     const text = JSON.stringify(this.settingsFor(ch, socketPath, launch.isolation ?? 'none', launch.ultracode === true), null, 2)
     const tmp = `${settingsPath}.rekey-${randomBytes(8).toString('hex')}`
     await rm(tmp, { force: true })
@@ -456,6 +510,7 @@ export class ChannelHub {
     old.watcher = null
     await old.server?.close()
     try {
+      this.replyKeys.set(old.id, exportReplyKey(ch.replyKey))
       await rename(tmp, settingsPath)
       ch.settingsSeen = { hash: sha256(text), ...(await statOf(settingsPath)) }
       this.versions.set(old.id, SETTINGS_VERSION)
@@ -467,6 +522,8 @@ export class ChannelHub {
       // server is closed, so it's held but not served: a session woken now gets no channel until the
       // next resume from the app re-keys it (pass 5, L-1).
       await rm(tmp, { force: true }).catch(() => {})
+      // The kept key goes back to the one the old file names.
+      if (old.replyKey) this.keepKey(old.id, old.replyKey)
       old.untrusted ??= why ?? `its re-key failed: ${err instanceof Error ? err.message : String(err)}`
       this.untrustedSessions.set(sessionId, old.untrusted)
       const held = this.channels.get(old.id)
@@ -530,6 +587,15 @@ export class ChannelHub {
       const ch = [...this.channels.values()].find(c => c.sessionId === sessionId)
       if (ch) this.markUntrusted(ch, why)
     }
+  }
+
+  /** Marks a session's channel untrusted from outside the channel: a restart the app refused (MIP2-1512). */
+  markSession(sessionId: string, why: string): void {
+    const ch = [...this.channels.values()].find(c => c.sessionId === sessionId)
+    if (!ch) return
+    // Already marked: it was stopped once, and something started it again, so it's stopped again.
+    if (ch.untrusted) this.onUntrusted(sessionId, ch.untrusted)
+    else this.markUntrusted(ch, why)
   }
 
   /** Closes the channel of a session that was removed. */
@@ -660,6 +726,7 @@ export class ChannelHub {
       contactAt: ch.contactAt,
       launched: ch.launched,
       offered: ch.offered,
+      ...(ch.keyPending ? { keyPending: true } : {}),
       prompts: ch.prompts.map(p => ({ at: p.at, submitted: p.state === 'submitted' })),
     }))
   }
@@ -702,6 +769,31 @@ export class ChannelHub {
     }
   }
 
+  /** The reply key kept for a channel, or null when none is kept or it doesn't read as one. */
+  private storedKey(channelId: string): ReplyKey | null {
+    try {
+      const der = this.replyKeys.get(channelId)
+      return der ? importReplyKey(der) : null
+    } catch {
+      return null
+    }
+  }
+
+  /** A new reply key for a channel, kept. Throws if it can't be kept, so nothing is written that the app couldn't sign for after a restart. */
+  private newKeyFor(channelId: string): ReplyKey {
+    const key = newReplyKey()
+    this.replyKeys.set(channelId, exportReplyKey(key))
+    return key
+  }
+
+  private keepKey(channelId: string, key: ReplyKey): void {
+    try {
+      this.replyKeys.set(channelId, exportReplyKey(key))
+    } catch (err) {
+      this.log(`channel ${channelId}: couldn't keep its reply key: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
   /** Rewrites a channel's settings file at the current version, keeping its secret and launch options (MIP2-1444). */
   private async migrate(ch: SessionChannel, data: SettingsData, from: number): Promise<void> {
     const wt = data.worktree as { bgIsolation?: unknown } | undefined
@@ -732,7 +824,8 @@ export class ChannelHub {
     if (Object.keys(configs).length !== 1) return 'extra plugin configs'
     if (Object.keys(configs[PLUGIN_KEY] ?? {}).join() !== 'options') return 'plugin config'
     const options = configs[PLUGIN_KEY]?.options as Record<string, unknown> | undefined
-    if (!options || Object.keys(options).sort().join() !== 'channelRoot,secret,socketPath') return 'channel options'
+    if (!options || Object.keys(options).sort().join() !== (version >= 4 ? 'channelRoot,replyKey,secret,socketPath' : 'channelRoot,secret,socketPath')) return 'channel options'
+    if (version >= 4 && (typeof options.replyKey !== 'string' || !REPLY_KEY_HEX.test(options.replyKey))) return 'reply key'
     if (options.socketPath !== socketPath || options.channelRoot !== this.root) return 'socket path'
     const perms = data.permissions as Record<string, unknown> | undefined
     if (!perms || Object.keys(perms).join() !== 'deny' || !Array.isArray(perms.deny)) return 'permissions'
@@ -884,6 +977,7 @@ export class ChannelHub {
     ch.server = new ChannelServer({
       socketPath,
       secret: ch.secret,
+      replyKey: ch.replyKey,
       now: this.now,
       checkPeer: fd => this.checkPeer(ch, fd),
       handlers: {
@@ -899,6 +993,7 @@ export class ChannelHub {
           }
           ch.file = file
           ch.receivedAt = this.now()
+          ch.keyPending = false
         },
         permission: (ask, signal) => this.hold(ch, ask, signal),
         permissionDone: requestId => void ch.pending.delete(requestId),

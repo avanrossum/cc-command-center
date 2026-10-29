@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { channelCall, channelFrom, channelHello, type ChannelEngine } from '../../../mod/hooks/channel.ts'
 import { CHANNEL_PATHS, type PermissionAsk } from '../../../mod/hooks/channel-wire.ts'
-import { ChannelHub, memoryVersions, PEER_CHECKS_MAX } from '../src/channel/hub.ts'
+import { ChannelHub, memoryReplyKeys, memoryVersions, PEER_CHECKS_MAX } from '../src/channel/hub.ts'
 import { parseLsof, PeerResolver } from '../src/channel/peer.ts'
 
 const A_TEXT = readFileSync(new URL('./fixtures/reporter-2.1.311-scratch-a.json', import.meta.url), 'utf8')
@@ -326,7 +326,7 @@ describe('retiring and re-keying a channel (gate run 3, M-1 to M-3)', () => {
   const hubAt = (root: string) => new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, onUntrusted: (id, why) => untrusted.push({ id, why }) })
   const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
   const optsOf = (settingsPath: string) =>
-    (JSON.parse(readFileSync(settingsPath, 'utf8')) as { pluginConfigs: Record<string, { options: { socketPath: string; secret: string; channelRoot: string } }> }).pluginConfigs['ccc-reporter@inline']!.options
+    (JSON.parse(readFileSync(settingsPath, 'utf8')) as { pluginConfigs: Record<string, { options: { socketPath: string; secret: string; channelRoot: string; replyKey?: string } }> }).pluginConfigs['ccc-reporter@inline']!.options
 
   it('stops the session of a channel swapped before it was bound, once it is (M-2)', async () => {
     const hub = hubAt(join(base, 'ch'))
@@ -419,9 +419,13 @@ describe('retiring and re-keying a channel (gate run 3, M-1 to M-3)', () => {
     const opts = after.pluginConfigs['ccc-reporter@inline'].options
     expect(opts.socketPath).toBe(before.socketPath)
     expect(opts.secret).not.toBe(before.secret)
-    // Everything but the secret is as the launch wrote it, ultracode included.
+    // A new reply key with the new secret (MIP2-1436 item 1).
+    expect(opts.replyKey).toMatch(/^[0-9a-f]{64}$/)
+    expect(opts.replyKey).not.toBe(before.replyKey)
+    // Everything but the secret and the reply key is as the launch wrote it, ultracode included.
     const wrote = JSON.parse(original)
     wrote.pluginConfigs['ccc-reporter@inline'].options.secret = opts.secret
+    wrote.pluginConfigs['ccc-reporter@inline'].options.replyKey = opts.replyKey
     expect(after).toEqual(wrote)
     expect(await channelHello(engine, channelFrom(opts)!)).toBe(true)
     await hub.closeAll()
@@ -581,13 +585,16 @@ describe('retiring and re-keying a channel (gate run 3, M-1 to M-3)', () => {
     const data = join(base, 'data')
     mkdirSync(data)
     const dropData = (d: Record<string, any>) => (d.permissions.deny = d.permissions.deny.filter((r: string) => !r.includes(data.slice(1))))
+    // Versions 1 to 3 have no reply key (version 4 added it).
+    const noKey = (d: Record<string, any>) => delete d.pluginConfigs['ccc-reporter@inline'].options.replyKey
     // A version-1 file: no data-folder rule and no env (versions 2 and 3 added them).
-    const asV1 = (d: Record<string, any>) => (dropData(d), delete d.env)
+    const asV1 = (d: Record<string, any>) => (dropData(d), delete d.env, noKey(d))
     /** A channel written at the current version, then edited, then recovered with the store saying `stored`. */
     const recoverAs = async (name: string, edit: (d: Record<string, any>) => void, stored: number | undefined) => {
       const root = join(base, name)
       const versions = memoryVersions()
-      const first = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, denyAlso: [data], versions })
+      const replyKeys = memoryReplyKeys()
+      const first = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, denyAlso: [data], versions, replyKeys })
       const l = await first.prepareLaunch()
       first.bind(l.channelId, A_ID)
       await first.closeAll()
@@ -598,7 +605,7 @@ describe('retiring and re-keying a channel (gate run 3, M-1 to M-3)', () => {
       else versions.set(l.channelId, stored)
       const logs: string[] = []
       const migrated: string[] = []
-      const second = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: x => logs.push(x), denyAlso: [data], versions, onMigrated: (id, from, to) => migrated.push(`${id} ${from}->${to}`) })
+      const second = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: x => logs.push(x), denyAlso: [data], versions, replyKeys, onMigrated: (id, from, to) => migrated.push(`${id} ${from}->${to}`) })
       await second.recover()
       const why = second.untrustedReason(A_ID)
       await second.closeAll()
@@ -609,30 +616,43 @@ describe('retiring and re-keying a channel (gate run 3, M-1 to M-3)', () => {
     expect(ok.why).toBeNull()
     expect(ok.after.pluginConfigs['ccc-reporter@inline'].options.secret).toBe(ok.before.pluginConfigs['ccc-reporter@inline'].options.secret)
     expect(ok.after.permissions.deny).toEqual(expect.arrayContaining([`Edit(/${data}/**)`]))
-    expect(ok.version).toBe(3)
+    expect(ok.version).toBe(4)
     expect(ok.after.env).toEqual({ CLAUDE_CODE_PLUGIN_DIR_WATCH: '0' })
+    expect(ok.after.pluginConfigs['ccc-reporter@inline'].options.replyKey).toMatch(/^[0-9a-f]{64}$/)
     expect(ok.migrated).toHaveLength(1)
     // Version 1 in the store, anything else changed: marked.
     const tampered = await recoverAs('v1t', d => (asV1(d), (d.pluginConfigs['ccc-reporter@inline'].options.socketPath = join(base, 'evil.sock'))), 1)
     expect(tampered.why).toMatch(/changed while the app was closed/)
     // The store says 3 and the rule is gone: marked. Nothing in the channel folder can make it a migration.
-    expect((await recoverAs('v3', dropData, 3)).why).toMatch(/\(permissions\)/)
-    // A version-2 file (rules, no env) migrates to 3; one whose env says otherwise at version 3 is marked.
-    expect((await recoverAs('v2', d => delete d.env, 2)).why).toBeNull()
-    expect((await recoverAs('v3e', d => (d.env.CLAUDE_CODE_PLUGIN_DIR_WATCH = '1'), 3)).why).toMatch(/\(env\)/)
+    expect((await recoverAs('v3', d => (dropData(d), noKey(d)), 3)).why).toMatch(/\(permissions\)/)
+    // A version-2 file (rules, no env) migrates; one whose env says otherwise at version 3 is marked.
+    expect((await recoverAs('v2', d => (delete d.env, noKey(d)), 2)).why).toBeNull()
+    expect((await recoverAs('v3e', d => ((d.env.CLAUDE_CODE_PLUGIN_DIR_WATCH = '1'), noKey(d)), 3)).why).toMatch(/\(env\)/)
+    // An exact version-3 file gets a reply key, secret kept (MIP2-1436 item 1).
+    const v3 = await recoverAs('v3k', noKey, 3)
+    expect(v3.why).toBeNull()
+    expect(v3.version).toBe(4)
+    expect(v3.after.pluginConfigs['ccc-reporter@inline'].options.replyKey).toMatch(/^[0-9a-f]{64}$/)
+    expect(v3.after.pluginConfigs['ccc-reporter@inline'].options.secret).toBe(v3.before.pluginConfigs['ccc-reporter@inline'].options.secret)
+    // At version 4, a reply key other than the one the app keeps is marked; an unchanged file isn't, and isn't rewritten.
+    expect((await recoverAs('v4k', d => (d.pluginConfigs['ccc-reporter@inline'].options.replyKey = 'ab'.repeat(32)), 4)).why).toMatch(/\(its reply key\)/)
+    const same = await recoverAs('v4', () => {}, 4)
+    expect(same.why).toBeNull()
+    expect(same.after).toEqual(same.before)
+    expect(same.migrated).toEqual([])
     // The store has no version for it and the file is version 1's: marked, not migrated.
     const unknown = await recoverAs('none', asV1, undefined)
     expect(unknown.why).toMatch(/changed while the app was closed/)
     expect(unknown.migrated).toEqual([])
     // A 1d3208c channel: an exact v2 file (no env) and an empty store. (Its settings-version file is never read now.)
     // Migrated, secret kept; nothing marked (pass 8, M-1).
-    const v2 = await recoverAs('d3208c', d => delete d.env, undefined)
+    const v2 = await recoverAs('d3208c', d => (delete d.env, noKey(d)), undefined)
     expect(v2.why).toBeNull()
     expect(v2.migrated).toHaveLength(1)
     expect(v2.after.env).toEqual({ CLAUDE_CODE_PLUGIN_DIR_WATCH: '0' })
     expect(v2.after.pluginConfigs['ccc-reporter@inline'].options.secret).toBe(v2.before.pluginConfigs['ccc-reporter@inline'].options.secret)
     // The same with a data-folder rule removed: marked.
-    expect((await recoverAs('d3208c-weak', d => (delete d.env, dropData(d)), undefined)).why).toMatch(/changed while the app was closed/)
+    expect((await recoverAs('d3208c-weak', d => (delete d.env, dropData(d), noKey(d)), undefined)).why).toMatch(/changed while the app was closed/)
   })
 
   it('marks a recovered file with another key beside options in its plugin config (pass 5, L-3)', async () => {

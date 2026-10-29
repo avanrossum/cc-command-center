@@ -41,7 +41,7 @@ import {
   type ReporterFile,
 } from './wire.ts'
 
-const VERSION = '0.6.1'
+const VERSION = '0.7.0'
 const WRITTEN_FILE_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit', 'Artifact'])
 /** How long a prompt is offered to the app before the mod stops asking. The dialog stays open throughout. */
 const PERMISSION_WAIT_MS = 30 * 60 * 1000

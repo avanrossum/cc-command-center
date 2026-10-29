@@ -97,6 +97,12 @@ export interface ChannelHealth {
   launched: boolean
   /** requestIds the mod has offered. */
   offered: number
+  /**
+   * Its reply key was replaced at recovery and no report has come since: a
+   * session started on the old key refuses every reply and sends only
+   * hellos, so it isn't connected until it restarts (MIP2-1436 item 1).
+   */
+  keyPending?: boolean
   /** Prompts relayed to it: when queued, and whether submitted. */
   prompts: { at: number; submitted: boolean }[]
 }
@@ -420,7 +426,7 @@ export class SelfCheck {
   private checkChannels({ channels, sessions, now }: SelfCheckInput): void {
     const alive = new Set(sessions.filter(s => s.pid.value !== null).map(s => s.sessionId))
     this.unconnected = channels
-      .filter(ch => !ch.untrusted && ch.contactAt === 0)
+      .filter(ch => !ch.untrusted && (ch.contactAt === 0 || ch.keyPending === true))
       .filter(ch => ch.launched || (ch.sessionId !== null && alive.has(ch.sessionId)))
       .filter(ch => now - Math.max(ch.createdAt, this.channelSince) > CHANNEL_DEADLINE_MS)
       .map(ch => ({ sessionId: ch.sessionId, since: ch.createdAt }))

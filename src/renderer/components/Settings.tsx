@@ -120,6 +120,21 @@ export function SettingsSheet({
                 <input type="range" min={7} max={14} step={1} value={days} onChange={e => void save({ rollOffDays: Number(e.target.value) })} />
               </label>
               <p className="note">The archive keeps every session; nothing is deleted.</p>
+              <div className="lbl">When the app quits</div>
+              <div className="seg" role="radiogroup" aria-label="When the app quits">
+                {(
+                  [
+                    ['ask', 'Ask'],
+                    ['close', 'Close sessions'],
+                    ['keep', 'Keep sessions running'],
+                  ] as const
+                ).map(([v, label]) => (
+                  <button key={v} type="button" role="radio" aria-checked={(s.quitSessions ?? 'ask') === v} className={(s.quitSessions ?? 'ask') === v ? 'on' : ''} onClick={() => void save({ quitSessions: v })}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="note">Sessions working or waiting on you always keep running. Only sessions started in this app are closed.</p>
               <div className="lbl">CC Command Center 0.24</div>
               <button type="button" className="link" onClick={onMove}>
                 Move sessions from CC Command Center 0.24…

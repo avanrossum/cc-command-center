@@ -9,6 +9,7 @@ import type { AppStore, Category } from './store.ts'
 import type { UpdateState } from './update-state.ts'
 import type { TipFacts, TipsResult } from './usage.ts'
 import type { SpendState } from './spend.ts'
+import type { QuitAnswer, QuitProgress, QuitRow, QuitSessions } from './quit.ts'
 
 export const IPC = {
   /** Renderer → main: the latest fleet snapshot, or null before the first poll. */
@@ -94,6 +95,11 @@ export const IPC = {
   openNeeds: 'app:open-needs',
   /** The app menu's Settings… item (MIP2-1459). */
   openSettings: 'app:open-settings',
+  /** The app's own Quit (MIP2-1528): main → renderer to ask, its progress; renderer → main to answer. */
+  quitAsk: 'quit:ask',
+  quitProgress: 'quit:progress',
+  quitAnswer: 'quit:answer',
+  quitPending: 'quit:pending',
   /** App updates (MIP2-1469). */
   updateGet: 'update:get',
   updateCheck: 'update:check',
@@ -247,7 +253,7 @@ export interface CccApi {
   /** Spend (MIP2-1498 §5): this month's simulated and real amounts, and which one shows. */
   getSpend(): Promise<SpendState | null>
   onSpend(listener: (s: SpendState) => void): () => void
-  setSpendSource(source: 'real' | 'simulated'): Promise<Result>
+  setSpendSource(source: 'real' | 'simulated' | 'credits'): Promise<Result>
   /** Null with no Console key; `end` is its last four characters. */
   adminKeyStatus(): Promise<{ end: string | null } | null>
   /** Tests a pasted key, or the saved one with no argument; the API's own message on failure. */
@@ -282,12 +288,20 @@ export interface CccApi {
   onNotice(listener: (text: string) => void): () => void
   /** Notices from the app's start, before the window could show them; each is returned once. */
   startupNotices(): Promise<string[]>
+  /** The menu's Quit or ⌘Q found closable sessions: show the modal with them (MIP2-1528). */
+  onQuitAsk(listener: (rows: QuitRow[]) => void): () => void
+  /** Sessions stopping before the app quits. */
+  onQuitProgress(listener: (p: QuitProgress) => void): () => void
+  /** The rows main is asking about now, for a window that opened after the ask; null when not asking. */
+  quitPending(): Promise<QuitRow[] | null>
+  /** The modal's answer. Main stops only what's closable when it arrives. */
+  quitAnswer(answer: QuitAnswer): Promise<Result>
   /** Clears the untrusted mark of a session that no longer exists: its channel is closed (MIP2-1518). Refused while it's listed. */
   clearGoneMark(sessionId: string): Promise<Result>
   onOpenSession(listener: (sessionId: string) => void): () => void
   onOpenNeeds(listener: () => void): () => void
-  /** The app menu's Settings… (⌘,) was chosen (MIP2-1459). */
-  onOpenSettings(listener: () => void): () => void
+  /** The app menu's Settings… (⌘,) was chosen (MIP2-1459), or Check for Updates…, which opens on About (MIP2-1517). */
+  onOpenSettings(listener: (section: 'About' | null) => void): () => void
   /** Out of the archive, as Ended with its clock reset; `keep` also sets Never roll off. Resolves to how many. */
   resurrect(sessionIds: string[], keep?: boolean): Promise<Result<{ count: number }>>
   /** Archive by hand (MIP2-1370 §4.1). */
@@ -314,6 +328,7 @@ export interface CccApi {
     terminalFontSize?: number
     betaUpdates?: boolean
     sidebarWidth?: number
+    quitSessions?: QuitSessions
   }): Promise<Result>
   /** The category auto-assign would give a session in this folder, and the folder it keys on. */
   guessCategory(cwd: string): Promise<{ categoryId: string | null; folderKey: string } | null>

@@ -25,7 +25,7 @@ import {
 } from '../../../../mod/hooks/channel-wire.ts'
 import type { ReporterFile } from '../../../../mod/hooks/wire.ts'
 import { validateReporterFile } from '../reporter-schema.ts'
-import { sign, verify } from './crypto.ts'
+import { sign, signReply, verify, type ReplyKey } from './crypto.ts'
 import { parsePermissionAsk } from './messages.ts'
 
 export interface ChannelHandlers {
@@ -47,6 +47,8 @@ export interface ChannelHandlers {
 export interface ChannelServerOptions {
   socketPath: string
   secret: string
+  /** Signs every reply (MIP2-1436 item 1); without it replies carry the MAC alone. */
+  replyKey?: ReplyKey | null
   handlers: ChannelHandlers
   now?: () => number
   /**
@@ -74,6 +76,7 @@ class Refused extends Error {}
 export class ChannelServer {
   readonly socketPath: string
   private readonly secret: string
+  private readonly replyKey: ReplyKey | null
   private readonly handlers: ChannelHandlers
   private readonly now: () => number
   /** Requests signed before this server started are refused, so nothing captured earlier replays. */
@@ -97,6 +100,7 @@ export class ChannelServer {
   constructor(opts: ChannelServerOptions) {
     this.socketPath = opts.socketPath
     this.secret = opts.secret
+    this.replyKey = opts.replyKey ?? null
     this.handlers = opts.handlers
     this.now = opts.now ?? Date.now
     this.startedAt = this.now()
@@ -192,9 +196,11 @@ export class ChannelServer {
     const reply = (status: number, payload?: unknown) => {
       if (res.writableEnded || res.destroyed) return
       const text = payload === undefined ? '' : JSON.stringify(payload)
+      const signed = replyText(nonce, status, text)
       res.writeHead(status, {
         'content-type': 'application/json',
-        [HEADER.mac]: sign(this.secret, replyText(nonce, status, text)),
+        [HEADER.mac]: sign(this.secret, signed),
+        ...(this.replyKey ? { [HEADER.sig]: signReply(this.replyKey, signed) } : {}),
       })
       res.end(text)
     }

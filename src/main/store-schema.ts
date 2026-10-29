@@ -92,12 +92,13 @@ function settings(v: unknown): AppSettings {
     }),
   )
   for (const k of ['showOutside', 'notifyEnabled', 'showParked', 'betaUpdates'] as const) if (bool(v[k])) out[k] = v[k]
-  for (const k of ['importedHideUnmanaged', 'hideOutsideAsked', 'notifyNeedsYou', 'notifyTurn', 'arbiterEnabled'] as const) if (bool(v[k])) out[k] = v[k]
+  for (const k of ['importedHideUnmanaged', 'hideOutsideAsked', 'notifyNeedsYou', 'notifyTurn', 'arbiterEnabled', 'quitClosedNoticed'] as const) if (bool(v[k])) out[k] = v[k]
   if (num(v.firstRunDoneAt)) out.firstRunDoneAt = v.firstRunDoneAt
   if (num(v.arbiterCapUsd) && v.arbiterCapUsd >= 0 && v.arbiterCapUsd <= 100) out.arbiterCapUsd = v.arbiterCapUsd
   if (Number.isInteger(v.rollOffDays) && (v.rollOffDays as number) >= 7 && (v.rollOffDays as number) <= 14) out.rollOffDays = v.rollOffDays as number
   if (Array.isArray(v.rollOffNotice)) out.rollOffNotice = v.rollOffNotice.filter(isSessionId).slice(0, 200)
-  if (v.spendSource === 'real' || v.spendSource === 'simulated') out.spendSource = v.spendSource
+  if (v.spendSource === 'real' || v.spendSource === 'simulated' || v.spendSource === 'credits') out.spendSource = v.spendSource
+  if (v.quitSessions === 'ask' || v.quitSessions === 'close' || v.quitSessions === 'keep') out.quitSessions = v.quitSessions
   if (Number.isInteger(v.sidebarWidth) && (v.sidebarWidth as number) >= SIDEBAR_WIDTH.min && (v.sidebarWidth as number) <= SIDEBAR_WIDTH.max) out.sidebarWidth = v.sidebarWidth as number
   if (Array.isArray(v.switcherPins)) out.switcherPins = [...new Set(v.switcherPins.filter(isSessionId))].slice(0, SWITCHER_PINS_MAX)
   if (Array.isArray(v.switcherRecent)) out.switcherRecent = [...new Set(v.switcherRecent.filter(isSessionId))].filter(id => !out.switcherPins?.includes(id)).slice(-SWITCHER_RECENT_MAX)
@@ -158,7 +159,12 @@ export function checkStore(raw: unknown): AppStore {
   if (isObj(raw.channelVersions)) {
     for (const [id, v] of Object.entries(raw.channelVersions)) if (/^[0-9a-f]{8}$/.test(id) && Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 99) channelVersions[id] = v as number
   }
-  return { version: 1, categories, sessions, settings: settings(raw.settings), importedAt: num(raw.importedAt) ? raw.importedAt : null, ...(Object.keys(channelVersions).length ? { channelVersions } : {}) }
+  const q = isObj(raw.lastQuit) ? raw.lastQuit : null
+  const lastQuit =
+    q && Number.isInteger(q.closed) && (q.closed as number) >= 0 && bool(q.silent) && Array.isArray(q.failed)
+      ? { closed: Math.min(q.closed as number, 1000), silent: q.silent as boolean, failed: q.failed.filter(n => str(n, 200)).slice(0, 50) as string[] }
+      : null
+  return { version: 1, categories, sessions, settings: settings(raw.settings), importedAt: num(raw.importedAt) ? raw.importedAt : null, ...(Object.keys(channelVersions).length ? { channelVersions } : {}), ...(lastQuit ? { lastQuit } : {}) }
 }
 
 /** self-check.json as read from disk: per version, each check's state, detail and rule (gate L-3). */

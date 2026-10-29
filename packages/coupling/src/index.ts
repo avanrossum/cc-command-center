@@ -21,6 +21,7 @@ export { CHANNEL_SOCKETS, memoryStore, MOD_RELOAD, MOD_INTEGRITY, parseVersion, 
 export { hostedSessions, SupervisorWatchdog, type WatchdogOptions, type WatchdogState } from './watchdog.ts'
 export { ASK_GRACE_MS, FleetPoller, livePending, MOD_SILENCE_MS, type FleetListener, type FleetPollerOptions } from './fleet-poller.ts'
 export { DEFAULT_USAGE_DIR, readUsageDir } from './usage-files.ts'
+export { parseUsageReport, UsageReportReader, USAGE_REPORT_ARGS, type UsageCredits, type UsageReport, type UsageRow } from './usage-report.ts'
 export {
   parseEnvelope,
   parseReporterFile,
@@ -30,7 +31,7 @@ export {
   type ReporterRead,
 } from './reporter.ts'
 export { PeerResolver } from './channel/peer.ts'
-export { ChannelHub, DEFAULT_CHANNEL_ROOT, type AnswerInput, type ChannelHubOptions, type ChannelLaunch, type PromptStatus } from './channel/hub.ts'
+export { ChannelHub, DEFAULT_CHANNEL_ROOT, memoryReplyKeys, type ReplyKeys, type AnswerInput, type ChannelHubOptions, type ChannelLaunch, type PromptStatus } from './channel/hub.ts'
 export { validateReporterFile, type Validated } from './reporter-schema.ts'
 export {
   NotBuiltYet,

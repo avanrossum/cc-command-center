@@ -111,6 +111,9 @@ export function checkSettings(v: unknown): Record<string, boolean | number | str
     } else if (['notifyEnabled', 'notifyNeedsYou', 'notifyTurn', 'arbiterEnabled', 'showOutside', 'hideOutsideAsked', 'showParked', 'betaUpdates'].includes(k)) {
       if (typeof val !== 'boolean') return null
       out[k] = val
+    } else if (k === 'quitSessions') {
+      if (val !== 'ask' && val !== 'close' && val !== 'keep') return null
+      out[k] = val
     } else if (k === 'sidebarWidth') {
       if (typeof val !== 'number' || !Number.isInteger(val) || val < SIDEBAR_WIDTH.min || val > SIDEBAR_WIDTH.max) return null
       out[k] = val

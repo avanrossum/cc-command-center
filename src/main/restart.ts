@@ -11,8 +11,9 @@
 // reading the file as the process starts, which the app can't close, since
 // passing the options explicitly turns a resume into a copy (QA MIP2-1505);
 // and the supervisor's own restart of a session that exits unexpectedly,
-// which the app neither starts nor sees. Detecting the latter (a process
-// change the app didn't start) is 1.0.2 work.
+// which the app doesn't start. That one is caught after the fact: a process
+// change the app didn't start runs the same verdict (restart-watch.ts,
+// MIP2-1512).
 
 import type { SessionHost } from '@ccc/coupling'
 import { ModStuck } from './resume.ts'

@@ -2,7 +2,7 @@
 // package's fleet poller, self-check and supervisor watchdog, and shows the
 // window. It reads Claude Code only through @ccc/coupling.
 
-import { chmodSync, existsSync, lstatSync, mkdirSync, realpathSync, statSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import {
@@ -16,6 +16,7 @@ import {
   FleetPoller,
   parseVersion,
   readUsageDir,
+  UsageReportReader,
   removeLegacyReporterDir,
   resolveClaudeBinary,
   SelfCheck,
@@ -50,6 +51,7 @@ import { registerSpend } from './spend-control.ts'
 import type { SpendState } from '../shared/spend.ts'
 import type { SessionSnapshot } from '@ccc/contract'
 import { ArbiterKey, removeAdminKeyAtStart } from './arbiter-key.ts'
+import { replyKeyStore } from './reply-keys.ts'
 import { registerArtifacts } from './artifacts.ts'
 import { registerFirstRun } from './first-run-control.ts'
 import { claudeSettingsPath } from './mailbox.ts'
@@ -64,6 +66,10 @@ import { restartVerdict } from './mod-verdict.ts'
 import type { SessionMeta } from '../shared/store.ts'
 import { inArchive } from '../shared/lifecycle.ts'
 import { wireHosts } from './restart.ts'
+import { recordRestarts, RestartWatch, unexplainedRestart } from './restart-watch.ts'
+import { DISPLAY_NAME, nameToPin } from './app-name.ts'
+import { QuitControl } from './quit-control.ts'
+import { checkQuitAnswer, closable, quitNotices } from '../shared/quit.ts'
 import { clearGoneRefusal } from './resume.ts'
 import { checkModFolders, copyTo, MOD_FOLDERS_MAX, modDir, modHash, modSource, type ModHealed } from './reporter-mod.ts'
 import { backfillVersion, savedOptionsRefusal } from './mod-backfill.ts'
@@ -82,9 +88,16 @@ function fatal(err: unknown): never {
   const why = err instanceof Error ? err.message : String(err)
   console.error(`CC Command Center can't start: ${why}`)
   // Said where Alex sees it, not only in a log (pass 5, M-5). Safe before ready.
-  dialog.showErrorBox("CC Command Center App can't start", why)
+  dialog.showErrorBox(`${DISPLAY_NAME} can't start`, why)
   app.exit(1)
   process.exit(1)
+}
+
+// The app's name, pinned at the top level so the Keychain item every stored key is encrypted under can't move,
+// whatever the shown name (MIP2-1532; app-name.ts).
+{
+  const pin = nameToPin(app.getName())
+  if (pin) app.setName(pin)
 }
 
 // A dry-run test build isolates itself, environment or not (MIP2-1469): a ShipIt relaunch has none.
@@ -156,6 +169,10 @@ if (app.commandLine.hasSwitch('remote-debugging-port') && !debugPortAllowed(proc
 applyBeforeReady()
 
 let poller: FleetPoller | null = null
+/** Claude Code's /usage reader (MIP2-1522); null under QA's synthetic usage folder. */
+let usageReport: UsageReportReader | null = null
+/** Sends the spend again after a /usage read brought credits; set once the spend is set up. */
+let onUsageRead = () => {}
 let hub: ChannelHub | null = null
 let watchdog: SupervisorWatchdog | null = null
 let pool: AttachPool | null = null
@@ -218,8 +235,14 @@ app.whenReady().then(start).catch(fatal)
 
 async function start(): Promise<void> {
   applyWhenReady(join(DIST, 'renderer'))
-  // Settings… (⌘,) in the app menu (MIP2-1459).
-  Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(app.name, () => broadcast(IPC.openSettings))))
+  // Settings… (⌘,) in the app menu (MIP2-1459). Check for Updates… is added once the updater is set up.
+  // Quit… goes to the quit control once it exists (MIP2-1528); until then, a plain quit.
+  let requestQuit = () => app.quit()
+  const setMenu = (checkUpdates: (() => void) | null) =>
+    Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(DISPLAY_NAME, () => broadcast(IPC.openSettings), checkUpdates, () => requestQuit())))
+  // app.name stays APP_NAME for the Keychain; About shows the name Alex sees (MIP2-1532).
+  app.setAboutPanelOptions({ applicationName: DISPLAY_NAME })
+  setMenu(null)
   // Alex's login PATH for every claude the app runs: from the Finder the app has launchd's minimal one (MIP2-1457).
   // Resolved in the background; every claude the runner starts waits for it, so start() doesn't (pass 8, L-2).
   const loginReady = resolveLoginPath().then(login => {
@@ -246,6 +269,14 @@ async function start(): Promise<void> {
       .catch(err => console.warn(`stopping ${id.slice(0, 8)} after its channel changed: ${String(err)}`))
       .then(() => hub?.rekey(id, { keepMark: true }))
       .catch(err => console.warn(`new secret for ${id.slice(0, 8)} after its channel changed: ${String(err)}`))
+  }
+  // A supervisor restart the verdict refuses (MIP2-1512): marked through its channel, which stops it and says why; a
+  // session with no channel is marked and stopped here.
+  const markRestarted = (id: string, why: string) => {
+    if (hub?.channelOf(id)) return hub.markSession(id, why)
+    storeRef?.markUntrusted(id, why)
+    untrustedStop(id)
+    broadcast(IPC.appNotice, `Stopped a session: ${why}.`)
   }
   // Mod versions whose changed copy couldn't be moved aside: the watchdog doesn't respawn their sessions (pass 5, H-1).
   const stuckVersions = new Set<string>()
@@ -373,6 +404,8 @@ async function start(): Promise<void> {
     launchOf: id => store.get().sessions[id]?.launch ?? null,
     // Each channel's settings version, kept in the store, not the channel's folder (pass 7, M-1).
     versions: store.channelVersions(),
+    // Each channel's reply key, encrypted with safeStorage, so a recovered channel still signs (MIP2-1436 item 1, D-027).
+    replyKeys: replyKeyStore(join(app.getPath('userData'), 'reply-keys'), safeStorage),
     onMigrated: (id, from, to) => migrated.push(`${id} from version ${from} to ${to}`),
     onUntrusted: (id, why) => {
       if (!id) return
@@ -390,6 +423,16 @@ async function start(): Promise<void> {
   // Every lifecycle command's arguments, exit code and output, prompts and secrets cut (MIP2-1446).
   const commandLog = new CommandLog(join(app.getPath('userData'), 'claude-commands.log'))
   const run = commandLog.wrap(createClaudeRunner())
+  // Claude Code's own /usage, the meter's main source (MIP2-1522), run in an empty folder the app owns, made fresh at
+  // each start, with the user's settings left out so a poll fires none of their hooks, MCP servers or plugins
+  // (USAGE_REPORT_ARGS; Research, MIP2-1530). QA's synthetic folder never uses it.
+  if (usageDir === null) {
+    const cwd = join(app.getPath('userData'), 'usage-run')
+    rmSync(cwd, { recursive: true, force: true })
+    mkdirSync(cwd, { recursive: true, mode: 0o700 })
+    usageReport = new UsageReportReader({ run: createClaudeRunner(), cwd, log: line => console.warn(line), onRead: () => onUsageRead() })
+    usageReport.start()
+  }
   // Detect and degrade (DECISION item 4): results per Claude Code version.
   const selfCheck = new SelfCheck(fileStore(join(app.getPath('userData'), 'self-check.json')))
   selfCheckRef = selfCheck
@@ -430,7 +473,9 @@ async function start(): Promise<void> {
   const spawnClaude = commandLog.wrapSpawner(createClaudeSpawner())
   // One start for the host and the watchdog, at most one per 10 s, so they never start two at once (pass 9, L-5).
   const startDaemon = sharedSupervisorStart(() => spawnClaude(['daemon', 'run']))
-  const host = new SupervisorHost({
+  // Every restart the app starts is recorded first, so a process change it didn't start stands out (MIP2-1512).
+  const restartWatch = new RestartWatch()
+  const host = recordRestarts(new SupervisorHost({
     run,
     binary,
     channels,
@@ -445,12 +490,12 @@ async function start(): Promise<void> {
       selfCheck.addStrays(ids)
       broadcast(IPC.appNotice, `Claude Code started ${ids.length === 1 ? 'a session' : `${ids.length} sessions`} the app can't account for (${ids.map(i => i.slice(0, 8)).join(', ')}). Check the session list.`)
     },
-  })
+  }), restartWatch)
   hostRef = host
   // The host every restart the app starts goes through: resume, the watchdog's respawn, the respawn before a prompt,
   // and an attach to a stopped session each ask the verdict at the moment of the restart (gate pass 18, H-1, M-2;
-  // pass 19, H-1). The supervisor's own restart of a session that exits is the one the app neither starts nor sees
-  // (restart.ts; detecting it is 1.0.2 work).
+  // pass 19, H-1). The supervisor's own restart of a session that exits is the one the app doesn't start; the poll
+  // below catches it after the fact (MIP2-1512).
   const hosts = wireHosts(host, sessionModVerdict, id => {
     const s = fleet.current()?.sessions.find(x => x.sessionId === id)
     return !s || s.pid.value === null || s.pid.stale
@@ -463,6 +508,8 @@ async function start(): Promise<void> {
     // QA's synthetic folder is read whole; the live one only for the sessions the app lists (MIP2-1520).
     readUsage: listed => (usageDir ? readUsageDir(usageDir) : readUsageDir(undefined, undefined, id => listed.has(id))),
     usageFileOnly: usageDir !== null,
+    readReport: () => usageReport?.current() ?? null,
+    readReportExtra: () => usageReport?.extra() ?? null,
     selfCheck,
     readChannels: () => channels.health(),
     readVersion: async () => parseVersion(await run(['--version'])),
@@ -601,6 +648,44 @@ async function start(): Promise<void> {
     return { ok: true }
   })
   ipcMain.handle(IPC.startupNotices, event => (isTrustedSender(event) ? startupNotices.splice(0) : []))
+  // The app's own Quit (MIP2-1528): what the last one closed or failed to, then the control for this run.
+  const lastQuit = store.takeLastQuit()
+  if (lastQuit) {
+    // The silent-close toast shows once, the first time the remembered choice skipped the modal (§6).
+    const once = lastQuit.silent && store.get().settings.quitClosedNoticed === true ? { ...lastQuit, silent: false } : lastQuit
+    startupNotices.push(...quitNotices(once))
+    if (lastQuit.silent && lastQuit.closed > 0) store.updateSettings({ quitClosedNoticed: true })
+  }
+  const quitControl = new QuitControl({
+    rows: () => closable(poller?.current()?.sessions ?? [], store.get().sessions),
+    setting: () => store.get().settings.quitSessions ?? 'ask',
+    // With every window closed (the app keeps running on macOS), one opens to ask; it reads the rows once loaded.
+    ask: rows => {
+      const win = BrowserWindow.getAllWindows().find(w => !w.isDestroyed()) ?? createWindow()
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+      broadcast(IPC.quitAsk, rows)
+    },
+    progress: p => broadcast(IPC.quitProgress, p),
+    stop: id => host.stop(id),
+    nameOf: id => {
+      const s = poller?.current()?.sessions.find(x => x.sessionId === id)
+      return store.get().sessions[id]?.name || s?.name.value || s?.cwd.value?.split('/').filter(Boolean).at(-1) || `Session ${id.slice(0, 8)}`
+    },
+    // A newly remembered close gets its one toast on the next launch (§6).
+    remember: choice => store.updateSettings({ quitSessions: choice, ...(choice === 'close' ? { quitClosedNoticed: false } : {}) }),
+    report: r => store.setLastQuit(r),
+    quit: () => app.quit(),
+    log: line => console.warn(line),
+  })
+  requestQuit = () => quitControl.request()
+  ipcMain.handle(IPC.quitPending, event => (isTrustedSender(event) ? quitControl.pending() : null))
+  ipcMain.handle(IPC.quitAnswer, (event, answer: unknown) => {
+    if (!isTrustedSender(event)) return { ok: false, error: 'untrusted sender' }
+    const a = checkQuitAnswer(answer)
+    return a ? quitControl.answer(a) : { ok: false, error: 'not a quit answer' }
+  })
   // The Arbiter (MIP2-1411): off until a key is saved; reruns only when the waiting set changes.
   const arbiterLog = new ArbiterLog(join(app.getPath('userData'), 'arbiter-log.jsonl'))
   const arbiter = new Arbiter({
@@ -638,12 +723,16 @@ async function start(): Promise<void> {
   const adminKey = new ArbiterKey(join(app.getPath('userData'), 'admin-key.bin'), safeStorage, 'spend')
   const ledger = new SpendLedger(join(app.getPath('userData'), 'spend.json'))
   spendLedger = ledger
-  const spendState = (): SpendState => ({
-    source: store.get().settings.spendSource ?? (adminKey.has() ? 'real' : 'simulated'),
-    simulated: ledger.current(Date.now()),
-    real: realSpend.current(),
-  })
+  const spendState = (): SpendState => {
+    const c = usageReport?.credits() ?? null
+    const credits = c ? { ...c.credits, at: c.at } : null
+    const fallback = adminKey.has() ? 'real' : 'simulated'
+    const chosen = store.get().settings.spendSource ?? fallback
+    // Credits is never the default, and a choice of it shows the default while they aren't reported (MIP2-1498 §9.1).
+    return { source: chosen === 'credits' && !credits ? fallback : chosen, simulated: ledger.current(Date.now()), real: realSpend.current(), credits }
+  }
   const sendSpend = () => broadcast(IPC.spendUpdate, spendState())
+  onUsageRead = sendSpend
   const realSpend = new RealSpendPoller(() => adminKey.get(), fetch as unknown as Fetch, sendSpend)
   noteSpend = sessions => ledger.observe(sessions, Date.now()) && sendSpend()
   registerSpend({ state: spendState, real: realSpend, adminKey, setSource: s => store.setSpendSource(s), changed: sendSpend })
@@ -670,6 +759,8 @@ async function start(): Promise<void> {
   const updates = setUpUpdates(app.isPackaged, s => broadcast(IPC.updateUpdate, s), () => betaUpdatesOn(store.get().settings.betaUpdates, app.getVersion()))
   registerUpdates(updates)
   updates.start()
+  // The app menu's Check for Updates… (MIP2-1517): the About button's check, shown in Settings › About. Not on a build that can't update.
+  if (updates.current().phase !== 'off') setMenu(() => (broadcast(IPC.openSettings, 'About'), void updates.check(true)))
   registerFirstRun({
     store,
     key: arbiterKey,
@@ -705,6 +796,14 @@ async function start(): Promise<void> {
   /** The last name each session had, for the toast once it has left the list. */
   const lastNames = new Map<string, string>()
   poller.subscribe(snapshot => {
+    // A process the app didn't start, on a background session it launched: the supervisor's own restart, checked as
+    // every restart the app starts is. A refusal stops the session and marks it (MIP2-1512).
+    const watched = snapshot.sessions.filter(s => s.kind.value === 'background' && store.get().sessions[s.sessionId]?.launch)
+    for (const id of restartWatch.observe(watched.map(s => ({ sessionId: s.sessionId, pid: s.pid.stale ? null : s.pid.value, startedAt: s.startedAt.value })))) {
+      const why = unexplainedRestart(id, sessionModVerdict)
+      void commandLog.note('unexplained-restart', { sessionId: id, refused: why })
+      if (why) markRestarted(id, why)
+    }
     // A control path the self-check failed is switched off; its sessions keep their dialog.
     channels.setControl(snapshot.selfCheck?.controlOff ?? [], snapshot.selfCheck?.controlOffFor ?? [])
     // New sessions take a category by folder before the renderer sees them (spec MIP2-1370 §7).
@@ -760,6 +859,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   poller?.stop()
+  usageReport?.stop()
   spendLedger?.save()
   // The supervisor the watchdog started is detached and stays: sessions outlive the app.
   watchdog?.stop()

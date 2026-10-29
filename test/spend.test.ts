@@ -113,6 +113,7 @@ describe('the indicator (MIP2-1498 §5.1, §5.4)', () => {
     source: 'simulated',
     simulated: { totalUsd: 184.2, todayUsd: 0, topSessions: [], byModel: [], noCost: 0 },
     real: { configured: false, totalUsd: null, todayUsd: null, byModel: [], at: null, error: null, errorAt: null },
+    credits: null,
     ...over,
   })
   it('marks simulated with ≈, real with no key as $—, and a failed real poll as stale', () => {

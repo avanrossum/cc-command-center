@@ -6,7 +6,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { Pace, Reading, WindowKind } from '../model/pace.ts'
-import { plainHelp, statusLine, tipFacts, type SessionShare } from '../model/usage-help.ts'
+import { extraStatusLine, plainHelp, scopedRisk, scopedTodo, statusLine, tipFacts, type ExtraLimit, type SessionShare } from '../model/usage-help.ts'
+import type { CreditsSpend } from '../../shared/spend.ts'
 import type { TipsResult } from '../../shared/usage.ts'
 
 const clockText = (ms: number) => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
@@ -22,6 +23,8 @@ function worse(paces: Record<WindowKind, Pace>): WindowKind {
 export function UsagePanel({
   paces,
   lists,
+  extras = [],
+  credits = null,
   shares,
   sharesSince = null,
   arbiterOn,
@@ -31,6 +34,10 @@ export function UsagePanel({
 }: {
   paces: Record<WindowKind, Pace>
   lists: Record<WindowKind, readonly Reading[]>
+  /** Limits beside 5h and 7d from Claude Code's /usage (MIP2-1498 §9.2). */
+  extras?: readonly ExtraLimit[]
+  /** Usage credits, when Claude Code reports them, for the risk line (§9.1). */
+  credits?: CreditsSpend | null
   shares: readonly SessionShare[]
   /** When the shares start: the later of the 5h window's start and when the app began counting it. */
   sharesSince?: number | null
@@ -63,9 +70,13 @@ export function UsagePanel({
   }, [])
 
   const kind = worse(paces)
-  const plain = plainHelp(kind, paces[kind], lists[kind], shares, now)
+  const plain = plainHelp(kind, paces[kind], lists[kind], shares, now, credits)
+  const quiet = (p: Pace) => p.state === 'onpace' || p.state === 'learning'
   // Nothing to slow down for: no advice, and no risk line (UX review, MIP2-1500).
-  const calm = (['5h', '7d'] as const).every(k => paces[k].state === 'onpace' || paces[k].state === 'learning')
+  const windowsCalm = (['5h', '7d'] as const).every(k => quiet(paces[k]))
+  const calm = windowsCalm && extras.every(x => !x.pace || quiet(x.pace))
+  const scopedRisks = extras.flatMap(x => scopedRisk(x) ?? [])
+  const scopedTodos = extras.flatMap(x => scopedTodo(x, shares) ?? [])
   const sinceText = sharesSince === null ? '' : clockText(sharesSince)
   // The shares always cover the 5h window; said so when the panel is about the week.
   const sinceLabel = !sinceText ? '' : kind === '7d' ? ` · since the 5h window began at ${sinceText}` : ` · since ${sinceText}`
@@ -75,6 +86,9 @@ export function UsagePanel({
       <div className="up-sec">
         <p>{statusLine('5h', paces['5h'])}</p>
         <p>{statusLine('7d', paces['7d'])}</p>
+        {extras.map(x => (
+          <p key={x.key}>{extraStatusLine(x)}</p>
+        ))}
       </div>
       <div className="up-sec">
         <div className="up-h">This app's sessions{sinceLabel}</div>
@@ -113,13 +127,18 @@ export function UsagePanel({
             <p>Both windows are on pace.</p>
           ) : (
             <>
-              {plain.risk && (
+              {!windowsCalm && plain.risk && (
                 <p>
                   <b>Risk:</b> {plain.risk}
                 </p>
               )}
+              {scopedRisks.map(r => (
+                <p key={r}>
+                  <b>Risk:</b> {r}
+                </p>
+              ))}
               <div className="up-h">What to do</div>
-              {plain.todo.map(t => (
+              {[...scopedTodos, ...plain.todo].map(t => (
                 <p key={t}>{t}</p>
               ))}
             </>

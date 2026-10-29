@@ -17,6 +17,8 @@ export type FieldSource =
    * sessions report through the mod.
    */
   | 'statusline'
+  /** Claude Code's own `/usage`, read with `claude -p` (MIP2-1522): the usage meter's main source. */
+  | 'usage-report'
   /** A labeled fallback read of the transcript. None is planned. */
   | 'fallback-transcript'
   /** A labeled fallback read of the terminal screen. None is planned. */
@@ -27,6 +29,7 @@ export const FIELD_SOURCES: readonly FieldSource[] = [
   'mod',
   'hook',
   'statusline',
+  'usage-report',
   'fallback-transcript',
   'fallback-screen',
 ]

@@ -587,3 +587,27 @@ button.arb { width: 100%; background: none; border: 0; border-top: 1px solid var
 /* An informational band (MIP2-1518): plain, no warning color. */
 .band.info { background: none; border: 1px solid var(--cc-hairline); color: var(--cc-meta); }
 .band-t code { font: 0.95em var(--f-mono); }
+
+/* The quit modal (MIP2-1528, spec MIP2-1462 §4, §5, §7). */
+.sheet.quit-sheet { width: 420px; }
+.sheet.quit-sheet.wide { width: 520px; }
+.quit-sheet p { margin: 0; font-size: 13px; color: var(--cc-text); }
+.quit-sheet .grow { flex: 1; }
+.quit-warn-g { color: var(--cc-needs); }
+.sheet .quit-remember, .sheet .quit-row, .sheet .quit-list .cat-h { flex-direction: row; align-items: center; gap: 8px; }
+.sheet .quit-remember { color: var(--cc-text); font-size: 13px; }
+.quit-list { max-height: 360px; overflow: auto; border: 1px solid var(--cc-hairline); border-radius: 6px; padding-bottom: 6px; }
+.sheet .quit-row { padding: 5px 12px 5px 22px; color: var(--cc-text); font-size: 13px; }
+.quit-row .quit-name { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; text-overflow: ellipsis; }
+.quit-row .quit-note { color: var(--cc-dim); font-size: 11px; }
+.quit-row .quit-state { color: var(--cc-meta); font: 11px var(--f-mono); }
+.quit-row .quit-age { color: var(--cc-meta); font: 11px var(--f-mono); min-width: 28px; text-align: right; }
+.quit-progress { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.quit-progress .quit-mark { display: inline-block; width: 14px; color: var(--cc-meta); }
+
+/* Usage credits' cap bar (MIP2-1498 §9.1): the usage bars' colors and thresholds. */
+.credits-bar { height: 4px; border-radius: 2px; background: var(--cc-hairline); position: relative; overflow: hidden; display: block; }
+.credits-bar b { position: absolute; inset: 0 auto 0 0; background: var(--cc-meter); }
+.credits-bar.warm b { background: var(--cc-meter-warm); }
+.credits-bar.hot b { background: var(--cc-meter-hot); }
+.seg button:disabled { opacity: .45; cursor: default; }

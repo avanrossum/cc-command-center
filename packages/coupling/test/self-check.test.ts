@@ -206,6 +206,16 @@ describe('SelfCheck', () => {
     expect(r.unconnected).toEqual([])
   })
 
+  it('counts a channel whose reply key was replaced as not connected, though its hellos reach the app (MIP2-1436 item 1)', () => {
+    const check = new SelfCheck(memoryStore())
+    check.setVersion(NEW)
+    const B = 'c0ffee05-0000-4000-8000-00000000000b'
+    const pending = channel({ sessionId: B, contactAt: NOW - 1000, createdAt: NOW - CHANNEL_DEADLINE_MS - 1, keyPending: true })
+    const r = run(check, { channels: [pending, channel()] })
+    expect(r.unconnected).toEqual([{ sessionId: B, since: pending.createdAt }])
+    expect(r.controlOffFor).toEqual([B])
+  })
+
   it('Check again for the channel starts the deadline over and keeps the other results (MIP2-1488)', () => {
     const check = new SelfCheck(memoryStore())
     check.setVersion(NEW)

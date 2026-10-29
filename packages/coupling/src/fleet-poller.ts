@@ -13,6 +13,7 @@ import {
   type RateLimits,
   type SessionSnapshot,
   type SourceHealth,
+  type UsageLimit,
 } from '@ccc/contract'
 import { reporterFields, type ReporterFields, type ReporterRead } from './reporter.ts'
 import type { ReporterFile } from '../../../mod/hooks/wire.ts'
@@ -48,6 +49,10 @@ export interface FleetPollerOptions {
   readPending?: () => Map<string, PendingRequest[]>
   /** The usage governor's files, for the meter, given the sessions the app lists; a mod's own reading is the fallback. */
   readUsage?: (listed: ReadonlySet<string>) => Promise<Field<RateLimits> | null>
+  /** Claude Code's `/usage` (MIP2-1522): the meter's main source; the newer of it and the files wins. */
+  readReport?: () => Field<RateLimits> | null
+  /** Its other limits (the Fable week, and kinds this version doesn't know). */
+  readReportExtra?: () => Field<UsageLimit[]> | null
   /** QA's synthetic readings (MIP2-1516): the meter uses readUsage's reading alone, never a mod's. */
   usageFileOnly?: boolean
   /** The detect-and-degrade self-check (DECISION item 4). */
@@ -73,6 +78,8 @@ export class FleetPoller {
   /** The meter's last reading, held while no new one reads (MIP2-1520). */
   private lastUsage: Field<RateLimits> | null = null
   private readonly usageFileOnly: boolean
+  private readonly readReport: () => Field<RateLimits> | null
+  private readonly readReportExtra: () => Field<UsageLimit[]> | null
   private readonly log: (line: string) => void
   private readonly intervalMs: number
   private readonly now: () => number
@@ -98,6 +105,8 @@ export class FleetPoller {
     this.readPending = opts.readPending ?? null
     this.readUsage = opts.readUsage ?? null
     this.usageFileOnly = opts.usageFileOnly === true
+    this.readReport = opts.readReport ?? (() => null)
+    this.readReportExtra = opts.readReportExtra ?? (() => null)
     this.log = opts.log ?? (line => console.warn(line))
     this.intervalMs = opts.intervalMs ?? 2_000
     this.now = opts.now ?? Date.now
@@ -233,8 +242,10 @@ export class FleetPoller {
   }
 
   /**
-   * Both windows for the meter (MIP2-1520). The governor's files come first:
-   * a file's mtime is when its reading was taken. A mod's `rateLimits` carry
+   * Both windows for the meter (MIP2-1520, MIP2-1522). Claude Code's own
+   * `/usage` and the governor's files come first, the newer of the two: the
+   * report's time is when it was read, a file's mtime when its reading was
+   * taken. A mod's `rateLimits` carry
    * its last contact, which an idle session renews every 25 s with an old
    * reading, so they're used only when no file reads, and only with a window
    * that hasn't reset. The meter never steps back to an older reading than
@@ -251,7 +262,9 @@ export class FleetPoller {
         .filter(live)
         .filter(f => (f.value.fiveHour?.resetsAt ?? 0) * 1000 > now)
         .sort((a, b) => b.observedAt - a.observedAt)[0] ?? null
-    const pick = live(this.usageFile) ? this.usageFile : fromMod()
+    // Claude Code's `/usage` and the files both carry when they were read; the newer wins (MIP2-1522).
+    const best = [this.readReport(), this.usageFile].filter(live).sort((a, b) => b.observedAt - a.observedAt)[0] ?? null
+    const pick = best ?? fromMod()
     const last = this.lastUsage
     // A file's reading replaces a mod's whatever their times, since the two times measure different things.
     if (pick && (!last || pick.observedAt >= last.observedAt || (pick.source !== 'mod' && last.source === 'mod'))) this.lastUsage = pick
@@ -265,6 +278,7 @@ export class FleetPoller {
       at: this.now(),
       sessions,
       usage: this.usage(sessions),
+      ...(this.readReportExtra() ? { usageExtra: this.readReportExtra()! } : {}),
       selfCheck: this.selfCheck?.report() ?? null,
       sources: this.readReporter ? [this.health, this.modHealth] : [this.health],
     }

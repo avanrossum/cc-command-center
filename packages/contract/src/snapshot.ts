@@ -55,6 +55,21 @@ export interface TokenTotals {
   cacheWrite: number
 }
 
+/**
+ * A limit Claude Code's `/usage` reports beside the 5-hour and 7-day ones
+ * (MIP2-1522): `weekly_scoped`, one model's week, or a kind this version
+ * doesn't know.
+ */
+export interface UsageLimit {
+  kind: string
+  /** The model or scope Claude Code names; null when it names none. Untrusted text. */
+  label: string | null
+  /** 0–100. */
+  usedPercent: number
+  /** Unix seconds. */
+  resetsAt: number | null
+}
+
 export interface RateLimitWindow {
   /** 0–100. */
   usedPercent: number
@@ -261,6 +276,8 @@ export interface FleetSnapshot {
   sessions: SessionSnapshot[]
   /** The freshest 5-hour and 7-day windows across sessions, for the usage meter; null with no reading. */
   usage: Field<RateLimits> | null
+  /** Other limits from Claude Code's `/usage` (MIP2-1522); absent when it isn't read. */
+  usageExtra?: Field<UsageLimit[]>
   /** The health of each source, so the UI can say why fields are stale. */
   sources: SourceHealth[]
   /** Null until the self-check has read the version. */

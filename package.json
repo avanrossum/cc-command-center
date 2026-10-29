@@ -1,7 +1,7 @@
 {
   "name": "cc-command-center-app",
   "productName": "CC Command Center App",
-  "version": "1.0.1",
+  "version": "1.0.2-beta.1",
   "private": true,
   "description": "A command center for every Claude Code session at once.",
   "type": "module",
@@ -78,7 +78,10 @@
       ],
       "darkModeSupport": true,
       "identity": "-",
-      "hardenedRuntime": false
+      "hardenedRuntime": false,
+      "extendInfo": {
+        "LSHasLocalizedDisplayName": true
+      }
     },
     "electronFuses": {
       "runAsNode": false,
@@ -93,7 +96,15 @@
       {
         "from": "resources/icon.png",
         "to": "icon.png"
+      },
+      {
+        "from": "resources/en.lproj/InfoPlist.strings",
+        "to": "en.lproj/InfoPlist.strings"
       }
-    ]
+    ],
+    "dmg": {
+      "title": "CC Command Center",
+      "artifactName": "CC-Command-Center-${version}-${arch}.${ext}"
+    }
   }
 }

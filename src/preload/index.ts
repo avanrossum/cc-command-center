@@ -9,6 +9,7 @@ import type { TurnSummary } from '../shared/summaries.ts'
 import type { AppStore } from '../shared/store.ts'
 import type { UpdateState } from '../shared/update-state.ts'
 import type { SpendState } from '../shared/spend.ts'
+import type { QuitProgress, QuitRow } from '../shared/quit.ts'
 
 function listen<A extends unknown[]>(channel: string, listener: (...args: A) => void): () => void {
   const handler = (_event: IpcRendererEvent, ...args: unknown[]) => listener(...(args as A))
@@ -88,10 +89,14 @@ const api: CccApi = {
   guessCategory: cwd => ipcRenderer.invoke(IPC.storeGuess, cwd),
   onNotice: listener => listen<[string]>(IPC.appNotice, listener),
   startupNotices: () => ipcRenderer.invoke(IPC.startupNotices),
+  onQuitAsk: listener => listen<[QuitRow[]]>(IPC.quitAsk, listener),
+  onQuitProgress: listener => listen<[QuitProgress]>(IPC.quitProgress, listener),
+  quitAnswer: answer => ipcRenderer.invoke(IPC.quitAnswer, answer),
+  quitPending: () => ipcRenderer.invoke(IPC.quitPending),
   clearGoneMark: id => ipcRenderer.invoke(IPC.clearGoneMark, id),
   onOpenSession: listener => listen<[string]>(IPC.openSession, listener),
   onOpenNeeds: listener => listen<[]>(IPC.openNeeds, listener),
-  onOpenSettings: listener => listen<[]>(IPC.openSettings, listener),
+  onOpenSettings: listener => listen<[unknown]>(IPC.openSettings, section => listener(section === 'About' ? 'About' : null)),
   resurrect: (ids, keep) => ipcRenderer.invoke(IPC.lifeResurrect, ids, keep === true),
   archive: id => ipcRenderer.invoke(IPC.lifeArchive, id),
   setNeverRollOff: (id, on) => ipcRenderer.invoke(IPC.lifeNeverRollOff, id, on),

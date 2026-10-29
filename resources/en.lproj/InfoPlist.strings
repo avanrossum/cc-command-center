@@ -1,0 +1,3 @@
+/* The name Finder, the Dock and the switcher show (MIP2-1532). CFBundleName in Info.plist stays "CC Command Center App": Electron finds its helpers by it, and the Keychain item and data folder follow the app name. */
+"CFBundleDisplayName" = "CC Command Center";
+"CFBundleName" = "CC Command Center";

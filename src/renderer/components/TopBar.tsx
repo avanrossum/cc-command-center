@@ -3,8 +3,8 @@
 // "Arbiter is off" form.
 
 import { useRef } from 'react'
-import type { Field, RateLimits, SessionSnapshot } from '@ccc/contract'
-import { noteBaselines, sharesOf, type Baselines } from '../model/usage-help.ts'
+import type { Field, RateLimits, SessionSnapshot, UsageLimit } from '@ccc/contract'
+import { noteBaselines, pacedLimit, sharesOf, type Baselines, type ExtraLimit } from '../model/usage-help.ts'
 import { UsagePanel } from './UsagePanel.tsx'
 import { SpendIndicator } from './Spend.tsx'
 import type { SpendState } from '../../shared/spend.ts'
@@ -15,6 +15,7 @@ import { Glyph } from './bits.tsx'
 
 const HISTORY_KEY = 'ccc.paceHistory'
 const BASELINES_KEY = 'ccc.paceBaselines'
+const EXTRA_KEY = 'ccc.paceHistoryExtra'
 
 function loadBaselines(): Baselines {
   try {
@@ -64,6 +65,50 @@ export function usePace(usage: Field<RateLimits> | null, now: number): { paces: 
     if (['onpace', 'tight', 'over'].includes(out[kind].state)) prev.current[kind] = out[kind].state
   }
   return { paces: out, lists: h }
+}
+
+function loadExtra(): Record<string, Reading[]> {
+  try {
+    const h = JSON.parse(localStorage.getItem(EXTRA_KEY) ?? '{}') as Record<string, unknown>
+    return Object.fromEntries(Object.entries(h).filter((e): e is [string, Reading[]] => Array.isArray(e[1])))
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * The limits beside 5h and 7d from Claude Code's /usage (MIP2-1498 §9.2): a
+ * `weekly_*` one keeps readings and takes the 7d pace rules; any other kind
+ * shows percent and reset only.
+ */
+export function useExtraPaces(extra: Field<UsageLimit[]> | null | undefined, now: number): ExtraLimit[] {
+  const history = useRef<Record<string, Reading[]> | null>(null)
+  history.current ??= loadExtra()
+  const prev = useRef<Record<string, PaceState | null>>({})
+  const h = history.current
+  let changed = false
+  const out: ExtraLimit[] = []
+  for (const l of extra?.value ?? []) {
+    const key = `${l.kind}:${l.label ?? ''}`
+    if (!pacedLimit(l) || l.resetsAt === null) {
+      out.push({ key, limit: l, pace: null })
+      continue
+    }
+    const list = h[key] ?? []
+    const next = addReading(list, { at: extra!.observedAt, used: l.usedPercent, resetsAt: l.resetsAt })
+    if (next.length !== list.length || next.at(-1) !== list.at(-1)) (h[key] = next), (changed = true)
+    const pace = paceOf('7d', h[key] ?? [], now, prev.current[key] ?? null)
+    if (['onpace', 'tight', 'over'].includes(pace.state)) prev.current[key] = pace.state
+    out.push({ key, limit: l, pace })
+  }
+  if (changed) {
+    try {
+      localStorage.setItem(EXTRA_KEY, JSON.stringify(h))
+    } catch {
+      // Kept for this run only.
+    }
+  }
+  return out
 }
 
 /** One meter row (§4.3): the bar keeps its used-color; the dot shows where the rate is heading. */
@@ -116,7 +161,10 @@ export function TopBar({
   spend = null,
   onSpendSetUp = () => {},
   claudeVersion = null,
+  usageExtra = null,
 }: {
+  /** Limits beside 5h and 7d from Claude Code's /usage (MIP2-1498 §9.2): in the help panel, never a bar row. */
+  usageExtra?: Field<UsageLimit[]> | null
   /** The installed Claude Code, for the simulated spend's price note (MIP2-1498 §5.2). */
   claudeVersion?: string | null
   /** This month's spend (MIP2-1498 §5). */
@@ -152,8 +200,11 @@ export function TopBar({
       // Kept for this run only.
     }
   }
-  const attention = ['tight', 'over', 'out'].includes(pace['5h'].state) || ['tight', 'over', 'out'].includes(pace['7d'].state)
-  const worst = ['out', 'over', 'tight'].find(s => pace['5h'].state === s || pace['7d'].state === s) ?? ''
+  const extras = useExtraPaces(usageExtra, now)
+  // The ? button takes the worst state across 5h, 7d and every extra limit (§9.2).
+  const states = [pace['5h'].state, pace['7d'].state, ...extras.flatMap(x => (x.pace ? [x.pace.state] : []))]
+  const worst = ['out', 'over', 'tight'].find(s => states.includes(s as PaceState)) ?? ''
+  const attention = worst !== ''
   const count = (n: number, kind: Parameters<typeof Glyph>[0]['kind'], label: string) => (
     <span className={n === 0 ? 'zero' : ''}>
       <Glyph kind={kind} /> {n} {label}
@@ -199,6 +250,8 @@ export function TopBar({
           <UsagePanel
             paces={pace}
             lists={lists}
+            extras={extras}
+            credits={spend?.credits ?? null}
             shares={sharesOf(sessions, names, pace['5h'].resetsAt === null ? undefined : baselines.current[`5h:${pace['5h'].resetsAt}`]?.costs)}
             sharesSince={pace['5h'].resetsAt === null ? null : (baselines.current[`5h:${pace['5h'].resetsAt}`]?.since ?? null)}
             arbiterOn={arbiterOn}

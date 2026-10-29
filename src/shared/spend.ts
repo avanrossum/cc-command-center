@@ -28,8 +28,33 @@ export interface RealSpend {
   errorAt: number | null
 }
 
+/**
+ * Usage credits for the billing period, from Claude Code's `/usage`
+ * (MIP2-1522, spec MIP2-1498 §9.1). Amounts in minor units of `currency`
+ * (cents for USD). No reset date is reported.
+ */
+export interface CreditsSpend {
+  enabled: boolean
+  used: number
+  /** Null: Claude Code reports no cap of its own, which isn't "unlimited". */
+  limit: number | null
+  currency: string
+  /** When it was read, Unix ms. */
+  at: number
+}
+
+export type SpendSource = 'real' | 'simulated' | 'credits'
+
 export interface SpendState {
-  source: 'real' | 'simulated'
+  source: SpendSource
   simulated: SimulatedSpend
   real: RealSpend
+  /** Null when Claude Code didn't report usage credits. */
+  credits: CreditsSpend | null
+}
+
+/** An amount in minor units: `$12.40` for USD, `12.40 EUR` otherwise. */
+export function creditsMoney(minor: number, currency: string): string {
+  const major = (minor / 100).toFixed(2)
+  return currency === 'USD' ? `$${major}` : `${major} ${currency}`
 }

@@ -1,9 +1,10 @@
 // The spend indicator and its panel (spec MIP2-1498 §5): this calendar
 // month, real (the Console's cost, with a Console key) or simulated (Claude
-// Code's own per-session estimate, marked ≈). No token counts.
+// Code's own per-session estimate, marked ≈), or usage credits for the
+// billing period, from Claude Code's /usage (§9.1). No token counts.
 
 import { useEffect, useRef, useState } from 'react'
-import type { SpendState } from '../../shared/spend.ts'
+import { creditsMoney, type SpendSource, type SpendState } from '../../shared/spend.ts'
 import { modelLabel } from '../model/usage-help.ts'
 import { span } from '../model/pace.ts'
 
@@ -18,12 +19,15 @@ const REAL_STALE_MS = 30 * 60_000
 
 /** The top line's amount and whether it's marked stale (§5.4). */
 export function spendAmount(s: SpendState, now: number): { text: string; stale: boolean } {
+  // Money billed to the plan: no ≈ (§9.1).
+  if (s.source === 'credits' && s.credits) return { text: creditsMoney(s.credits.used, s.credits.currency), stale: false }
   if (s.source === 'simulated') return { text: `≈${usd(s.simulated.totalUsd)}`, stale: false }
   if (!s.real.configured || s.real.totalUsd === null) return { text: '$—', stale: false }
   return { text: usd(s.real.totalUsd), stale: s.real.error !== null || (s.real.at !== null && now - s.real.at > REAL_STALE_MS) }
 }
 
 export function spendHover(s: SpendState, now: number): string {
+  if (s.source === 'credits') return "Usage credits spent this billing period, as Claude Code's /usage reports it. The reset date isn't reported."
   return s.source === 'real'
     ? `Console spend for ${MONTH(now, 'long')}, through today. Resets ${NEXT_MONTH(now)}.`
     : `${MONTH(now, 'long')}'s sessions here at Claude Code's list prices. Not money spent.`
@@ -49,9 +53,7 @@ export function SpendIndicator({
     <div className="spend-wrap">
       <button type="button" className="spend" title={spendHover(spend, now)} aria-expanded={open} onClick={() => setOpen(o => !o)}>
         <span className={`spend-amt${amount.stale ? ' stale-u' : ''}`}>{amount.text}</span>
-        <span className="spend-sub">
-          {MONTH(now, 'short')} · {spend.source === 'real' ? 'real' : 'sim'}
-        </span>
+        <span className="spend-sub">{spend.source === 'credits' ? 'credits' : `${MONTH(now, 'short')} · ${spend.source === 'real' ? 'real' : 'sim'}`}</span>
       </button>
       {open && <SpendPanel spend={spend} now={now} names={names} claudeVersion={claudeVersion} onSetUp={() => (setOpen(false), onSetUp())} onClose={() => setOpen(false)} />}
     </div>
@@ -83,22 +85,36 @@ function SpendPanel({
     ref.current?.focus()
     return () => (document.removeEventListener('mousedown', outside), document.removeEventListener('keydown', esc, true), back?.focus())
   }, [])
-  const setSource = (source: 'real' | 'simulated') => void window.ccc.setSpendSource(source)
+  const setSource = (source: SpendSource) => void window.ccc.setSpendSource(source)
   const sim = spend.simulated
   const real = spend.real
+  const credits = spend.credits
   return (
     <div className="usage-panel spend-panel" ref={ref} role="dialog" aria-label="Spend" tabIndex={-1}>
       <div className="seg" role="radiogroup" aria-label="Spend source">
-        {(['real', 'simulated'] as const).map(src => (
-          <button key={src} type="button" role="radio" aria-checked={spend.source === src} className={spend.source === src ? 'on' : ''} onClick={() => setSource(src)}>
-            {src === 'real' ? 'Real' : 'Simulated'}
+        {(['real', 'simulated', 'credits'] as const).map(src => (
+          <button
+            key={src}
+            type="button"
+            role="radio"
+            aria-checked={spend.source === src}
+            className={spend.source === src ? 'on' : ''}
+            disabled={src === 'credits' && !credits}
+            title={src === 'credits' && !credits ? "Claude Code didn't report usage credits." : undefined}
+            onClick={() => setSource(src)}
+          >
+            {src === 'real' ? 'Real' : src === 'simulated' ? 'Simulated' : 'Credits'}
           </button>
         ))}
       </div>
-      <p className="up-note">
-        {MONTH(now, 'long')} · resets {NEXT_MONTH(now)}
-      </p>
-      {spend.source === 'simulated' ? (
+      {spend.source !== 'credits' && (
+        <p className="up-note">
+          {MONTH(now, 'long')} · resets {NEXT_MONTH(now)}
+        </p>
+      )}
+      {spend.source === 'credits' && credits ? (
+        <CreditsPanel credits={credits} now={now} />
+      ) : spend.source === 'simulated' ? (
         <>
           {sim.totalUsd === 0 && sim.topSessions.length === 0 ? (
             <p>No sessions this month yet.</p>
@@ -151,9 +167,36 @@ function SpendPanel({
             </div>
           )}
           <p className="up-note">It includes the Arbiter and any session started with an API key. Cost data comes in daily buckets, so today can trail by a few minutes.</p>
-          <p className="up-note">Usage credits on your Claude plan aren't included. They're in claude.ai Settings &gt; Usage.</p>
+          <p className="up-note">Usage credits on your Claude plan aren't included. See Credits.</p>
         </>
       )}
+    </div>
+  )
+}
+
+/** Usage credits (§9.1): the amount, then the cap with a bar, or a plain line when no cap is reported. No split. */
+export function CreditsPanel({ credits, now }: { credits: NonNullable<SpendState['credits']>; now: number }) {
+  const money = (n: number) => creditsMoney(n, credits.currency)
+  const used = credits.limit ? Math.min(100, (credits.used / credits.limit) * 100) : 0
+  const heat = used >= 85 ? 'hot' : used >= 65 ? 'warm' : ''
+  return (
+    <div className="up-sec">
+      {!credits.enabled && <p>Usage credits are off on your plan.</p>}
+      <p className="spend-big">{money(credits.used)}</p>
+      {credits.limit !== null ? (
+        <>
+          <p>of {money(credits.limit)} cap</p>
+          {/* Off on the plan: no bar (UX review). */}
+          {credits.enabled && (
+            <i className={`credits-bar ${heat}`}>
+              <b style={{ width: `${used}%` }} />
+            </i>
+          )}
+        </>
+      ) : (
+        <p>Claude Code reports no cap for usage credits. Your plan's settings in claude.ai still apply.</p>
+      )}
+      <p className="up-note">From Claude Code's /usage, read {now - credits.at < 60_000 ? 'just now' : `${span(now - credits.at)} ago`}. Billing period as your plan sets it.</p>
     </div>
   )
 }

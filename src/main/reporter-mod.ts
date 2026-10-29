@@ -109,9 +109,9 @@ export function copyTo(source: string, dest: string): string {
 export async function installMod(source: string, dataDir: string, onHeal: (h: ModHealed) => void = () => {}, now: () => number = Date.now, built: string | null = null, ops: ModOps = {}): Promise<string> {
   if (!existsSync(join(source, '.claude-plugin', 'plugin.json'))) throw new Error(`the reporter mod is missing from ${source}`)
   const hash = modHash(source)
-  if (!/^[0-9a-f]{16}$/.test(hash)) throw new Error(`the app's reporter mod can't be checked (${hash}). Reinstall CC Command Center App.`)
+  if (!/^[0-9a-f]{16}$/.test(hash)) throw new Error(`the app's reporter mod can't be checked (${hash}). Reinstall CC Command Center.`)
   // The unpacked source sits outside asar integrity, so it's checked against the hash built into main.cjs (gate run 2, M-3).
-  if (built !== null && hash !== built) throw new Error("the app's reporter mod was changed after it was built. Reinstall CC Command Center App.")
+  if (built !== null && hash !== built) throw new Error("the app's reporter mod was changed after it was built. Reinstall CC Command Center.")
   const dest = join(dataDir, 'reporter-mod', hash)
   if (existsSync(dest)) {
     if (modHash(dest) === hash) return dest
