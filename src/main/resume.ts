@@ -87,3 +87,15 @@ export class ResumeGate {
     return p
   }
 }
+
+/**
+ * Why a session's untrusted mark can't be cleared by hand, or null
+ * (MIP2-1518). Only a session that's gone may be cleared: not in Claude
+ * Code's list, or archived or removed, and without a process. A session
+ * that can still run keeps its mark until a resume from the app re-keys it.
+ */
+export function clearGoneRefusal(listed: { pid: { value: number | null } } | undefined, meta: { archivedAt?: number; rolledOffAt?: number; removedAt?: number } | undefined, archived: boolean): string | null {
+  const gone = !listed || archived || meta?.removedAt !== undefined
+  if (!gone || (listed && listed.pid.value !== null)) return 'the session still exists; resume it from the app to clear its alert'
+  return null
+}

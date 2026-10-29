@@ -415,6 +415,7 @@ button.more:hover { color: var(--cc-text); background: var(--cc-sel); }
 /* The ⋯ stays at the end of the name line, even when the line wraps. */
 .c-name .chip-wrap:last-child { margin-left: auto; order: 99; }
 .never { color: var(--cc-meta); font-size: 13px; flex: none; }
+.srow .never { font-size: 11px; }
 .ctag { font: 10px var(--f-mono); color: var(--cc-meta); border: 1px dashed var(--cc-border); border-radius: 5px; padding: 2px 5px; white-space: nowrap; flex: none; }
 .c-links .kids { font: inherit; color: var(--cc-dim); text-decoration: none; }
 .tray { margin-top: 8px; border-top: 1px solid var(--cc-hairline); padding-top: 6px; display: flex; flex-direction: column; gap: 2px; }
@@ -582,3 +583,7 @@ button.arb { width: 100%; background: none; border: 0; border-top: 1px solid var
    The widths are estimates for both windows Over; QA's live check confirms them. */
 @media (max-width: 1440px) { .spend-sub { display: none; } }
 @media (max-width: 1320px) { .pace-detail { display: none; } }
+
+/* An informational band (MIP2-1518): plain, no warning color. */
+.band.info { background: none; border: 1px solid var(--cc-hairline); color: var(--cc-meta); }
+.band-t code { font: 0.95em var(--f-mono); }

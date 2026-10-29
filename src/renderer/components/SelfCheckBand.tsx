@@ -5,6 +5,7 @@
 import { useState } from 'react'
 import type { SelfCheckReport } from '@ccc/contract'
 import { age } from '../model/format.ts'
+import { useStore } from './Categories.tsx'
 
 const KEY = 'ccc.selfCheckDismissed'
 
@@ -26,7 +27,7 @@ const SECURITY: { id: string; title: string; body: string }[] = [
   {
     id: 'channel-sockets',
     title: "A session's channel to the app was moved or replaced by another process.",
-    body: 'The app stopped the session and stopped answering it from cards. Resuming it from the app gives its channel a new secret first.',
+    body: "The app stopped these sessions and won't answer them from cards. Resuming one from the app gives its channel a new secret first.",
   },
   {
     id: 'mod-integrity',
@@ -40,8 +41,8 @@ const SECURITY: { id: string; title: string; body: string }[] = [
   },
   {
     id: 'supervisor-path',
-    title: "Some background sessions may not find claude or your tools.",
-    body: "Claude Code's background supervisor was started without your PATH. A session's commands use the PATH of whatever last started or restarted it: the app always gives yours, so sessions it launches, resumes or restarts are fine. A session started or restarted from somewhere else without your PATH isn't. Resume it from the app to fix it, or restart the supervisor once no session needs it.",
+    title: "Some running sessions can't find claude or your tools.",
+    body: "They were started without your PATH. Resume restarts one with your PATH once it isn't working or waiting on you.",
   },
   {
     id: 'mod-reload',
@@ -58,23 +59,167 @@ export function failingSecurity(report: SelfCheckReport | null): { id: string; t
   })
 }
 
-export function SecurityBands({ report }: { report: SelfCheckReport | null }) {
+/**
+ * The alerts, each naming its sessions where the report says which
+ * (MIP2-1518): a marked channel's session by name, category and folder, with
+ * Open and Resume, or Start a copy once a resume is refused, or Clear when
+ * the session no longer exists; a session without your PATH with Resume,
+ * held while it works or waits on you. Other items keep their detail line.
+ */
+export function SecurityBands({ report, rows = new Map(), onOpen = () => {} }: { report: SelfCheckReport | null; rows?: ReadonlyMap<string, ChannelRow>; onOpen?: (sessionId: string) => void }) {
   const failing = failingSecurity(report)
   return (
     <>
       {failing.map(a => (
         <div key={a.id} className="band sec" role="alert">
           <div className="band-t">
-            <b>{a.title}</b> {a.body}
-            {a.detail && (
+            <b>{a.id === 'supervisor-path' && report?.pathMissing?.length ? <PathTitle n={report.pathMissing.length} /> : a.title}</b> {a.body}
+            {a.id === 'channel-sockets' && report?.untrusted ? (
               <ul className="band-d">
-                <li>{a.detail}</li>
+                {report.untrusted.map((u, i) => (
+                  <MarkedRow key={u.sessionId ?? `none-${i}`} sessionId={u.sessionId} why={u.why} row={u.sessionId ? rows.get(u.sessionId) : undefined} onOpen={onOpen} />
+                ))}
               </ul>
+            ) : a.id === 'supervisor-path' && report?.pathMissing ? (
+              <ul className="band-d">
+                {report.pathMissing.map(id => (
+                  <PathRow key={id} sessionId={id} row={rows.get(id)} />
+                ))}
+                {report.supervisorPathLacking && <li className="band-note">Sessions Claude Code restarts by itself will also lack your PATH until the supervisor restarts.</li>}
+              </ul>
+            ) : (
+              a.detail && (
+                <ul className="band-d">
+                  <li>{a.detail}</li>
+                </ul>
+              )
             )}
           </div>
         </div>
       ))}
+      {/* No running session affected: a plain line, not a warning (MIP2-1518, UX review). */}
+      {report?.supervisorPathLacking && !report.pathMissing?.length && (
+        <div className="band info" role="status">
+          <div className="band-t">
+            Claude Code's background supervisor doesn't have your PATH. No running session is affected; sessions it restarts by itself will be until the supervisor restarts.
+          </div>
+        </div>
+      )}
     </>
+  )
+}
+
+/** The PATH alert's title, counting the sessions, with the command in mono (UX review on MIP2-1518). */
+function PathTitle({ n }: { n: number }) {
+  return (
+    <>
+      {n === 1 ? 'A running session' : `${n} running sessions`} can't find <code>claude</code> or your tools.
+    </>
+  )
+}
+
+/** A session by name, category and folder; by its short id only when the app doesn't list it (MIP2-1518). */
+function Who({ sessionId, row }: { sessionId: string | null; row: ChannelRow | undefined }) {
+  if (!row) return <span title={sessionId ?? undefined}>{sessionId ? `Session ${sessionId.slice(0, 8)}` : 'A session the app launched'}</span>
+  return (
+    <span title={sessionId ?? undefined}>
+      <b>{row.name}</b>
+      {row.category && (
+        <>
+          {' '}
+          <i className="sq" style={{ '--cat': row.category.color } as React.CSSProperties} /> {row.category.label}
+        </>
+      )}
+      {row.cwd && <span className="mono"> · {row.cwd}</span>}
+    </span>
+  )
+}
+
+function MarkedRow({ sessionId, why, row, onOpen }: { sessionId: string | null; why: string; row: ChannelRow | undefined; onOpen: (id: string) => void }) {
+  const api = useStore()
+  const [busy, setBusy] = useState(false)
+  const [refused, setRefused] = useState<string | null>(null)
+  if (!row) {
+    // The name the app still has for it, archived and removed sessions keep theirs (UX review on MIP2-1518).
+    const meta = sessionId ? api.store?.sessions[sessionId] : undefined
+    const status = meta?.removedAt ? 'removed' : meta?.archivedAt || meta?.rolledOffAt ? 'archived' : 'gone from Claude Code'
+    return (
+      <li title={why}>
+        {meta?.name ? <b>{meta.name}</b> : <Who sessionId={sessionId} row={row} />} · no longer exists ({status}){' '}
+        {sessionId && (
+          <button
+            className="fchip"
+            title="Removes it from this alert. It can't run, so it's no longer a risk."
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true)
+              const r = await window.ccc.clearGoneMark(sessionId)
+              setBusy(false)
+              if (!r.ok) api.notice(`Not cleared: ${r.error}`)
+            }}
+          >
+            Clear
+          </button>
+        )}
+      </li>
+    )
+  }
+  const id = sessionId!
+  return (
+    <li>
+      <Who sessionId={id} row={row} /> · {why}{' '}
+      {/* Open on a stopped session resumes it the same way, so a stopped one shows Resume only (UX review). */}
+      {row.running && (
+        <>
+          <button className="fchip" onClick={() => onOpen(id)}>
+            Open
+          </button>{' '}
+        </>
+      )}
+      {refused ? (
+        <>
+          <button className="fchip" title={refused} onClick={() => api.openSheet('resume', id)}>
+            Start a copy
+          </button>
+        </>
+      ) : (
+        <button
+          className="fchip"
+          disabled={busy}
+          title="Gives its channel a new secret and resumes it."
+          onClick={async () => {
+            setBusy(true)
+            const r = await window.ccc.resume(id)
+            setBusy(false)
+            if (!r.ok) setRefused(r.error)
+          }}
+        >
+          {busy ? 'Resuming…' : 'Resume'}
+        </button>
+      )}
+    </li>
+  )
+}
+
+function PathRow({ sessionId, row }: { sessionId: string; row: ChannelRow | undefined }) {
+  const [busy, setBusy] = useState(false)
+  const held = row?.busy === true
+  return (
+    <li>
+      <Who sessionId={sessionId} row={row} />{' '}
+      <button
+        className="fchip"
+        disabled={held || busy}
+        title={held ? "Resuming now would interrupt it. Available once it's done working and isn't waiting on you." : 'Restarts it with your PATH.'}
+        onClick={async () => {
+          setBusy(true)
+          await window.ccc.resume(sessionId)
+          setBusy(false)
+        }}
+      >
+        {busy ? 'Resuming…' : 'Resume'}
+      </button>
+    </li>
   )
 }
 
@@ -124,6 +269,11 @@ export function SecurityStrip({ report, onFocusBack }: { report: SelfCheckReport
 /** What the channel band needs to know about a listed session (MIP2-1488). */
 export interface ChannelRow {
   name: string
+  /** For the security alerts' rows (MIP2-1518). */
+  category?: { label: string; color: string }
+  cwd?: string
+  /** Working, or waiting on you: a resume would interrupt it, so PATH's Resume is held. */
+  busy?: boolean
   /** It has a process: Restart stops it and resumes it through the app. Otherwise Resume. */
   running: boolean
   /** Waiting on a permission: a restart would end the wait, so it isn't offered (Research, MIP2-1488). */
@@ -134,15 +284,17 @@ export function SelfCheckBand({
   report,
   rows = new Map(),
   now = Date.now(),
+  onOpen = () => {},
 }: {
   report: SelfCheckReport | null
   /** Listed sessions by id, for the channel band. */
   rows?: ReadonlyMap<string, ChannelRow>
   now?: number
+  onOpen?: (sessionId: string) => void
 }) {
   return (
     <>
-      <SecurityBands report={report} />
+      <SecurityBands report={report} rows={rows} onOpen={onOpen} />
       <ChannelBand report={report} rows={rows} now={now} />
       <UpdateBand report={report} />
     </>

@@ -30,11 +30,13 @@ import {
   claudeConfigDir,
   readSavedOptions,
   processStartedAt,
+  processPathOk,
   sharedSupervisorStart,
   awaitLoginPath,
   terminalHostOf,
 } from '@ccc/coupling'
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage, screen } from 'electron'
+import { loadWindowState, placeWindow, saveWindowState, WINDOW_MIN } from './window-state.ts'
 import { IPC } from '../shared/ipc.ts'
 import { APP_ORIGIN } from './policy.ts'
 import { AppStoreService, registryPresent } from './app-store.ts'
@@ -55,12 +57,14 @@ import { decide, newMemory } from './notify-rules.ts'
 import { registerControl } from './control.ts'
 import { registerStore } from './store-control.ts'
 import { applyBeforeReady, applyWhenReady, isTrustedSender } from './security.ts'
-import { checkClaudeBinOverride, debugPortAllowed, qaPackagedPaths, qaPickPaths, resolveChannelRoot, resolveImportFolder, resolveUserData } from './paths.ts'
+import { checkClaudeBinOverride, debugPortAllowed, qaPackagedPaths, qaPickPaths, qaUsageDir, resolveChannelRoot, resolveImportFolder, resolveUserData } from './paths.ts'
 import { fileStore } from './self-check-store.ts'
 import { appMenuTemplate } from './app-menu.ts'
 import { restartVerdict } from './mod-verdict.ts'
 import type { SessionMeta } from '../shared/store.ts'
+import { inArchive } from '../shared/lifecycle.ts'
 import { wireHosts } from './restart.ts'
+import { clearGoneRefusal } from './resume.ts'
 import { checkModFolders, copyTo, MOD_FOLDERS_MAX, modDir, modHash, modSource, type ModHealed } from './reporter-mod.ts'
 import { backfillVersion, savedOptionsRefusal } from './mod-backfill.ts'
 import { moveRequest } from './move.ts'
@@ -130,8 +134,11 @@ try {
 }
 // QA's ⌘O stand-in, refused outside an unpackaged CCC_QA=1 run (MIP2-1413).
 let pickPaths: string[] | null = null
+/** QA's synthetic usage readings (MIP2-1516); null outside a QA run. */
+let usageDir: string | null = null
 try {
   pickPaths = qaPickPaths(process.env, app.isPackaged)
+  usageDir = qaUsageDir(process.env, app.isPackaged)
 } catch (err) {
   fatal(err)
 }
@@ -169,11 +176,18 @@ function broadcast(channel: string, ...args: unknown[]): void {
 }
 
 function createWindow(): BrowserWindow {
+  // Where it was, how big, and whether maximized or full screen (MIP2-1519); centered on the primary display when
+  // the saved spot is off every display.
+  const statePath = join(app.getPath('userData'), 'window-state.json')
+  const place = placeWindow(
+    loadWindowState(statePath),
+    screen.getAllDisplays().map(d => d.workArea),
+    screen.getPrimaryDisplay().workArea,
+  )
   const win = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    minWidth: 1100,
-    minHeight: 640,
+    ...place.bounds,
+    minWidth: WINDOW_MIN.width,
+    minHeight: WINDOW_MIN.height,
     title: 'CC Command Center',
     webPreferences: {
       preload: join(DIST, 'preload.cjs'),
@@ -184,6 +198,18 @@ function createWindow(): BrowserWindow {
       webviewTag: false,
     },
   })
+  if (place.maximized) win.maximize()
+  if (place.fullScreen) win.setFullScreen(true)
+  // Saved on resize and move, a moment after the last one, and on close. The normal bounds, so un-maximizing later
+  // returns to them.
+  const save = () => {
+    if (win.isDestroyed()) return
+    saveWindowState(statePath, { bounds: win.getNormalBounds(), maximized: win.isMaximized(), fullScreen: win.isFullScreen() })
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const later = () => (clearTimeout(timer), (timer = setTimeout(save, 500)))
+  for (const ev of ['resize', 'move', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen'] as const) win.on(ev as 'resize', later)
+  win.on('close', () => (clearTimeout(timer), save()))
   void win.loadURL(`${APP_ORIGIN}/index.html`)
   return win
 }
@@ -391,6 +417,15 @@ async function start(): Promise<void> {
     )
   readSupervisorPath()
   setInterval(readSupervisorPath, 5 * 60_000).unref()
+  // Which running sessions' own processes lack the folder holding claude, once a minute (MIP2-1518). Each session's
+  // PATH is the PATH of whatever last started it, so this names the ones to resume; nothing else is read.
+  const readSessionPaths = async () => {
+    const running = (poller?.current()?.sessions ?? []).filter(s => s.pid.value !== null && !s.pid.stale)
+    const missing: string[] = []
+    for (const s of running) if ((await processPathOk(s.pid.value!, dirname(binary))) === false) missing.push(s.sessionId)
+    selfCheck.noteSessionPaths(missing)
+  }
+  setInterval(() => void readSessionPaths().catch(err => console.warn(`session PATH: ${String(err)}`)), 60_000).unref()
   // `claude daemon run`, as the watchdog starts it: the user's environment, none of the session switches (MIP2-1463).
   const spawnClaude = commandLog.wrapSpawner(createClaudeSpawner())
   // One start for the host and the watchdog, at most one per 10 s, so they never start two at once (pass 9, L-5).
@@ -425,7 +460,9 @@ async function start(): Promise<void> {
     host,
     readReporter: () => channels.readReporter(),
     readPending: () => channels.pendingRequests(),
-    readUsage: () => readUsageDir(),
+    // QA's synthetic folder is read whole; the live one only for the sessions the app lists (MIP2-1520).
+    readUsage: listed => (usageDir ? readUsageDir(usageDir) : readUsageDir(undefined, undefined, id => listed.has(id))),
+    usageFileOnly: usageDir !== null,
     selfCheck,
     readChannels: () => channels.health(),
     readVersion: async () => parseVersion(await run(['--version'])),
@@ -551,6 +588,18 @@ async function start(): Promise<void> {
   const startupNotices: string[] = []
   const adminNotice = removeAdminKeyAtStart(arbiterKey)
   if (adminNotice) startupNotices.push(adminNotice)
+  // Clear for a session that's gone (MIP2-1518): its untrusted mark guards nothing once it can't run, so its channel is
+  // closed and the mark goes. A session still listed, with or without a process, keeps its mark.
+  ipcMain.handle(IPC.clearGoneMark, async (event, id: unknown) => {
+    if (!isTrustedSender(event)) return { ok: false, error: 'untrusted sender' }
+    if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/.test(id)) return { ok: false, error: 'not a session id' }
+    const meta = store.get().sessions[id]
+    const why = clearGoneRefusal(poller?.current()?.sessions.find(s => s.sessionId === id), meta, inArchive(meta))
+    if (why) return { ok: false, error: why }
+    await hub?.closeFor(id)
+    store.clearUntrusted(id)
+    return { ok: true }
+  })
   ipcMain.handle(IPC.startupNotices, event => (isTrustedSender(event) ? startupNotices.splice(0) : []))
   // The Arbiter (MIP2-1411): off until a key is saved; reruns only when the waiting set changes.
   const arbiterLog = new ArbiterLog(join(app.getPath('userData'), 'arbiter-log.jsonl'))

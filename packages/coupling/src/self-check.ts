@@ -163,6 +163,8 @@ export class SelfCheck {
   private modCheckFailed: { at: number; what: string; why: string } | null = null
   /** Sessions whose channel socket was replaced, by the last evaluation; not saved. */
   private untrusted: { sessionId: string | null; why: string }[] = []
+  /** Running sessions whose own process PATH lacks the folder holding claude (MIP2-1518). */
+  private pathMissing: string[] = []
   /** Sessions whose mod reported reloading on, by the last evaluation; not saved. */
   private reloading: string[] = []
   /** Sessions whose mod hasn't reached the app by the deadline, by the last evaluation; not saved (MIP2-1488). */
@@ -197,6 +199,11 @@ export class SelfCheck {
   }
 
   /** The latest read of the supervisor's PATH; null when no supervisor runs (MIP2-1457). */
+  /** Running sessions whose own PATH lacks the folder holding claude, read once a minute (MIP2-1518). */
+  noteSessionPaths(missing: string[]): void {
+    this.pathMissing = [...missing]
+  }
+
   noteSupervisorPath(r: { pid: number; path: string | null; claudeDir: string; ok: boolean } | null): void {
     this.supervisorPath = r && !r.ok ? { pid: r.pid, path: r.path, claudeDir: r.claudeDir } : null
   }
@@ -338,14 +345,13 @@ export class SelfCheck {
       state: this.strays.size ? 'fail' : 'pass',
       detail: this.strays.size ? [...this.strays].map(id => id.slice(0, 8)).join(', ') : null,
     }
+    // One item for PATH (MIP2-1518): a warning only while running sessions lack it; the supervisor's own PATH is a plain line.
     const sp = this.supervisorPath
     const supervisor: SelfCheckItem = {
       id: SUPERVISOR_PATH,
-      label: "Claude Code's background supervisor can find claude and your tools",
-      state: sp ? 'fail' : 'pass',
-      detail: sp
-        ? `supervisor pid ${sp.pid} has PATH ${sp.path ?? '(unreadable)'}, without ${sp.claudeDir}. A session's commands use the PATH of whatever last started or restarted it, so ones not started or restarted by the app may not find claude, gh, node or npm.`
-        : null,
+      label: 'Running sessions can find claude and your tools',
+      state: this.pathMissing.length ? 'fail' : 'pass',
+      detail: sp ? `Claude Code's background supervisor runs without ${sp.claudeDir.replace(/^\/Users\/[^/]+(?=\/|$)/, '~')} on its PATH (pid ${sp.pid}).` : null,
     }
     const extra = [mod, sockets, reload, strays, supervisor, ...(this.migrated.length ? [{ id: CHANNEL_SETTINGS, label: 'Channel settings files brought up to date at start', state: 'pass' as const, detail: this.migrated.join('; ') }] : [])]
     if (this.tooOld()) {
@@ -355,12 +361,12 @@ export class SelfCheck {
         state: 'fail',
         detail: `${this.version} is older than this app supports`,
       }
-      return { claudeVersion: this.version, state: 'too-old', checks: [floor, ...checks, ...extra], controlOff: this.controlOff(), controlOffFor: this.controlOffFor(), checkedAt: this.checkedAt, unconnected: this.unconnected, causes: this.causes }
+      return { claudeVersion: this.version, state: 'too-old', checks: [floor, ...checks, ...extra], controlOff: this.controlOff(), controlOffFor: this.controlOffFor(), checkedAt: this.checkedAt, unconnected: this.unconnected, causes: this.causes, untrusted: this.untrusted, pathMissing: this.pathMissing, supervisorPathLacking: sp !== null }
     }
     // A changed mod is not a Claude Code change: it has its own band, not "degraded".
     const failed = checks.some(c => c.state === 'fail')
     const passed = REQUIRED.every(id => this.results[id]?.state === 'pass')
-    return { claudeVersion: this.version, state: failed ? 'degraded' : passed ? 'passed' : 'new', checks: [...checks, ...extra], controlOff: this.controlOff(), controlOffFor: this.controlOffFor(), checkedAt: this.checkedAt, unconnected: this.unconnected, causes: this.causes }
+    return { claudeVersion: this.version, state: failed ? 'degraded' : passed ? 'passed' : 'new', checks: [...checks, ...extra], controlOff: this.controlOff(), controlOffFor: this.controlOffFor(), checkedAt: this.checkedAt, unconnected: this.unconnected, causes: this.causes, untrusted: this.untrusted, pathMissing: this.pathMissing, supervisorPathLacking: sp !== null }
   }
 
   private set(id: CheckId, state: 'pass' | 'fail', detail: string | null = null): void {

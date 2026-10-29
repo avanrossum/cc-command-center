@@ -11,9 +11,9 @@ let dir: string
 beforeEach(() => (dir = mkdtempSync(join(tmpdir(), 'ccc-usage-'))))
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
-function put(name: string, used: number, resetsAt: number, mtime: number): void {
+function put(name: string, used: number, resetsAt: number, mtime: number, sessionId?: string): void {
   const p = join(dir, name)
-  writeFileSync(p, JSON.stringify({ rate_limits: { five_hour: { used_percentage: used, resets_at: resetsAt }, seven_day: { used_percentage: 40, resets_at: resetsAt + 86_400 } } }))
+  writeFileSync(p, JSON.stringify({ ...(sessionId ? { session_id: sessionId } : {}), rate_limits: { five_hour: { used_percentage: used, resets_at: resetsAt }, seven_day: { used_percentage: 40, resets_at: resetsAt + 86_400 } } }))
   utimesSync(p, mtime / 1000, mtime / 1000)
 }
 
@@ -29,6 +29,15 @@ describe('readUsageDir', () => {
     put('b.json', 70, NOW / 1000 - 60, NOW - 1000)
     const r = await readUsageDir(dir, NOW)
     expect(r?.value.fiveHour).toEqual({ usedPercent: 70, resetsAt: NOW / 1000 - 60 })
+  })
+
+  it('reads only the sessions it is told to keep, by file name and by the id inside (MIP2-1520)', async () => {
+    put('mine.json', 10, NOW / 1000 + 3600, NOW - 60_000, 'mine')
+    put('qa.json', 99, NOW / 1000 + 3600, NOW - 1000, 'qa')
+    put('mine2.json', 77, NOW / 1000 + 3600, NOW - 500, 'qa')
+    const keep = (id: string) => id === 'mine' || id === 'mine2'
+    expect((await readUsageDir(dir, NOW, keep))?.value.fiveHour?.usedPercent).toBe(10)
+    expect((await readUsageDir(dir, NOW))?.value.fiveHour?.usedPercent).toBe(77)
   })
 
   it('is null with no readable file', async () => {

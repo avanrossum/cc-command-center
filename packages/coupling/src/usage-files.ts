@@ -8,6 +8,10 @@
 // time has passed, so that guard keeps a stale window off the meter. When
 // every file is past its reset, the newest of them comes back, so the meter
 // can say the window reset and it waits for a new reading (MIP2-1498 §4.4).
+//
+// `keep` limits the files to sessions the app lists (MIP2-1520): the folder
+// also holds files from sessions run under other config folders, such as
+// QA's isolated ones, which aren't this account's sessions.
 
 import { lstat, readdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -26,10 +30,11 @@ function windowOf(v: unknown): RateLimitWindow | null {
   return { usedPercent: w.used_percentage, resetsAt }
 }
 
-export async function readUsageDir(dir = DEFAULT_USAGE_DIR, now = Date.now()): Promise<Field<RateLimits> | null> {
+export async function readUsageDir(dir = DEFAULT_USAGE_DIR, now = Date.now(), keep?: (sessionId: string) => boolean): Promise<Field<RateLimits> | null> {
   let names: string[]
   try {
-    names = (await readdir(dir)).filter(n => n.endsWith('.json'))
+    // Each file is named for its session, and says which one inside; both must be kept.
+    names = (await readdir(dir)).filter(n => n.endsWith('.json') && (!keep || keep(n.slice(0, -'.json'.length))))
   } catch {
     return null
   }
@@ -47,7 +52,9 @@ export async function readUsageDir(dir = DEFAULT_USAGE_DIR, now = Date.now()): P
   let pastReset: Field<RateLimits> | null = null
   for (const { name, mtimeMs } of newest.slice(0, NEWEST_READ)) {
     try {
-      const data = JSON.parse(await readFile(join(dir, name), 'utf8')) as { rate_limits?: { five_hour?: unknown; seven_day?: unknown } }
+      const data = JSON.parse(await readFile(join(dir, name), 'utf8')) as { session_id?: unknown; rate_limits?: { five_hour?: unknown; seven_day?: unknown } }
+      const sessionId = typeof data.session_id === 'string' ? data.session_id : name.slice(0, -'.json'.length)
+      if (keep && !keep(sessionId)) continue
       const fiveHour = windowOf(data.rate_limits?.five_hour)
       if (!fiveHour || fiveHour.resetsAt === null) continue
       const reading = field({ fiveHour, sevenDay: windowOf(data.rate_limits?.seven_day) }, 'statusline', mtimeMs)

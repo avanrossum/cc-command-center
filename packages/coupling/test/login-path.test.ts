@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { claudeEnv, cleanPath, resolveLoginPath, setLoginPath } from '../src/claude-cli.ts'
-import { checkSupervisorPath, daemonPid, pathFromPs, processStartedAt, sharedSupervisorStart, supervisorState } from '../src/supervisor-env.ts'
+import { checkSupervisorPath, daemonPid, pathFromPs, processPathOk, processStartedAt, sharedSupervisorStart, supervisorState } from '../src/supervisor-env.ts'
 import { ClaudeCommandError as CommandError } from '../src/claude-cli.ts'
 
 const env = { HOME: '/Users/x', USER: 'x', SHELL: '/bin/zsh', PATH: '/usr/bin:/bin:/usr/sbin:/sbin' }
@@ -148,5 +148,14 @@ describe('processStartedAt (MIP2-1488)', () => {
     expect(await processStartedAt(1, async () => '')).toBeNull()
     expect(await processStartedAt(1, async () => 'mer 28 oct 02:53:01 2026')).toBeNull()
     expect(await processStartedAt(1, async () => Promise.reject(new Error('no such process')))).toBeNull()
+  })
+})
+
+describe('processPathOk (MIP2-1518)', () => {
+  it("reads a session process's own PATH, the last PATH=, and says unknown when it can't", async () => {
+    const ps = (text: string) => async () => text
+    expect(await processPathOk(1, '/Users/x/.local/bin', ps('claude --bg PATH=/usr/bin:/Users/x/.local/bin HOME=/Users/x'))).toBe(true)
+    expect(await processPathOk(1, '/Users/x/.local/bin', ps('claude --bg PATH=/usr/bin:/bin'))).toBe(false)
+    expect(await processPathOk(1, '/Users/x/.local/bin', ps(''))).toBeNull()
   })
 })

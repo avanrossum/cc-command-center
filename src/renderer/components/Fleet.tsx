@@ -1,7 +1,9 @@
 // Fleet: the filter chips and the four groups (spec MIP2-1370 §5).
 
 import { useState } from 'react'
-import { catFilter, countFleet, groupFleet, type Entry, type FilterId } from '../model/fleet.ts'
+import { catFilter, categoryLabel, countFleet, groupFleet, type Entry, type FilterId } from '../model/fleet.ts'
+import { tildify } from '../model/format.ts'
+import { NEEDS_YOU } from '../model/card-state.ts'
 import { NO_SELECTION, selectClick, type Selection } from '../model/selection.ts'
 import type { SelfCheckReport } from '@ccc/contract'
 import { Card, SessionRow } from './Card.tsx'
@@ -100,7 +102,22 @@ export function Fleet({
       <SelfCheckBand
         report={selfCheck}
         now={now}
-        rows={new Map(entries.map(e => [e.session.sessionId, { name: e.name, running: e.session.pid.value !== null, waiting: e.session.activity.value === 'waiting' }]))}
+        rows={
+          new Map(
+            entries.map(e => [
+              e.session.sessionId,
+              {
+                name: e.name,
+                running: e.session.pid.value !== null,
+                waiting: e.session.activity.value === 'waiting',
+                category: { label: categoryLabel(e.cat), color: e.cat.color },
+                cwd: tildify(e.session.cwd.value),
+                busy: ['working', 'agents'].includes(e.view.state) || NEEDS_YOU.has(e.view.state) || e.session.activity.value === 'waiting',
+              },
+            ]),
+          )
+        }
+        onOpen={onOpen}
       />
       <UpdateBand />
       {entries.length === 0 && <div className="empty">No Claude Code sessions are running.</div>}

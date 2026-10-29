@@ -120,3 +120,16 @@ describe('removeAdminKeyAtStart (gate pass 18, L-2)', () => {
     expect(removeAdminKeyAtStart({ holdsAdminKey: () => true, clear: stuck })).toMatch(/couldn't be removed \(EPERM.*remove it in Settings › Arbiter/)
   })
 })
+
+describe('clearing a gone session\'s mark (MIP2-1518)', () => {
+  it('only for a session not listed, or archived or removed, and without a process', async () => {
+    const { clearGoneRefusal } = await import('../src/main/resume.ts')
+    const running = { pid: { value: 42 } }
+    const stopped = { pid: { value: null } }
+    expect(clearGoneRefusal(undefined, undefined, false)).toBeNull()
+    expect(clearGoneRefusal(stopped, { removedAt: 1 }, false)).toBeNull()
+    expect(clearGoneRefusal(stopped, {}, true)).toBeNull()
+    expect(clearGoneRefusal(stopped, {}, false)).toMatch(/still exists/)
+    expect(clearGoneRefusal(running, { removedAt: 1 }, true)).toMatch(/still exists/)
+  })
+})

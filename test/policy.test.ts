@@ -165,7 +165,7 @@ describe('control checks', async () => {
 })
 
 describe('QA isolation (MIP2-1408)', async () => {
-  const { debugPortAllowed, qaPackagedPaths, qaPickPaths, resolveChannelRoot, resolveUserData } = await import('../src/main/paths.ts')
+  const { debugPortAllowed, qaPackagedPaths, qaPickPaths, qaUsageDir, resolveChannelRoot, resolveUserData } = await import('../src/main/paths.ts')
   const appData = '/Users/x/Library/Application Support'
   const root = '/Users/x/.ccc/ch'
 
@@ -198,6 +198,12 @@ describe('QA isolation (MIP2-1408)', async () => {
     expect(qaPackagedPaths({ CCC_QA_PACKAGED_PATHS: '1' }, false)).toBe(false)
     expect(qaPackagedPaths({ CCC_QA: '1' }, false)).toBe(false)
     expect(qaPackagedPaths({ CCC_QA: '1', CCC_QA_PACKAGED_PATHS: 'yes' }, false)).toBe(false)
+    // QA's synthetic usage readings: same gate, an absolute folder, refused otherwise (MIP2-1516).
+    expect(qaUsageDir({}, false)).toBeNull()
+    expect(qaUsageDir({ CCC_QA: '1', CCC_QA_USAGE_DIR: '/tmp/qa-usage' }, false)).toBe('/tmp/qa-usage')
+    expect(() => qaUsageDir({ CCC_QA: '1', CCC_QA_USAGE_DIR: '/tmp/qa-usage' }, true)).toThrow('needs CCC_QA=1')
+    expect(() => qaUsageDir({ CCC_QA_USAGE_DIR: '/tmp/qa-usage' }, false)).toThrow('needs CCC_QA=1')
+    expect(() => qaUsageDir({ CCC_QA: '1', CCC_QA_USAGE_DIR: 'rel' }, false)).toThrow('absolute')
     // The ⌘O stand-in follows the port's rule (MIP2-1413).
     expect(qaPickPaths({}, false)).toBeNull()
     expect(qaPickPaths({ CCC_QA: '1', CCC_QA_PICK_PATHS: '/a b/c:/d' }, false)).toEqual(['/a b/c', '/d'])

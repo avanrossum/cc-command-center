@@ -105,6 +105,7 @@ export const IPC = {
   /** Main → renderer: a one-line toast (a session removed outside the app). */
   appNotice: 'app:notice',
   startupNotices: 'app:startup-notices',
+  clearGoneMark: 'life:clear-gone-mark',
   lifeResurrect: 'life:resurrect',
   lifeArchive: 'life:archive',
   lifeNeverRollOff: 'life:never-roll-off',
@@ -281,6 +282,8 @@ export interface CccApi {
   onNotice(listener: (text: string) => void): () => void
   /** Notices from the app's start, before the window could show them; each is returned once. */
   startupNotices(): Promise<string[]>
+  /** Clears the untrusted mark of a session that no longer exists: its channel is closed (MIP2-1518). Refused while it's listed. */
+  clearGoneMark(sessionId: string): Promise<Result>
   onOpenSession(listener: (sessionId: string) => void): () => void
   onOpenNeeds(listener: () => void): () => void
   /** The app menu's Settings… (⌘,) was chosen (MIP2-1459). */

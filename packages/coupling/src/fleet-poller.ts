@@ -46,8 +46,10 @@ export interface FleetPollerOptions {
   readReporter?: () => Promise<ReporterRead> | ReporterRead
   /** Prompts the mods have offered to the app, by session. */
   readPending?: () => Map<string, PendingRequest[]>
-  /** The usage governor's files, for the meter when no mod has a fresher reading. */
-  readUsage?: () => Promise<Field<RateLimits> | null>
+  /** The usage governor's files, for the meter, given the sessions the app lists; a mod's own reading is the fallback. */
+  readUsage?: (listed: ReadonlySet<string>) => Promise<Field<RateLimits> | null>
+  /** QA's synthetic readings (MIP2-1516): the meter uses readUsage's reading alone, never a mod's. */
+  usageFileOnly?: boolean
   /** The detect-and-degrade self-check (DECISION item 4). */
   selfCheck?: SelfCheck
   /** What the self-check reads about each channel. */
@@ -68,6 +70,9 @@ export class FleetPoller {
   private readonly readPending: FleetPollerOptions['readPending'] | null
   private readonly readUsage: FleetPollerOptions['readUsage'] | null
   private usageFile: Field<RateLimits> | null = null
+  /** The meter's last reading, held while no new one reads (MIP2-1520). */
+  private lastUsage: Field<RateLimits> | null = null
+  private readonly usageFileOnly: boolean
   private readonly log: (line: string) => void
   private readonly intervalMs: number
   private readonly now: () => number
@@ -92,6 +97,7 @@ export class FleetPoller {
     this.readReporter = opts.readReporter ?? null
     this.readPending = opts.readPending ?? null
     this.readUsage = opts.readUsage ?? null
+    this.usageFileOnly = opts.usageFileOnly === true
     this.log = opts.log ?? (line => console.warn(line))
     this.intervalMs = opts.intervalMs ?? 2_000
     this.now = opts.now ?? Date.now
@@ -148,7 +154,8 @@ export class FleetPoller {
       this.health = { ...this.health, ok: false, error: message(err) }
     }
     await this.pollReporter()
-    this.usageFile = (await this.readUsage?.().catch(() => null)) ?? null
+    const listed = new Set(this.sessions.map(s => s.sessionId))
+    this.usageFile = (await this.readUsage?.(listed).catch(() => null)) ?? null
     await this.runSelfCheck()
     return this.publish()
   }
@@ -225,12 +232,30 @@ export class FleetPoller {
     }
   }
 
-  /** The freshest reading of both windows: a live mod's, or the governor's files. */
+  /**
+   * Both windows for the meter (MIP2-1520). The governor's files come first:
+   * a file's mtime is when its reading was taken. A mod's `rateLimits` carry
+   * its last contact, which an idle session renews every 25 s with an old
+   * reading, so they're used only when no file reads, and only with a window
+   * that hasn't reset. The meter never steps back to an older reading than
+   * the one it shows, and holds that one while nothing new reads; the pace
+   * line ages it.
+   */
   private usage(sessions: SessionSnapshot[]): Field<RateLimits> | null {
-    const readings = [this.usageFile, ...sessions.map(s => s.rateLimits)].filter(
-      (f): f is Field<RateLimits> => !!f && !f.stale && f.value.fiveHour !== null,
-    )
-    return readings.sort((a, b) => b.observedAt - a.observedAt)[0] ?? null
+    if (this.usageFileOnly) return this.usageFile
+    const live = (f: Field<RateLimits> | null | undefined): f is Field<RateLimits> => !!f && !f.stale && f.value.fiveHour !== null
+    const now = this.now()
+    const fromMod = () =>
+      sessions
+        .map(s => s.rateLimits)
+        .filter(live)
+        .filter(f => (f.value.fiveHour?.resetsAt ?? 0) * 1000 > now)
+        .sort((a, b) => b.observedAt - a.observedAt)[0] ?? null
+    const pick = live(this.usageFile) ? this.usageFile : fromMod()
+    const last = this.lastUsage
+    // A file's reading replaces a mod's whatever their times, since the two times measure different things.
+    if (pick && (!last || pick.observedAt >= last.observedAt || (pick.source !== 'mod' && last.source === 'mod'))) this.lastUsage = pick
+    return this.lastUsage
   }
 
   private publish(): FleetSnapshot {

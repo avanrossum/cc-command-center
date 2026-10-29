@@ -451,16 +451,32 @@ describe('strays and migrations (pass 7, L-1 and M-1)', () => {
 })
 
 describe("the supervisor's PATH (MIP2-1457)", () => {
-  it('fails when the supervisor lacks the folder claude is in, and passes otherwise', () => {
+  it("notes a supervisor without the folder claude is in as a plain line, not a warning on its own (MIP2-1518)", () => {
     const check = new SelfCheck(memoryStore())
     check.setVersion(NEW)
     check.noteSupervisorPath({ pid: 79806, path: '/usr/bin:/bin:/usr/sbin:/sbin', claudeDir: '/Users/x/.local/bin', ok: false })
     const item = run(check).checks.find(c => c.id === SUPERVISOR_PATH)!
-    expect(item.state).toBe('fail')
-    expect(item.detail).toContain('without /Users/x/.local/bin')
+    expect(item.state).toBe('pass')
+    expect(item.detail).toContain('without ~/.local/bin')
     check.noteSupervisorPath({ pid: 79806, path: '/Users/x/.local/bin:/usr/bin', claudeDir: '/Users/x/.local/bin', ok: true })
     expect(run(check).checks.find(c => c.id === SUPERVISOR_PATH)!.state).toBe('pass')
     check.noteSupervisorPath(null)
     expect(run(check).checks.find(c => c.id === SUPERVISOR_PATH)!.state).toBe('pass')
   })
+
+describe('the PATH item (MIP2-1518)', () => {
+  it('warns only while running sessions lack the folder, and keeps the supervisor as a plain line', () => {
+    const check = new SelfCheck(memoryStore())
+    check.setVersion(NEW)
+    check.noteSupervisorPath({ pid: 9, path: '/usr/bin', claudeDir: '/Users/x/.local/bin', ok: false })
+    const quiet = run(check).checks.find(c => c.id === SUPERVISOR_PATH)!
+    expect(quiet.state).toBe('pass')
+    expect(quiet.detail).toContain('supervisor runs without ~/.local/bin')
+    check.noteSessionPaths([A_ID])
+    const r = run(check)
+    expect(r.checks.find(c => c.id === SUPERVISOR_PATH)?.state).toBe('fail')
+    expect(r.pathMissing).toEqual([A_ID])
+    expect(r.supervisorPathLacking).toBe(true)
+  })
+})
 })

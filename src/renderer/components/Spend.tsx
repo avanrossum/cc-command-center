@@ -116,7 +116,14 @@ function SpendPanel({
               <p>Today: ≈{usd(sim.todayUsd)}</p>
             </div>
           )}
-          {sim.noCost > 0 && <p className="up-note">{sim.noCost === 1 ? "1 session didn't report a cost." : `${sim.noCost} sessions didn't report a cost.`}</p>}
+          {sim.since !== undefined && sim.since > new Date(new Date(now).getFullYear(), new Date(now).getMonth(), 1).getTime() && (
+            <p className="up-note">Since {new Date(sim.since).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, when the app began counting.</p>
+          )}
+          {sim.noCost > 0 && (
+            <p className="up-note" title={(sim.noCostIds ?? []).map(id => names.get(id) ?? `Session ${id.slice(0, 8)}`).join(', ')}>
+              {sim.noCost === 1 ? "1 session didn't report a cost." : `${sim.noCost} sessions didn't report a cost.`}
+            </p>
+          )}
           <p className="up-note">
             At {claudeVersion ? `Claude Code ${claudeVersion}` : "Claude Code's"} list prices. Subscription sessions aren't billed this way. The Arbiter isn't included; its spend is in the right rail.
           </p>
@@ -158,7 +165,13 @@ function ModelSplit({ rows, approx = false }: { rows: readonly { model: string; 
       <div className="up-h">By model</div>
       {rows.map(r => (
         <div key={r.model} className="up-row static">
-          <span className="up-name">{r.model.startsWith('claude-') ? modelLabel(r.model) : r.model}</span>
+          {r.model === 'unknown' ? (
+            <span className="up-name" title="Sessions whose reporter didn't say which model they use. Their cost still counts.">
+              Model not reported
+            </span>
+          ) : (
+            <span className="up-name">{r.model.startsWith('claude-') ? modelLabel(r.model) : r.model}</span>
+          )}
           <span className="up-pct">
             {approx ? '≈' : ''}
             {usd(r.usd)}

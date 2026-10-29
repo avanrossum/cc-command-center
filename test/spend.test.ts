@@ -136,7 +136,8 @@ describe('the ledger file (gate pass 15, M-2, L-3)', () => {
 
   it('drops a bad month and keeps a good one, and keeps key names like constructor as plain keys', () => {
     const d = checkLedger({
-      version: 1,
+      version: 2,
+      since: 1,
       last: { a: 1 },
       months: { '2026-10': { total: 3, bySession: { a: 3 }, byModel: { constructor: 3 }, byDay: {} }, '2026-09': { total: 'x', bySession: {}, byModel: {}, byDay: {} }, junk: {} },
     })
@@ -168,5 +169,42 @@ describe('the cost report request (gate pass 15, L-1)', () => {
     const fetchFn: Fetch = async (_url, init) => ((redirect = init.redirect), { ok: true, status: 200, json: async () => ({ data: [], has_more: false, next_page: null }), text: async () => '' })
     await fetchMonthCost('sk-ant-admin01-x', Date.now(), fetchFn)
     expect(redirect).toBe('error')
+  })
+})
+
+describe('first sight is a baseline (MIP2-1521)', () => {
+  const OCT29 = new Date(2026, 9, 29, 9, 0).getTime()
+  it("doesn't count a session's lifetime cost on the day the app first sees it", () => {
+    const l = new SpendLedger(join(dir, 'b.json'), 0)
+    const all = (old: number) => [
+      // Started before this month: its cost so far is a baseline.
+      snap('old', old, new Date(2026, 8, 20).getTime()),
+      // Started earlier this month: its cost so far belongs to the day it started, not today.
+      snap('mid', 500, new Date(2026, 9, 12, 15).getTime()),
+      // Started today: counts today.
+      snap('new', 2, OCT29 - 3_600_000),
+    ]
+    l.observe(all(3406.74), OCT29)
+    const c = l.current(OCT29)
+    expect(c.totalUsd).toBeCloseTo(502)
+    expect(c.todayUsd).toBeCloseTo(2)
+    // Later increases count where they happen.
+    l.observe(all(3410.74), OCT29 + 1000)
+    expect(l.current(OCT29).todayUsd).toBeCloseTo(6)
+  })
+
+  it('rebuilds a version 1 ledger, which booked first sights to today, and says since when it counts', () => {
+    const path = join(dir, 'v1.json')
+    writeFileSync(path, JSON.stringify({ version: 1, last: { old: 5000 }, months: { '2026-10': { total: 5250, bySession: { old: 5250 }, byModel: {}, byDay: { '2026-10-29': 5250 } } } }))
+    const l = new SpendLedger(path, 0)
+    l.observe([snap('old', 5000, new Date(2026, 8, 20).getTime())], OCT29)
+    expect(l.current(OCT29)).toMatchObject({ totalUsd: 0, todayUsd: 0 })
+    expect(l.current(OCT29).since).toBeGreaterThan(0)
+  })
+
+  it('names the sessions that reported no cost', () => {
+    const l = new SpendLedger(join(dir, 'n.json'), 0)
+    l.observe([snap('quiet', undefined, OCT29 - 1000)], OCT29)
+    expect(l.current(OCT29)).toMatchObject({ noCost: 1, noCostIds: ['quiet'] })
   })
 })

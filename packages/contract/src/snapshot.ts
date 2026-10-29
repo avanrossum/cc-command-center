@@ -239,6 +239,12 @@ export interface SelfCheckReport {
   controlOff: ('card-answers' | 'prompt-relay')[]
   /** When the checks last ran, Unix milliseconds; null before the first poll (settings, MIP2-1424). */
   checkedAt: number | null
+  /** Sessions whose channel was marked untrusted, and why; null when the channel never learned its session (MIP2-1518). */
+  untrusted?: { sessionId: string | null; why: string }[]
+  /** Running sessions whose own process PATH lacks the folder holding claude (MIP2-1518). */
+  pathMissing?: string[]
+  /** The supervisor's own PATH lacks that folder, so sessions Claude Code restarts by itself will too (MIP2-1518). */
+  supervisorPathLacking?: boolean
   /** Sessions with card answers and prompt relay off because their own channel hasn't connected (MIP2-1502). */
   controlOffFor?: string[]
   /** Sessions whose mod hasn't reached the app by the deadline, and since when (MIP2-1488). */

@@ -24,7 +24,10 @@ interface Month {
 }
 
 interface LedgerFile {
-  version: 1
+  /** 2 from MIP2-1521: a version 1 file booked first-seen sessions to the day they were seen, so it's rebuilt. */
+  version: 2
+  /** When this ledger began, Unix ms: the panel says the figures go back only to then. */
+  since: number
   /** Each session's cost at its last reading. */
   last: Record<string, number>
   months: Record<string, Month>
@@ -51,9 +54,9 @@ function checkTally(v: unknown): Record<string, number> | null {
  * finite total with tallies by session, model and day. A bad month is
  * dropped; a bad `last` starts it over. Anything else starts the file over.
  */
-export function checkLedger(v: unknown): LedgerFile {
-  const empty: LedgerFile = { version: 1, last: tally(), months: {} }
-  if (!isPlain(v) || v.version !== 1 || !isPlain(v.months)) return empty
+export function checkLedger(v: unknown, now: number = Date.now()): LedgerFile {
+  const empty: LedgerFile = { version: 2, since: now, last: tally(), months: {} }
+  if (!isPlain(v) || v.version !== 2 || !isPlain(v.months) || typeof v.since !== 'number' || !Number.isFinite(v.since)) return empty
   const months: Record<string, Month> = {}
   for (const [key, m] of Object.entries(v.months)) {
     if (!/^\d{4}-\d{2}$/.test(key) || !isPlain(m) || typeof m.total !== 'number' || !Number.isFinite(m.total)) continue
@@ -62,7 +65,7 @@ export function checkLedger(v: unknown): LedgerFile {
     const byDay = checkTally(m.byDay)
     if (bySession && byModel && byDay) months[key] = { total: m.total, bySession, byModel, byDay }
   }
-  return { version: 1, last: checkTally(v.last) ?? tally(), months }
+  return { version: 2, since: v.since as number, last: checkTally(v.last) ?? tally(), months }
 }
 
 export class SpendLedger {
@@ -70,7 +73,7 @@ export class SpendLedger {
   private dirty = false
   private savedAt = 0
   /** Sessions this month that reported no cost, by the last reading. */
-  private noCost = 0
+  private noCost: string[] = []
 
   constructor(
     private readonly path: string,
@@ -99,26 +102,30 @@ export class SpendLedger {
     const m = (this.data.months[month] ??= emptyMonth())
     const monthStart = new Date(new Date(now).getFullYear(), new Date(now).getMonth(), 1).getTime()
     let changed = false
-    let noCost = 0
+    const noCost: string[] = []
     for (const s of sessions) {
       const cost = s.costUsd?.value
       if (cost === undefined || !Number.isFinite(cost) || cost < 0) {
-        if (s.startedAt.value >= monthStart || s.pid.value !== null) noCost++
+        if (s.startedAt.value >= monthStart || s.pid.value !== null) noCost.push(s.sessionId)
         continue
       }
       const last = this.data.last[s.sessionId]
-      const delta = last === undefined ? (s.startedAt.value >= monthStart ? cost : 0) : cost >= last ? cost - last : cost
       this.data.last[s.sessionId] = cost
       if (last !== cost) this.dirty = true
+      // A first sight is a baseline (MIP2-1521): Claude Code's cost is the session's lifetime total. Only a session
+      // started this month counts its cost so far, on the day it started, not the day the app first saw it.
+      const first = last === undefined
+      const delta = first ? (s.startedAt.value >= monthStart ? cost : 0) : cost >= last ? cost - last : cost
       if (delta <= 0) continue
+      const onDay = first ? dayKey(Math.min(now, s.startedAt.value)) : day
       const model = s.model?.value ?? 'unknown'
       m.total += delta
       m.bySession[s.sessionId] = (m.bySession[s.sessionId] ?? 0) + delta
       m.byModel[model] = (m.byModel[model] ?? 0) + delta
-      m.byDay[day] = (m.byDay[day] ?? 0) + delta
+      m.byDay[onDay] = (m.byDay[onDay] ?? 0) + delta
       changed = true
     }
-    if (noCost !== this.noCost) (this.noCost = noCost), (changed = true)
+    if (noCost.join() !== this.noCost.join()) (this.noCost = noCost), (changed = true)
     // Only this month and the one before are kept. A last cost is kept while its session is listed or has
     // spend in a kept month, so a session that drops out of one poll isn't counted again (gate pass 15, L-3).
     for (const k of Object.keys(this.data.months)) if (k < monthKey(monthStart - 1)) delete this.data.months[k]
@@ -154,7 +161,9 @@ export class SpendLedger {
       byModel: Object.entries(m.byModel)
         .sort((a, b) => b[1] - a[1])
         .map(([model, usd]) => ({ model, usd })),
-      noCost: this.noCost,
+      noCost: this.noCost.length,
+      noCostIds: [...this.noCost],
+      since: this.data.since,
     }
   }
 }

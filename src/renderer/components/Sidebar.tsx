@@ -10,7 +10,7 @@ import { age } from '../model/format.ts'
 import { selectClick, type Selection } from '../model/selection.ts'
 import { Glyph } from './bits.tsx'
 import { ImportBand, SESSION_DRAG, useStore } from './Categories.tsx'
-import { SessionMenu } from './SessionMenu.tsx'
+import { SessionMenu, NeverMark } from './SessionMenu.tsx'
 import { parkedSessions, type Parked } from '../model/move.ts'
 
 /** Order inside a category: needs you, working, asked/waiting, your turn; quiet sessions fold. */
@@ -167,12 +167,8 @@ export function Sidebar({
           <span
             className="nm"
             role="button"
-            onClick={() => {
-              // In Focus a header opens the category's latest session; in Fleet it filters (spec §11).
-              const latest = focused ? [...list].filter(e => e.session.sessionId !== focused).sort((a, b) => (b.since ?? b.session.startedAt.value) - (a.since ?? a.session.startedAt.value))[0] : undefined
-              if (latest) onOpen(latest.session.sessionId)
-              else onFilter(catFilter(cat))
-            }}
+            // From Fleet or Focus, the name opens Fleet filtered to the category (MIP2-1514, replacing spec §11's Focus rule).
+            onClick={() => onFilter(catFilter(cat))}
           >
             {cat.emoji && <span className="emoji">{cat.emoji}</span>}
             {cat.name}
@@ -204,6 +200,8 @@ export function Sidebar({
             >
               <Glyph kind={e.view.glyph} />
               <b onMouseEnter={titleIfCut}>{e.name}</b>
+              {/* Never rolls off: the card's ∞, beside the name (MIP2-1513). */}
+              <NeverMark e={e} />
               <span className="age">{since === null ? '' : age(now - since)}</span>
               {/* The one row receiving input (MIP2-1398 §5). */}
               {typing === e.session.sessionId && (

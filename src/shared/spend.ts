@@ -8,6 +8,10 @@ export interface SimulatedSpend {
   byModel: { model: string; usd: number }[]
   /** Sessions this month that reported no cost, so aren't counted. */
   noCost: number
+  /** Which ones, for the panel's list (MIP2-1521). */
+  noCostIds?: string[]
+  /** When the app began counting, Unix ms: the figures go back only to then (MIP2-1521). */
+  since?: number
 }
 
 export interface RealSpend {

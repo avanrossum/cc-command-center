@@ -255,18 +255,14 @@ export function App() {
     void open(next.session.sessionId)
   }
 
-  // In Fleet a category key filters; in Focus it opens the category's most recent session, as a header click does.
+  // A category key opens Fleet filtered to that category, from Fleet or Focus, as a header click does (MIP2-1514).
   const categoryKeyRef = useRef((_n: number) => {})
   categoryKeyRef.current = n => {
     const order: CatRef[] = [...countFleet(entries).byCategory.values()].map(x => x.cat)
     const cat = order[n - 1]
     if (!cat) return
-    if (!focused) return setFilter(catFilter(cat))
-    const recent = entries
-      .filter(e => e.cat.id === cat.id && e.session.sessionId !== focused)
-      .sort((a, b) => (b.session.turn?.value.endedAt ?? b.session.startedAt.value) - (a.session.turn?.value.endedAt ?? a.session.startedAt.value))[0]
-    if (recent) void open(recent.session.sessionId)
-    else (setFocused(null), setFilter(catFilter(cat)))
+    setFocused(null)
+    setFilter(catFilter(cat))
   }
 
   // The session switcher (MIP2-1494 §5). Its lists live in the store; each change is saved there and comes back as a store update.

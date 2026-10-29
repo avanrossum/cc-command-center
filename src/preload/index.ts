@@ -88,6 +88,7 @@ const api: CccApi = {
   guessCategory: cwd => ipcRenderer.invoke(IPC.storeGuess, cwd),
   onNotice: listener => listen<[string]>(IPC.appNotice, listener),
   startupNotices: () => ipcRenderer.invoke(IPC.startupNotices),
+  clearGoneMark: id => ipcRenderer.invoke(IPC.clearGoneMark, id),
   onOpenSession: listener => listen<[string]>(IPC.openSession, listener),
   onOpenNeeds: listener => listen<[]>(IPC.openNeeds, listener),
   onOpenSettings: listener => listen<[]>(IPC.openSettings, listener),

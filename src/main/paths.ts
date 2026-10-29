@@ -67,6 +67,21 @@ export function debugPortAllowed(env: NodeJS.ProcessEnv, isPackaged: boolean): b
 }
 
 /**
+ * QA's usage readings (MIP2-1516): `CCC_QA_USAGE_DIR=/abs/dir` in an
+ * unpackaged CCC_QA=1 build replaces ~/.claude/ccc/usage as the usage
+ * meter's source, and the meter then reads only it, so QA can show the pace
+ * meter's states with synthetic readings. Null when unset; refused
+ * otherwise, as the other QA switches are.
+ */
+export function qaUsageDir(env: NodeJS.ProcessEnv, isPackaged: boolean): string | null {
+  const dir = env.CCC_QA_USAGE_DIR
+  if (dir === undefined || dir === '') return null
+  if (!debugPortAllowed(env, isPackaged)) throw new Error('CCC_QA_USAGE_DIR needs CCC_QA=1 and an unpackaged build')
+  if (!isAbsolute(dir) || dir.includes('\0')) throw new Error('CCC_QA_USAGE_DIR must be an absolute path')
+  return dir
+}
+
+/**
  * QA's packaged-path run (MIP2-1507): an unpackaged CCC_QA=1 build that also
  * sets CCC_QA_PACKAGED_PATHS=1 takes a packaged build's mod paths, a copy
  * under the data folder's reporter-mod/<hash> with the version checks, and
