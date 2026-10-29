@@ -245,6 +245,35 @@ export class AppStoreService {
     }
   }
 
+  /**
+   * A /clear gave a session a new id under the same job (MIP2-1557): its
+   * record moves to the new id, keeping the id it was launched under, and
+   * every list that names it follows. Nothing is lost or left behind under
+   * the old id.
+   */
+  renameSession(from: string, to: string): void {
+    const old = this.data.sessions[from]
+    if (!old || from === to) return
+    const { tie: _tie, ...meta } = old
+    this.data.sessions[to] = { ...(this.data.sessions[to] ?? {}), ...meta, launchSessionId: old.launchSessionId ?? from }
+    delete this.data.sessions[from]
+    for (const m of Object.values(this.data.sessions)) {
+      if (m.copyOf === from) m.copyOf = to
+      if (m.fromSession === from) m.fromSession = to
+    }
+    const s = this.data.settings
+    const swap = (list: string[] | undefined) => list?.map(id => (id === from ? to : id))
+    s.rollOffNotice = swap(s.rollOffNotice)
+    s.switcherPins = swap(s.switcherPins)
+    s.switcherRecent = swap(s.switcherRecent)
+    this.save()
+  }
+
+  /** Each session's id and the one it was launched under, where a /clear changed it (MIP2-1557). */
+  launchIds(): [current: string, launch: string][] {
+    return Object.entries(this.data.sessions).flatMap(([id, m]) => (m.launchSessionId ? [[id, m.launchSessionId] as [string, string]] : []))
+  }
+
   /** A session whose channel stopped being trustworthy, recorded outside the channel's folder (pass 4, M-2). */
   markUntrusted(sessionId: string, why: string): void {
     const m = (this.data.sessions[sessionId] ??= { categoryId: null, placedBy: null })

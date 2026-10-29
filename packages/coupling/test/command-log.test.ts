@@ -141,3 +141,12 @@ describe('CommandLog', () => {
     expect(e!.pid).toBe(1)
   })
 })
+
+describe('trustOutcome (MIP2-1558)', () => {
+  it('reads whether the trust question showed, the backgrounded id and note lines, from a screen drawn with cursor moves', async () => {
+    const { trustOutcome } = await import('../src/command-log.ts')
+    const screen = '\x1b[2J❯\x1b[1CNo,\x1b[1Cexit\r\nYes,\x1b[1CI\x1b[1Ctrust\x1b[1Cthis\x1b[1Cfolder\r\n\x1b[>4m78backgrounded · 663f28a2 · Docs sync\r\nnote: session x is already running\r\n'
+    expect(trustOutcome(screen.replace(/\x1b\[1C/g, ''))).toEqual({ asked: true, backgrounded: '663f28a2', notes: ['note: session x is already running'] })
+    expect(trustOutcome('Workspace not trusted.')).toEqual({ asked: false, backgrounded: null, notes: [] })
+  })
+})

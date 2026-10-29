@@ -55,7 +55,7 @@ function session(v: unknown): SessionMeta | null {
   for (const k of ['archivedAt', 'rolledOffAt', 'activityAt', 'movedAt', 'removedAt'] as const) if (num(v[k])) m[k] = v[k]
   for (const k of ['cwd', 'folderKey'] as const) if (absPath(v[k])) m[k] = v[k]
   for (const [k, max] of [['name', 80], ['alias', 120], ['theme', 64], ['untrusted', 300]] as const) if (str(v[k], max)) m[k] = v[k]
-  for (const k of ['parentId', 'copyOf', 'fromSession'] as const) if (isSessionId(v[k])) m[k] = v[k]
+  for (const k of ['parentId', 'copyOf', 'fromSession', 'launchSessionId'] as const) if (isSessionId(v[k])) m[k] = v[k]
   if (oneOf(v.origin, ['app', 'import'] as const)) m.origin = v.origin
   if (oneOf(v.kindOverride, ['session', 'contractor'] as const)) m.kindOverride = v.kindOverride
   if (Array.isArray(v.tie)) m.tie = v.tie.filter(isCategoryId).slice(0, 8)

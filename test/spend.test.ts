@@ -209,3 +209,18 @@ describe('first sight is a baseline (MIP2-1521)', () => {
     expect(l.current(OCT29)).toMatchObject({ noCost: 1, noCostIds: ['quiet'] })
   })
 })
+
+describe('a /clear (MIP2-1557)', () => {
+  it("moves a session's tallies to its new id, so its next reading isn't counted again", () => {
+    const l = new SpendLedger(join(dir, 'spend.json'), 0)
+    l.observe([snap('old', 4, OCT28 - 1000)], OCT28)
+    l.observe([snap('old', 6, OCT28 - 1000)], OCT28 + 1)
+    l.rename('old', 'new')
+    // The process goes on; its cost reading carries on under the new id.
+    l.observe([snap('new', 7, OCT28 - 1000)], OCT28 + 2)
+    const oct = l.current(OCT28 + 2)
+    expect(oct.totalUsd).toBeCloseTo(7)
+    expect(oct.topSessions).toEqual([{ sessionId: 'new', usd: 7 }])
+  })
+})
+

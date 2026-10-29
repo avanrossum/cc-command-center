@@ -13,8 +13,11 @@ import { backgroundedId, resumedCopy, type PreparedLaunch, type SupervisorHost }
 
 export interface TrustEvents {
   data(runId: string, data: string): void
-  /** The run ended: with the new session's id, or null when no session started (No, Esc, a failure), and the folder it ran in. */
-  done(runId: string, sessionId: string | null, error: string | null, cwd?: string, resumed?: string): void
+  /**
+   * The run ended: with the new session's id, or null when no session started (No, Esc, a failure), the folder it ran
+   * in, and the options it launched with, for the app's record of the launch (MIP2-1558).
+   */
+  done(runId: string, sessionId: string | null, error: string | null, cwd?: string, resumed?: string, launch?: LaunchOptions): void
 }
 
 /** Output kept per run to find the id; the view gets every byte as it comes. */
@@ -26,6 +29,7 @@ interface Run {
   output: string
   /** The session a resume's trust run was for (MIP2-1461). */
   resume?: string
+  opts: LaunchOptions
 }
 
 export class TrustRuns {
@@ -46,7 +50,7 @@ export class TrustRuns {
     // A session command: the reload switch rides on it once the supervisor is confirmed running (MIP2-1463).
     const session = (await this.host.sessionSwitch?.()) ?? false
     const process = this.spawn({ file: this.binary, args, cwd: prepared.cwd, ...(session ? { session } : {}) }, cols, rows)
-    const run: Run = { process, prepared, output: '', ...(opts.resume ? { resume: opts.resume } : {}) }
+    const run: Run = { process, prepared, output: '', opts, ...(opts.resume ? { resume: opts.resume } : {}) }
     this.runs.set(runId, run)
     process.onData(d => {
       run.output = (run.output + d).slice(-KEEP_BYTES)
@@ -84,7 +88,7 @@ export class TrustRuns {
     }
     try {
       const { sessionId } = await this.host.completeLaunch(run.prepared, shortId)
-      this.events.done(runId, sessionId, null, run.prepared.cwd, run.resume)
+      this.events.done(runId, sessionId, null, run.prepared.cwd, run.resume, run.opts)
     } catch (err) {
       await this.host.abandonLaunch(run.prepared)
       this.events.done(runId, null, err instanceof Error ? err.message : String(err))

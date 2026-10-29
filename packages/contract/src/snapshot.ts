@@ -188,6 +188,14 @@ export interface SessionSnapshot {
   shortId: Field<string | null>
   /** Null when the process isn't alive. */
   pid: Field<number | null>
+  /**
+   * What a background job with no process is waiting on, in Claude Code's
+   * words, from its saved state (\`needs\`): for example a project MCP server
+   * to approve, answered by attaching (MIP2-1558, QA MIP2-1559). Absent
+   * otherwise; null while the job waits and Claude Code hasn't said on what
+   * yet. Untrusted text. The app shows it and never answers it.
+   */
+  jobNeeds?: Field<string | null>
   activity: Field<Activity>
   /** Null when the session doesn't need Alex. */
   needsYou: Field<NeedsYou | null>

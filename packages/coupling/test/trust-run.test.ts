@@ -11,6 +11,7 @@ function setup() {
   let onExit: (e: { exitCode: number }) => void = () => {}
   const spawned: { file: string; args: string[]; cwd: string }[] = []
   const done: [string | null, string | null][] = []
+  const launched: unknown[] = []
   const abandoned: string[] = []
   const completed: string[] = []
   const runs = new TrustRuns(
@@ -20,7 +21,7 @@ function setup() {
       abandonLaunch: async p => void abandoned.push(p.channelId ?? ''),
     },
     '/bin/claude',
-    { data: () => {}, done: (_r, sid, err) => void done.push([sid, err]) },
+    { data: () => {}, done: (_r, sid, err, _cwd, _resumed, launch) => (done.push([sid, err]), void launched.push(launch)) },
     (cmd, _c, _r) => {
       spawned.push(cmd)
       const p: AttachProcess = {
@@ -33,7 +34,7 @@ function setup() {
       return p
     },
   )
-  return { runs, written, spawned, done, abandoned, completed, emit: (d: string) => onData(d), exit: (c = 0) => onExit({ exitCode: c }) }
+  return { runs, written, spawned, done, launched, abandoned, completed, emit: (d: string) => onData(d), exit: (c = 0) => onExit({ exitCode: c }) }
 }
 
 describe('TrustRuns', () => {
@@ -54,6 +55,8 @@ describe('TrustRuns', () => {
     expect(t.written).toEqual(['\r'])
     expect(t.completed).toEqual(['c0ffee08'])
     expect(t.done).toEqual([['c0ffee08-0000-4000-8000-000000000000', null]])
+    // Its options go with it, so main records the launch as any launch, mod copy included (MIP2-1558).
+    expect(t.launched).toEqual([{ cwd: '/new' }])
   })
 
   it('on No or Esc, starts nothing and discards the channel', async () => {

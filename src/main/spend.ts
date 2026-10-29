@@ -136,6 +136,16 @@ export class SpendLedger {
     return changed
   }
 
+  /** A /clear gave a session a new id (MIP2-1557): its tallies and last reading follow, so nothing is counted twice. */
+  rename(from: string, to: string): void {
+    const d = this.data
+    if (from in d.last) (d.last[to] = d.last[from]!), delete d.last[from]
+    for (const m of Object.values(d.months)) {
+      if (from in m.bySession) (m.bySession[to] = (m.bySession[to] ?? 0) + m.bySession[from]!), delete m.bySession[from]
+    }
+    this.dirty = true
+  }
+
   save(now = Date.now()): void {
     if (!this.dirty) return
     try {

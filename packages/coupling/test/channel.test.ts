@@ -339,6 +339,24 @@ describe('ChannelHub', () => {
     await timed.closeAll()
   })
 
+  it('after a /clear, follows the new id and still takes reports under the launch id (MIP2-1557)', async () => {
+    const { ch } = await launch()
+    await channelCall($, ch, 'POST', CHANNEL_PATHS.report, JSON.parse(A_TEXT))
+    expect(hub.reportedClear(A_ID)).toBe(false)
+    const NEW = 'b55a99a6-0000-4000-8000-000000000002'
+    hub.rebind(A_ID, NEW)
+    expect(hub.channelOf(NEW)).not.toBeNull()
+    expect(hub.channelOf(A_ID)).toBeNull()
+    // The mod goes on reporting its launch id, with the clear in its events: accepted, stored under the new id.
+    const cleared = { ...JSON.parse(A_TEXT), events: [...JSON.parse(A_TEXT).events, { seq: 999, at: Date.now(), agentId: null, type: 'session.end', reason: 'clear' }] }
+    expect((await channelCall($, ch, 'POST', CHANNEL_PATHS.report, cleared))?.status).toBe(204)
+    expect([...hub.readReporter().files.keys()]).toEqual([NEW])
+    expect(hub.readReporter().files.get(NEW)?.file.sessionId).toBe(NEW)
+    expect(hub.reportedClear(NEW)).toBe(true)
+    // Prompts go to it by its new id.
+    expect(() => hub.relayPrompt(NEW, 'hi')).not.toThrow()
+  })
+
   describe('reply signatures (MIP2-1436 item 1)', () => {
     it('writes the public reply key in the settings, never the private one', async () => {
       const l = await hub.prepareLaunch()

@@ -14,6 +14,8 @@
 import { realpathSync } from 'node:fs'
 import { parseAgentsJson, toSnapshot } from './agents-json.ts'
 import { supervisorState } from './supervisor-env.ts'
+import { claudeConfigDir, readJobNeeds } from './job-state.ts'
+import { field } from '@ccc/contract'
 import { ClaudeCommandError, type ClaudeRunner } from './claude-cli.ts'
 import type { AttachCommand, LaunchOptions, ListResult, SessionHost } from './session-host.ts'
 
@@ -168,6 +170,9 @@ const CHANGING_MS = 10_000
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const SHORT_ID = /^[0-9a-f]{8}$/
 
+/** How long a new job may be listed with no process before it reads as waiting on something in the session (MIP2-1558). */
+export const JOB_NO_PID_GRACE_MS = 8_000
+
 export class SupervisorHost implements SessionHost {
   private readonly run: ClaudeRunner
   private readonly binary: string
@@ -217,6 +222,16 @@ export class SupervisorHost implements SessionHost {
       if (e.sessionId && e.cwd.startsWith('/')) this.cwds.set(e.sessionId, e.cwd)
     }
     const sessions = entries.map(e => toSnapshot(e, observedAt))
+    // A job with no process that hasn't settled (working or blocked) may be waiting on a question in the session,
+    // such as a project MCP server to approve: what it waits on, from its saved state, for the card (MIP2-1558). The
+    // app never answers it. Claude Code lists such a job as working, with no needs yet, for its first ~45 s (QA
+    // MIP2-1559, r8), so past a short grace it reads as waiting, with no text, until the needs come.
+    sessions.forEach((s, i) => {
+      const e = entries[i]!
+      if ((e.state !== 'blocked' && e.state !== 'working') || e.pid !== undefined || !e.id) return
+      const needs = readJobNeeds(claudeConfigDir(), e.id)
+      if (needs !== null || observedAt - e.startedAt > JOB_NO_PID_GRACE_MS) s.jobNeeds = field(needs, 'agents-json', observedAt)
+    })
     // A session gone from the list can't be a stray again; its id needn't be kept (pass 7, L-1).
     const listed = new Set(sessions.map(x => x.sessionId))
     for (const id of this.accounted) if (!listed.has(id)) this.accounted.delete(id)

@@ -119,6 +119,12 @@ export function cardView(s: SessionSnapshot, now: number): CardView {
     return view('request', detail, firstAsk?.askedAt ?? null)
   }
 
+  // A job with no process that Claude Code says is waiting on a question in the session, such as a project MCP server
+  // to approve (MIP2-1558): Alex's to answer by opening it, as folder trust is. Nothing on the card answers it, and it
+  // isn't ended, so opening it attaches rather than resuming.
+  // The label stays short; Claude Code's words go in the ask block (UX review).
+  if (s.jobNeeds && s.pid.value === null) return view('request', 'NEEDS YOU · IN SESSION', null)
+
   // Ended: its process is gone.
   if (s.pid.value === null || s.activity.value === 'stopped' || s.activity.value === 'failed' || s.activity.value === 'stale') {
     return view('ended', 'ENDED', null)

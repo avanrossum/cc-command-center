@@ -35,6 +35,19 @@ function snap(over: Partial<SessionSnapshot> & { activityValue?: SessionSnapshot
 const mod = <T>(v: T, at = NOW) => field(v, 'mod', at)
 
 describe('cardView', () => {
+  it("reads a job with no process that waits on a question in the session as needs you, not ended, with nothing to answer on the card (MIP2-1558)", () => {
+    const needs = 'approve 1 new project MCP server (acme-db) — attach to respond'
+    const v = cardView(snap({ activityValue: 'stale', pidValue: null, jobNeeds: field(needs, 'agents-json', NOW) }), NOW)
+    expect(v.state).toBe('request')
+    expect(v.label).toBe('NEEDS YOU · IN SESSION')
+    // Before Claude Code says on what: the same state and label.
+    expect(cardView(snap({ activityValue: 'working', pidValue: null, jobNeeds: field(null, 'agents-json', NOW) }), NOW)).toMatchObject({ state: 'request', label: 'NEEDS YOU · IN SESSION' })
+    // No pending request: no card approval is offered for it.
+    expect(snap({ jobNeeds: field(needs, 'agents-json', NOW) }).pendingRequests).toBeUndefined()
+    // Without the question it stays ended, as before.
+    expect(cardView(snap({ activityValue: 'stale', pidValue: null }), NOW).state).toBe('ended')
+  })
+
   it("reads a new session the mod hasn't reported yet as starting, not outside the app (MIP2-1493)", () => {
     const fresh = (ago: number) => cardView(snap({ model: undefined, tokens: undefined, startedAt: field(NOW - ago, 'agents-json', NOW) }), NOW)
     expect(fresh(2_000)).toMatchObject({ state: 'working', label: 'STARTING', outside: false })

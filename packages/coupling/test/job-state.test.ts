@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { claudeConfigDir, readSavedOptions, readStateFile, STATE_MAX_BYTES } from '../src/job-state.ts'
+import { claudeConfigDir, readSavedOptions, readStateFile, STATE_MAX_BYTES, readJobNeeds } from '../src/job-state.ts'
 
 const SID = 'c0ffee01-0000-4000-8000-000000000001'
 const at = (state: unknown) => (path: string) => {
@@ -79,5 +79,23 @@ describe('readStateFile (gate pass 17, M-2)', () => {
     // Multi-byte characters: the cap is bytes, not string length.
     writeFileSync(join(dir, 'big.json'), 'é'.repeat(STATE_MAX_BYTES / 2 + 1))
     expect(() => readStateFile(join(dir, 'big.json'))).toThrow('too large')
+  })
+})
+
+describe('readJobNeeds (MIP2-1558, QA MIP2-1559)', () => {
+  const at = (text: string) => () => text
+  it("reads what a blocked job waits on, in Claude Code's words, cleaned and capped", () => {
+    const needs = 'approve 1 new project MCP server (acme-db) — attach to respond'
+    expect(readJobNeeds('/c', 'abcdef01', at(JSON.stringify({ state: 'blocked', detail: '1 new MCP server needs approval', needs })))).toBe(needs)
+    expect(readJobNeeds('/c', 'abcdef01', at(JSON.stringify({ detail: '1 new MCP server needs approval' })))).toBe('1 new MCP server needs approval')
+    expect(readJobNeeds('/c', 'abcdef01', at(JSON.stringify({ needs: 'line\u001b[31m\nnext' })))).toBe('line [31m next')
+    expect(readJobNeeds('/c', 'abcdef01', at(JSON.stringify({ needs: 'x'.repeat(500) })))?.length).toBe(300)
+  })
+
+  it('is null for a missing or odd file, or a bad short id', () => {
+    expect(readJobNeeds('/c', 'abcdef01', () => { throw new Error('ENOENT') })).toBeNull()
+    expect(readJobNeeds('/c', 'abcdef01', at('not json'))).toBeNull()
+    expect(readJobNeeds('/c', 'abcdef01', at('{}'))).toBeNull()
+    expect(readJobNeeds('/c', '../etc', at('{"needs":"x"}'))).toBeNull()
   })
 })

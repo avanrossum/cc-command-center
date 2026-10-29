@@ -112,6 +112,12 @@ class SessionChannel {
   replyKey: ReplyKey | null = null
   /** The reply key was replaced at recovery; cleared by the first report, which the mod sends only after a reply verified. */
   keyPending = false
+  /**
+   * The id the session had before a /clear (MIP2-1557). Claude Code gives the
+   * same job a new sessionId, while its mod goes on reporting the id it
+   * started with, so a report under this id is the same session's.
+   */
+  launchId: string | null = null
   readonly createdAt: number
 
   constructor(
@@ -502,6 +508,7 @@ export class ChannelHub {
     const launch = this.launchOf(sessionId) ?? (await launchOptionsIn(settingsPath))
     const ch = new SessionChannel(old.id, old.dir, newSecret(), this.now(), true)
     ch.sessionId = sessionId
+    ch.launchId = old.launchId
     // A new reply key with the new secret (MIP2-1436 item 1).
     ch.replyKey = newReplyKey()
     const text = JSON.stringify(this.settingsFor(ch, socketPath, launch.isolation ?? 'none', launch.ultracode === true), null, 2)
@@ -625,6 +632,35 @@ export class ChannelHub {
       if (ch.sessionId && ch.file) files.set(ch.sessionId, { file: ch.file, mtimeMs: Math.max(ch.receivedAt, ch.contactAt) })
     }
     return { files, rejected: [] }
+  }
+
+  /**
+   * Whether this session's mod said its conversation was cleared: a
+   * `session.end` with reason `clear` in its latest report (MIP2-1557).
+   * Main moves a session to its new id only with this and `agents --json`
+   * agreeing.
+   */
+  reportedClear(sessionId: string): boolean {
+    const ch = [...this.channels.values()].find(c => c.sessionId === sessionId || c.launchId === sessionId)
+    return ch?.file?.events.some(e => e.type === 'session.end' && e.reason === 'clear') ?? false
+  }
+
+  /**
+   * Moves a channel from a session's old id to its new one after a /clear
+   * (MIP2-1557): replies, prompts and card answers follow the new id, and
+   * reports still made under the old one are accepted as this session's.
+   * Called again at start, from the store, for channels recovered.
+   */
+  rebind(from: string, to: string): void {
+    const ch = [...this.channels.values()].find(c => c.sessionId === from || (c.sessionId === to && c.launchId === null))
+    if (!ch) return
+    ch.launchId = from
+    if (ch.sessionId !== to) {
+      ch.sessionId = to
+      void writeFile(join(ch.dir, SESSION_FILE), to, { mode: 0o600 }).catch(() => {})
+    }
+    const mark = this.untrustedSessions.get(from)
+    if (mark !== undefined) (this.untrustedSessions.delete(from), this.untrustedSessions.set(to, mark))
   }
 
   /** Prompts waiting for an answer, by session. */
@@ -984,7 +1020,9 @@ export class ChannelHub {
       checkPeer: fd => this.checkPeer(ch, fd),
       handlers: {
         report: file => {
-          // The first report binds the channel to its session; another sessionId is refused.
+          // The first report binds the channel to its session; another sessionId is refused, except the id it had
+          // before a /clear (MIP2-1557), which is stored under the current one.
+          if (ch.sessionId && ch.launchId === file.sessionId) file = { ...file, sessionId: ch.sessionId }
           if (ch.sessionId && ch.sessionId !== file.sessionId) throw new Error('report for another session')
           const first = !ch.sessionId
           if (first) void writeFile(join(ch.dir, SESSION_FILE), file.sessionId, { mode: 0o600 }).catch(() => {})

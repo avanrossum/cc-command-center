@@ -167,6 +167,9 @@ export function registerControl({
     [
       IPC.resume,
       async (id: string) => {
+        // A job still listed and waiting on something in the session has no process to wake: a resume would start a
+        // second job beside it (QA MIP2-1559, r8). Opening it attaches, where Alex answers (MIP2-1558).
+        if (snapshotOf(id)?.jobNeeds) throw new Error("it's waiting on something in the session. Open it to answer there; resuming would start a copy beside it")
         await resumes
           .run(id, () => resumeFromApp(id, { host, hub, onRekeyed, modStuck, unrecorded, backfill }))
           .catch(err => {

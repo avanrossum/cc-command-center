@@ -96,3 +96,24 @@ export function readSavedOptions(configDir: string, shortId: string, sessionId: 
   if (typeof s.cwd !== 'string' || !isAbsolute(s.cwd)) return { refused: shape }
   return d && st ? { dir: d, settings: st, flags: [...flags], cwd: resolve(s.cwd) } : { refused: shape }
 }
+
+/**
+ * What a blocked job with no process waits on, from its state file's
+ * \`needs\` (or \`detail\`), in Claude Code's words (MIP2-1558, QA
+ * MIP2-1559: "approve 1 new project MCP server (<name>) — attach to
+ * respond"). Read-only and best effort, as readSavedOptions: null when the
+ * file is missing, odd, or says nothing. Control characters are dropped and
+ * the text capped; it's shown as untrusted text.
+ */
+export function readJobNeeds(configDir: string, shortId: string, read: (path: string) => string = readStateFile): string | null {
+  if (!SHORT_ID.test(shortId)) return null
+  try {
+    const s = JSON.parse(read(join(configDir, 'jobs', shortId, 'state.json'))) as { needs?: unknown; detail?: unknown }
+    const text = typeof s.needs === 'string' && s.needs.trim() ? s.needs : typeof s.detail === 'string' ? s.detail : ''
+    const clean = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim()
+    return clean ? clean.slice(0, 300) : null
+  } catch {
+    return null
+  }
+}
+

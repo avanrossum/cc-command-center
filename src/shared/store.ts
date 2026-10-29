@@ -59,6 +59,12 @@ export interface SessionMeta {
   neverRollOff?: boolean
   /** Who started it, when the app knows: `app` from a launch here, `import` from 0.24's registry. */
   origin?: 'app' | 'import'
+  /**
+   * The id the session was launched under, once a /clear gave it a new one
+   * (MIP2-1557). Claude Code's saved options for the job keep this id, and
+   * the session's mod goes on reporting it.
+   */
+  launchSessionId?: string
   /** When it moved in from CC Command Center 0.24 (MIP2-1425). */
   movedAt?: number
   /** The session that started this one, once a parent's mod reported it (MIP2-1392). Kept after the report rolls off. */

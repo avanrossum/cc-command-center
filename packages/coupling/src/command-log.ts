@@ -124,16 +124,21 @@ export class CommandLog {
   }
 
   /**
-   * The trust step's terminal run: its command line when it starts and its
-   * exit code when it ends, never its output, which the terminal view shows
-   * and which holds Alex's answer to the trust question.
+   * The trust step's terminal run: its command line when it starts, its exit
+   * code when it ends, and what it says about the session (MIP2-1558):
+   * whether the trust question showed, the `backgrounded` id and any
+   * `note:` lines. Never the output itself, which the terminal view shows.
    */
   wrapTrust(spawn: SpawnAttach): SpawnAttach {
     return (cmd, cols, rows) => {
       const started = this.now()
       const args = redactArgs(cmd.args).args
       const p = spawn(cmd, cols, rows)
-      p.onExit(({ exitCode }) => void this.write({ at: new Date(started).toISOString(), args, ...(cmd.cwd ? { cwd: cmd.cwd } : {}), code: exitCode, ms: this.now() - started, terminal: true }))
+      let text = ''
+      p.onData(d => void (text = (text + d).slice(-TRUST_KEEP)))
+      p.onExit(({ exitCode }) =>
+        void this.write({ at: new Date(started).toISOString(), args, ...(cmd.cwd ? { cwd: cmd.cwd } : {}), code: exitCode, ms: this.now() - started, terminal: true, outcome: trustOutcome(text) }),
+      )
       return p
     }
   }
@@ -146,4 +151,20 @@ export class CommandLog {
       return pid
     }
   }
+}
+
+/** Output kept per trust run to read its outcome. */
+const TRUST_KEEP = 64 * 1024
+
+/**
+ * What a trust run's output says, for the log (MIP2-1558): whether Claude
+ * Code asked the trust question, the session it backgrounded, and its
+ * `note:` lines. The screen itself isn't kept. Escape sequences are dropped
+ * first; Claude Code draws with cursor moves, so words can run together.
+ */
+export function trustOutcome(output: string): { asked: boolean; backgrounded: string | null; notes: string[] } {
+  const text = output.replace(/\x1b\[[0-9;?<>=]*[A-Za-z~]/g, '').replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
+  const backgrounded = /backgrounded\s*·\s*([0-9a-f]{8})/.exec(text)?.[1] ?? null
+  const notes = [...text.matchAll(/note:[^\r\n]{0,240}/g)].map(m => m[0].trim()).slice(0, 5)
+  return { asked: /trust\s*this\s*folder/i.test(text), backgrounded, notes }
 }

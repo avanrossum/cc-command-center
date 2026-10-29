@@ -115,3 +115,20 @@ describe("a blocked card's line (MIP2-1485)", () => {
     expect(renderToStaticMarkup(<NowLine e={{ ...blocked('Run it <now>?'), waitingLastLine: true }} />)).toBe('<p class="c-now">Last line: &quot;Run it &lt;now&gt;?&quot;</p>')
   })
 })
+
+describe('a job waiting in the session (MIP2-1558, UX review)', () => {
+  const job = (needs: string | null) => {
+    const base = entry(undefined as never)
+    const session = { ...base.session, pid: field(null, 'agents-json', NOW), activity: field('stale' as const, 'agents-json', NOW), needsYou: field(null, 'agents-json', NOW), pendingRequests: field([], 'mod', NOW), jobNeeds: field(needs, 'agents-json', NOW) }
+    return renderToStaticMarkup(<AskBlock e={{ ...base, session, view: cardView(session, NOW) }} onOpen={() => {}} armed={false} />)
+  }
+  it("shows Claude Code's words in sentence case under WAITING IN THE SESSION, with only Open", () => {
+    const h = job('open this session to continue setup')
+    expect(h).toContain('WAITING IN THE SESSION')
+    expect(h).toContain('Open this session to continue setup')
+    expect(h).not.toMatch(/Allow|Deny/)
+  })
+  it('says something needs you before Claude Code says what', () => {
+    expect(job(null)).toContain('Something in the session needs you. Open it to see what.')
+  })
+})

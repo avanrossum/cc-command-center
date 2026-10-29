@@ -259,6 +259,19 @@ export function AskBlock({ e, onOpen, armed }: { e: Entry; onOpen: (sessionId: s
       </div>
     )
   }
+  // A job with no process waiting on something in the session (MIP2-1558): Claude Code's words, or a plain line until
+  // it gives some. Opened, never answered here.
+  const job = e.session.jobNeeds
+  if (job && e.session.pid.value === null) {
+    const said = job.value ? job.value.charAt(0).toUpperCase() + job.value.slice(1) : null
+    return (
+      <div className="ask">
+        <span className="k">WAITING IN THE SESSION</span>
+        <span>{said ?? 'Something in the session needs you. Open it to see what.'}</span>
+        <div className="acts">{open}</div>
+      </div>
+    )
+  }
   const detail = e.session.needsYou.value?.detail
   return (
     <div className="ask">

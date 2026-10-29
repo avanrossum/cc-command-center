@@ -67,6 +67,7 @@ import { inArchive } from '../shared/lifecycle.ts'
 import { wireHosts } from './restart.ts'
 import { recordRestarts, RestartWatch, unexplainedRestart } from './restart-watch.ts'
 import { DISPLAY_NAME, nameToPin } from './app-name.ts'
+import { ClearWatch } from '../shared/clear.ts'
 import { QuitControl } from './quit-control.ts'
 import { checkQuitAnswer, closable, quitNotices } from '../shared/quit.ts'
 import { clearGoneRefusal } from './resume.ts'
@@ -321,8 +322,11 @@ async function start(): Promise<void> {
   const unrecorded = (id: string) => modPackaged && store.get().sessions[id]?.origin === 'app' && !store.get().sessions[id]?.launch?.mod
   // A session's saved --plugin-dir and --settings (Research MIP2-1506): the short id from the last poll, else its first
   // 8 characters, which is what 2.1.312 uses; the file must name the same session, or it's refused.
-  const savedOptions = (id: string) =>
-    readSavedOptions(claudeConfigDir(), poller?.current()?.sessions.find(s => s.sessionId === id)?.shortId.value ?? id.slice(0, 8), id)
+  // After a /clear the job keeps the id it was launched under, in its short id and its saved options (MIP2-1557).
+  const savedOptions = (id: string) => {
+    const launchId = store.get().sessions[id]?.launchSessionId ?? id
+    return readSavedOptions(claudeConfigDir(), poller?.current()?.sessions.find(s => s.sessionId === id)?.shortId.value ?? launchId.slice(0, 8), launchId)
+  }
   const modRoot = join(app.getPath('userData'), 'reporter-mod')
   /**
    * What Claude Code would restart a recorded app-launched session with, checked against the app's record (gate pass 17,
@@ -415,6 +419,8 @@ async function start(): Promise<void> {
   })
   // Refuses a channel folder, or its parent, that other users can open (D-005).
   await hub.recover()
+  // Channels of sessions a /clear moved: their mods still report the launch id (MIP2-1557).
+  for (const [current, launch] of store.launchIds()) hub.rebind(launch, current)
   // The store's copy of each mark covers a lost folder mark; same-user code can write the store too (pass 5, M-3).
   hub.restoreMarks(store.untrustedMarks())
   await removeLegacyReporterDir()
@@ -467,6 +473,7 @@ async function start(): Promise<void> {
   const startDaemon = sharedSupervisorStart(() => spawnClaude(['daemon', 'run']))
   // Every restart the app starts is recorded first, so a process change it didn't start stands out (MIP2-1512).
   const restartWatch = new RestartWatch()
+  const clearWatch = new ClearWatch()
   const host = recordRestarts(new SupervisorHost({
     run,
     binary,
@@ -498,7 +505,12 @@ async function start(): Promise<void> {
     readReporter: () => channels.readReporter(),
     readPending: () => channels.pendingRequests(),
     // QA's synthetic folder is read whole; the live one only for the sessions the app lists (MIP2-1520).
-    readUsage: listed => (usageDir ? readUsageDir(usageDir) : readUsageDir(undefined, undefined, id => listed.has(id))),
+    // A cleared session's mod still writes its usage file under the launch id (MIP2-1557).
+    readUsage: listed => {
+      if (usageDir) return readUsageDir(usageDir)
+      const launch = new Set([...listed].flatMap(id => store.get().sessions[id]?.launchSessionId ?? []))
+      return readUsageDir(undefined, undefined, id => listed.has(id) || launch.has(id))
+    },
     usageFileOnly: usageDir !== null,
     readReport: () => usageReport?.current() ?? null,
     readReportExtra: () => usageReport?.extra() ?? null,
@@ -537,10 +549,21 @@ async function start(): Promise<void> {
     binary,
     {
       data: (id, data) => broadcast(IPC.trustData, id, data),
-      done: (id, sid, err, cwd, resumed) => {
+      done: (id, sid, err, cwd, resumed, o) => {
         // A parked 0.24 session resumed through the trust step is recorded as a move (MIP2-1461).
         if (sid && resumed) recordMoved(resumed, sid)
+        // A launch through the trust step is recorded as any launch is, mod copy included, so a later resume or attach
+        // is checked against it rather than refused for having no record (MIP2-1558).
+        else if (sid && o)
+          store.recordLaunch(sid, { model: o.model, effort: o.effort, mode: o.permissionMode, isolation: o.isolation, ultracode: o.ultracode, extraArgs: o.extraArgs, cwd: o.cwd, name: o.name, ...(modPackaged ? { mod: basename(pluginDir) } : {}) })
         else if (sid) store.touch(sid, Date.now(), 'app')
+        // Whether the session it started still has a process 10 s and 60 s later, for the log (MIP2-1558).
+        if (sid)
+          for (const after of [10_000, 60_000])
+            setTimeout(() => {
+              const s = fleet.current()?.sessions.find(x => x.sessionId === sid)
+              void commandLog.note('trust-followup', { sessionId: sid, afterMs: after, listed: !!s, pid: s?.pid.value ?? null, activity: s?.activity.value ?? null })
+            }, after).unref()
         if (sid && cwd && !resumed) store.assignLaunched(sid, cwd)
         broadcast(IPC.trustDone, id, sid, err)
       },
@@ -788,6 +811,19 @@ async function start(): Promise<void> {
   /** The last name each session had, for the toast once it has left the list. */
   const lastNames = new Map<string, string>()
   poller.subscribe(snapshot => {
+    // A /clear: the same job and process under a new sessionId (MIP2-1557). Moved only when the session's mod said it
+    // was cleared too, where it has one; first, so the new id takes the old record rather than a new one.
+    for (const { from, to } of clearWatch.observe(snapshot.sessions.flatMap(s => (s.shortId.value ? [{ sessionId: s.sessionId, shortId: s.shortId.value, pid: s.pid.stale ? null : s.pid.value }] : [])))) {
+      const withMod = channels.channelOf(from) !== null
+      if (withMod && !channels.reportedClear(from)) {
+        void commandLog.note('clear-unconfirmed', { from, to })
+        continue
+      }
+      store.renameSession(from, to)
+      channels.rebind(from, to)
+      spendLedger?.rename(from, to)
+      void commandLog.note('cleared', { from, to })
+    }
     // A process the app didn't start, on a background session it launched: the supervisor's own restart, checked as
     // every restart the app starts is. A refusal stops the session and marks it (MIP2-1512).
     const watched = snapshot.sessions.filter(s => s.kind.value === 'background' && store.get().sessions[s.sessionId]?.launch)

@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { ClaudeCommandError } from '../src/claude-cli.ts'
-import { ResumedAsCopy, resumedCopy, StraySessions, SupervisorHost, WorkspaceNotTrusted, type HostChannels } from '../src/supervisor-host.ts'
+import { JOB_NO_PID_GRACE_MS, ResumedAsCopy, resumedCopy, StraySessions, SupervisorHost, WorkspaceNotTrusted, type HostChannels } from '../src/supervisor-host.ts'
 
 const SID = 'c0ffee01-0000-4000-8000-000000000001'
 const LISTED = JSON.stringify([{ pid: 1, id: 'c0ffee01', cwd: '/w', kind: 'background', startedAt: 1, sessionId: SID, status: 'idle', state: 'done' }])
@@ -568,4 +568,22 @@ describe('SessionControl.sendPrompt', async () => {
     await expect(c.sendPrompt(SID, 'hi')).rejects.toThrow("didn't reach the app")
     expect(relayed).toEqual([])
   })
+
+  it('reads a new job listed with no process as waiting on something in the session, after a short grace (MIP2-1558, QA MIP2-1559)', async () => {
+    const job = (state: string, startedAt: number) => JSON.stringify([{ id: 'c0ffee0b', sessionId: 'c0ffee0b-0000-4000-8000-00000000000b', kind: 'background', cwd: '/w', startedAt, state }])
+    let t = 1_800_000_000_000
+    let list = job('working', t)
+    const host = new SupervisorHost({ now: () => t, sleep: async () => {}, run: async args => (args[0] === 'agents' ? list : '') })
+    // Just launched: nothing yet, so a normal launch doesn't flash needs-you.
+    expect((await host.list()).sessions[0]!.jobNeeds).toBeUndefined()
+    // Past the grace, working with no process and no saved needs: waiting on something in the session.
+    t += JOB_NO_PID_GRACE_MS + 1
+    expect((await host.list()).sessions[0]!.jobNeeds).toMatchObject({ value: null })
+    list = job('blocked', t - 60_000)
+    expect((await host.list()).sessions[0]!.jobNeeds).toMatchObject({ value: null })
+    // A settled job with no process is just ended.
+    list = job('done', t - 60_000)
+    expect((await host.list()).sessions[0]!.jobNeeds).toBeUndefined()
+  })
 })
+
