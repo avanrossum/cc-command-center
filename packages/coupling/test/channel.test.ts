@@ -301,6 +301,26 @@ describe('ChannelHub', () => {
     expect(() => hub.relayPrompt(A_ID, 'hi')).not.toThrow()
   })
 
+  it("switches control off for one session whose channel hasn't connected, and leaves the rest (MIP2-1502)", async () => {
+    const { ch } = await launch()
+    await channelCall($, ch, 'POST', CHANNEL_PATHS.report, JSON.parse(A_TEXT))
+    const poll = channelCall($, ch, 'POST', CHANNEL_PATHS.permission, ASK)
+    await new Promise(r => setTimeout(r, 50))
+    // Another session is off: this one keeps its offer, answers and prompts.
+    hub.setControl([], ['c0ffee06-0000-4000-8000-000000000006'])
+    expect(hub.pendingRequests().get(A_ID)).toHaveLength(1)
+    expect(() => hub.relayPrompt(A_ID, 'hi')).not.toThrow()
+    // This one is off: its offer goes back to the dialog, and its prompts are refused.
+    hub.setControl([], [A_ID])
+    expect((await poll)?.body).toEqual({ status: 'cancel' })
+    expect((await channelCall($, ch, 'POST', CHANNEL_PATHS.permission, ASK))?.body).toEqual({ status: 'cancel' })
+    expect(hub.pendingRequests().size).toBe(0)
+    expect(hub.answer(ASK.requestId, { verdict: 'allow' })).toBe(false)
+    expect(() => hub.relayPrompt(A_ID, 'hi')).toThrow("isn't connected to the app yet")
+    hub.setControl([], [])
+    expect(() => hub.relayPrompt(A_ID, 'hi')).not.toThrow()
+  })
+
   it('drops an offer its mod stopped polling for (a respawn ended the wait)', async () => {
     let t = Date.now()
     const timed = new ChannelHub({ modDir: '/mod', root: join(base, 'ch2'), longPollMs: 50, now: () => t, log: () => {} })

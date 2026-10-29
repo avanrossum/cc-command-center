@@ -57,4 +57,17 @@ describe('ArbiterKey', () => {
     const spend = new ArbiterKey(path, crypto, 'spend')
     expect([spend.has(), spend.holdsAdminKey(), spend.get()?.startsWith('sk-ant-admin')]).toEqual([true, false, true])
   })
+
+  it('reads its state from one decryption, and keeps a key it can\'t decrypt visible (gate pass 17, L-2)', () => {
+    dir = mkdtempSync(join(tmpdir(), 'ccc-key-'))
+    const path = join(dir, 'arbiter-key.bin')
+    const k = new ArbiterKey(path, crypto)
+    expect(k.status()).toEqual({ kind: 'none' })
+    k.set(KEY)
+    expect(k.status()).toEqual({ kind: 'ok', end: KEY.slice(-4) })
+    writeFileSync(path, crypto.encryptString('sk-ant-admin01-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789'))
+    expect(k.status()).toEqual({ kind: 'admin' })
+    const broken = new ArbiterKey(path, { ...crypto, decryptString: () => { throw new Error('Keychain item reset') } })
+    expect(broken.status()).toEqual({ kind: 'unreadable' })
+  })
 })

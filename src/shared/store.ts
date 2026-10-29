@@ -77,7 +77,8 @@ export interface SessionMeta {
   untrusted?: string
   /** The settings it was launched with here, for Launch settings… and Start a session from this one (MIP2-1387 §2.3). */
   /** `mod`: the reporter mod version (its folder's hash) a packaged app launched it with (gate run 2, L-1). */
-  launch?: { model?: string; effort?: string; mode?: string; isolation?: 'none' | 'worktree'; ultracode?: boolean; extraArgs?: string[]; mod?: string }
+  /** What the app launched the session with; `cwd` and `name` are checked against Claude Code's saved options on every restart (gate pass 19). */
+  launch?: { model?: string; effort?: string; mode?: string; isolation?: 'none' | 'worktree'; ultracode?: boolean; extraArgs?: string[]; mod?: string; cwd?: string; name?: string }
   /** Started as a copy of this session, with new settings: the card reads "copy of <name>". */
   copyOf?: string
   /** Started from this session (D-014): the card reads "from <name>". */

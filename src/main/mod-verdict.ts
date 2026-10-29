@@ -32,3 +32,26 @@ export function modVerdict(version: string | undefined, s: ModState, appLaunched
   if (!version && (s.stuck.size > 0 || s.unchecked > 0)) return 'a reporter mod copy is stuck or unchecked, and the app has no record of which copy this session uses'
   return s.launchBlocked
 }
+
+/**
+ * Whether a session may be restarted on its saved options now, for every
+ * restart path (gate pass 18, H-1, L-3; restart.ts guardRestarts): the mod
+ * copy's verdict, then, for a recorded app-launched session in a packaged
+ * build (or QA's run of one), the saved options against the app's record.
+ */
+export interface RestartDeps {
+  meta: (sessionId: string) => { origin?: string; launch?: { mod?: string; model?: string; effort?: string; mode?: string; extraArgs?: string[] } } | undefined
+  mod: ModState
+  /** Packaged, or QA's packaged-path run. */
+  packaged: boolean
+  savedRefusal: (sessionId: string, rec: { mod: string; launch: NonNullable<NonNullable<ReturnType<RestartDeps['meta']>>['launch']> }) => string | null
+}
+
+export function restartVerdict(sessionId: string, d: RestartDeps): string | null {
+  const m = d.meta(sessionId)
+  const appLaunched = m?.origin === 'app'
+  const first = modVerdict(m?.launch?.mod, d.mod, appLaunched)
+  if (first) return first
+  if (!d.packaged || !appLaunched || !m?.launch?.mod) return null
+  return d.savedRefusal(sessionId, { mod: m.launch.mod, launch: m.launch })
+}

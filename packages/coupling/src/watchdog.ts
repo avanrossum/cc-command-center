@@ -127,7 +127,8 @@ export class SupervisorWatchdog {
         if (s.needsYou.value !== null || s.activity.value === 'waiting') continue
         this.respawned.add(id)
         this.o.log(`watchdog: respawning ${id}`)
-        await this.o.respawn(id).catch(err => this.o.log(`watchdog: respawn ${id} failed: ${err instanceof Error ? err.message : String(err)}`))
+        // By session id: respawn and its check take the full id, not the short one (MIP2-1507 QA note).
+        await this.o.respawn(s.sessionId).catch(err => this.o.log(`watchdog: respawn ${id} failed: ${err instanceof Error ? err.message : String(err)}`))
       }
     }
     return (this.state = { kind: 'restarting', downSince: this.downSince, attempts: this.attempts })

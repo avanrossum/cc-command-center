@@ -99,6 +99,7 @@ export function App() {
     void window.ccc.getStore().then(s => s && setStore(s))
     const offStore = window.ccc.onStore(setStore)
     const offNotice = window.ccc.onNotice(text => setNotice(text))
+    void window.ccc.startupNotices().then(all => all.length && setNotice(all.join(' ')))
     const offOpen = window.ccc.onOpenSession(id => openRef.current(id))
     const offNeeds = window.ccc.onOpenNeeds(() => (setFocused(null), setFilter('needs')))
     const offSettings = window.ccc.onOpenSettings(() => setSettingsOpen(true))

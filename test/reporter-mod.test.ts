@@ -315,4 +315,11 @@ describe('reporter mod', () => {
     mod(join(dir, 'dist', 'mod'))
     expect(await modDir(join(dir, 'dist'), false, join(dir, 'data'))).toBe(join(dir, 'dist', 'mod'))
   })
+
+  it("installs the build's own mod under reporter-mod/<hash> for QA's packaged-path run (MIP2-1507)", async () => {
+    mod(join(dir, 'dist', 'mod'))
+    const installed = await modDir(join(dir, 'dist'), false, join(dir, 'data'), undefined, {}, true)
+    expect(installed).toBe(join(dir, 'data', 'reporter-mod', modHash(join(dir, 'dist', 'mod'))))
+    expect(modHash(installed)).toBe(modHash(join(dir, 'dist', 'mod')))
+  })
 })

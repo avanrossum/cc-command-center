@@ -257,6 +257,8 @@ export class ChannelHub {
   /** Watches the channel root, where a channel's whole folder could be swapped (gate run 3, M-3). */
   private rootWatcher: FSWatcher | null = null
   private control: { cardAnswers: boolean; promptRelay: boolean } = { cardAnswers: true, promptRelay: true }
+  /** Sessions with control off on their own, their channel not connected (MIP2-1502). */
+  private offFor = new Set<string>()
 
   constructor(opts: ChannelHubOptions) {
     this.root = opts.root ?? DEFAULT_CHANNEL_ROOT
@@ -536,6 +538,13 @@ export class ChannelHub {
     if (id) await this.close(id)
   }
 
+  /** The settings file the app writes for the session's channel; null without a channel (gate pass 17, M-1). */
+  settingsPathOf(sessionId: string): string | null {
+    const id = this.channelOf(sessionId)
+    const ch = id ? this.channels.get(id) : undefined
+    return ch ? join(ch.dir, SETTINGS_FILE) : null
+  }
+
   channelOf(sessionId: string): string | null {
     for (const ch of this.channels.values()) if (ch.sessionId === sessionId) return ch.id
     return null
@@ -559,7 +568,7 @@ export class ChannelHub {
       for (const [id, p] of ch.pending) {
         if (!p.deliver && now - p.polledAt > ORPHANED_AFTER_MS) ch.pending.delete(id)
       }
-      if (!ch.sessionId || ch.pending.size === 0 || ch.untrusted || ch.pendingClear) continue
+      if (!ch.sessionId || ch.pending.size === 0 || ch.untrusted || ch.pendingClear || this.offFor.has(ch.sessionId)) continue
       out.set(
         ch.sessionId,
         [...ch.pending.values()].map(p => ({
@@ -587,6 +596,7 @@ export class ChannelHub {
       const p = ch.pending.get(requestId)
       if (!p) continue
       if (ch.untrusted || ch.pendingClear) return false
+      if (ch.sessionId && this.offFor.has(ch.sessionId)) return false
       if (input.verdict === 'allow' && p.ask.questions && !answersValid(p.ask.questions, input.answers)) return false
       // A permission the card can't show in full is approved only in the session (gate H-1); Deny is always safe.
       if (input.verdict === 'allow' && !p.ask.questions && cardInput(p.ask).refusal !== null) return 'session-only'
@@ -610,6 +620,7 @@ export class ChannelHub {
    */
   relayPrompt(sessionId: string, text: string): string {
     if (!this.control.promptRelay) throw new Error('sending prompts is switched off for this Claude Code version')
+    if (this.offFor.has(sessionId)) throw new Error("this session isn't connected to the app yet, so sending prompts is off for it; type in the session")
     const ch = [...this.channels.values()].find(c => c.sessionId === sessionId)
     if (!ch) throw new Error(`no channel for session ${sessionId}`)
     const why = ch.untrusted ?? ch.pendingClear
@@ -622,14 +633,17 @@ export class ChannelHub {
   }
 
   /**
-   * Switches the control paths, from the self-check (DECISION item 4). With
-   * card answers off, every offer is canceled so the mod returns the prompt
-   * to the session's dialog.
+   * Switches the control paths, from the self-check (DECISION item 4).
+   * `off` is for every session; `offFor` names sessions with both paths off
+   * on their own, their channel not connected (MIP2-1502). Where card
+   * answers go off, offers are canceled so the mod returns the prompt to
+   * the session's dialog.
    */
-  setControl(off: readonly ('card-answers' | 'prompt-relay')[]): void {
+  setControl(off: readonly ('card-answers' | 'prompt-relay')[], offFor: readonly string[] = []): void {
     this.control = { cardAnswers: !off.includes('card-answers'), promptRelay: !off.includes('prompt-relay') }
-    if (this.control.cardAnswers) return
+    this.offFor = new Set(offFor)
     for (const ch of this.channels.values()) {
+      if (this.control.cardAnswers && !(ch.sessionId && this.offFor.has(ch.sessionId))) continue
       for (const p of ch.pending.values()) p.deliver?.({ status: 'cancel' })
       ch.pending.clear()
     }
@@ -911,8 +925,8 @@ export class ChannelHub {
   }
 
   private hold(ch: SessionChannel, ask: PermissionAsk, signal: AbortSignal): Promise<PermissionAnswer> {
-    // Switched off: the mod gives the prompt back to the dialog.
-    if (!this.control.cardAnswers) return Promise.resolve({ status: 'cancel' })
+    // Switched off, for every session or this one: the mod gives the prompt back to the dialog.
+    if (!this.control.cardAnswers || (ch.sessionId && this.offFor.has(ch.sessionId))) return Promise.resolve({ status: 'cancel' })
     let p = ch.pending.get(ask.requestId)
     if (!p) {
       p = { ask, askedAt: this.now(), polledAt: this.now(), answer: null, deliver: null }

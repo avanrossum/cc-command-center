@@ -69,6 +69,8 @@ function session(v: unknown): SessionMeta | null {
       ...(oneOf(l.isolation, ['none', 'worktree'] as const) ? { isolation: l.isolation } : {}),
       ...(bool(l.ultracode) ? { ultracode: l.ultracode } : {}),
       ...(Array.isArray(l.extraArgs) && l.extraArgs.every(a => str(a, 1024)) ? { extraArgs: (l.extraArgs as string[]).slice(0, 32) } : {}),
+      ...(typeof l.cwd === 'string' && l.cwd.startsWith('/') && l.cwd.length <= 4096 && !l.cwd.includes('\0') ? { cwd: l.cwd } : {}),
+      ...(str(l.name, 1000) ? { name: l.name as string } : {}),
     }
   }
   return m

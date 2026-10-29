@@ -104,6 +104,7 @@ export const IPC = {
   updateUpdate: 'update:update',
   /** Main → renderer: a one-line toast (a session removed outside the app). */
   appNotice: 'app:notice',
+  startupNotices: 'app:startup-notices',
   lifeResurrect: 'life:resurrect',
   lifeArchive: 'life:archive',
   lifeNeverRollOff: 'life:never-roll-off',
@@ -278,6 +279,8 @@ export interface CccApi {
   /** Alex opened the session; an auto placement stops showing `· auto`. */
   markSeen(sessionId: string): Promise<Result>
   onNotice(listener: (text: string) => void): () => void
+  /** Notices from the app's start, before the window could show them; each is returned once. */
+  startupNotices(): Promise<string[]>
   onOpenSession(listener: (sessionId: string) => void): () => void
   onOpenNeeds(listener: () => void): () => void
   /** The app menu's Settings… (⌘,) was chosen (MIP2-1459). */

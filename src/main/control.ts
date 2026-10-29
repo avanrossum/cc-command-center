@@ -61,6 +61,9 @@ export interface ControlDeps {
   onRekeyed?: (sessionId: string) => void
   /** Why the session's mod copy can't be resumed on, or null (pass 6, H-1). */
   modStuck?: (sessionId: string) => string | null
+  /** App-launched with no record of its mod copy: found from its saved options and checked first (MIP2-1504). */
+  unrecorded?: (sessionId: string) => boolean
+  backfill?: (sessionId: string) => string | null
   /** The terminal app a process runs under, or null (MIP2-1466). */
   terminalHost?: (pid: number) => Promise<string | null>
   /** A resume from the app started a copy (Claude Code's note says so): kept visible and alerted on (MIP2-1467). */
@@ -84,6 +87,8 @@ export function registerControl({
   launchedHere = () => false,
   onRekeyed = () => {},
   modStuck = () => null,
+  unrecorded = () => false,
+  backfill = () => null,
   onResumedAsCopy = () => {},
   terminalHost = async () => null,
 }: ControlDeps): void {
@@ -163,7 +168,7 @@ export function registerControl({
       IPC.resume,
       async (id: string) => {
         await resumes
-          .run(id, () => resumeFromApp(id, { host, hub, onRekeyed, modStuck }))
+          .run(id, () => resumeFromApp(id, { host, hub, onRekeyed, modStuck, unrecorded, backfill }))
           .catch(err => {
             if (err instanceof ResumedAsCopy) onResumedAsCopy(id, err.copyId)
             throw err

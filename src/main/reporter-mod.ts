@@ -88,10 +88,10 @@ async function setAside(dir: string, movedTo: string, onHeal: (h: ModHealed) => 
 }
 
 /** A version folder's name: the hash, and for a fresh copy beside a stuck one, `-r<time>` (pass 5, H-1). */
-const VERSION_DIR = /^([0-9a-f]{16})(?:-r\d{1,16})?$/
+export const VERSION_DIR = /^([0-9a-f]{16})(?:-r\d{1,16})?$/
 
 /** Copies the mod to `dest` through a temporary name, so a folder with the final name is always complete. */
-function copyTo(source: string, dest: string): string {
+export function copyTo(source: string, dest: string): string {
   const tmp = `${dest}.tmp-${process.pid}`
   rmSync(tmp, { recursive: true, force: true })
   cpSync(source, tmp, { recursive: true })
@@ -221,8 +221,19 @@ export async function checkModFolders(
 declare const __CCC_MOD_HASH__: string | undefined
 export const BUILT_MOD_HASH: string | null = typeof __CCC_MOD_HASH__ === 'string' ? __CCC_MOD_HASH__ : null
 
-export async function modDir(dist: string, packaged: boolean, dataDir: string, onHeal?: (h: ModHealed) => void, ops: ModOps = {}): Promise<string> {
-  if (packaged) return installMod(join(unpackedPath(dist), 'mod'), dataDir, onHeal, Date.now, BUILT_MOD_HASH, ops)
+/**
+ * `qaInstall` is QA's packaged-path run in an unpackaged build (MIP2-1507,
+ * paths.ts qaPackagedPaths): the build's own mod is installed under
+ * `<dataDir>/reporter-mod/<hash>` and checked, as a packaged build's is.
+ */
+export async function modDir(dist: string, packaged: boolean, dataDir: string, onHeal?: (h: ModHealed) => void, ops: ModOps = {}, qaInstall = false): Promise<string> {
+  const source = modSource(dist, packaged)
+  return packaged || qaInstall ? installMod(source, dataDir, onHeal, Date.now, BUILT_MOD_HASH, ops) : source
+}
+
+/** The build's own mod, the source every copy is made from: in the app bundle when packaged, else dist/mod. */
+export function modSource(dist: string, packaged: boolean): string {
+  if (packaged) return join(unpackedPath(dist), 'mod')
   const beside = join(dist, 'mod')
   return existsSync(join(beside, '.claude-plugin', 'plugin.json')) ? beside : join(dist, '..', 'mod')
 }

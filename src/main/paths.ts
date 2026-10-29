@@ -67,6 +67,18 @@ export function debugPortAllowed(env: NodeJS.ProcessEnv, isPackaged: boolean): b
 }
 
 /**
+ * QA's packaged-path run (MIP2-1507): an unpackaged CCC_QA=1 build that also
+ * sets CCC_QA_PACKAGED_PATHS=1 takes a packaged build's mod paths, a copy
+ * under the data folder's reporter-mod/<hash> with the version checks, and
+ * the resume of a session with no recorded copy, so QA can drive them over
+ * the debugging port, which a packaged build refuses. A packaged build
+ * ignores it: it already takes those paths, and never has the port.
+ */
+export function qaPackagedPaths(env: NodeJS.ProcessEnv, isPackaged: boolean): boolean {
+  return debugPortAllowed(env, isPackaged) && env.CCC_QA_PACKAGED_PATHS === '1'
+}
+
+/**
  * QA's stand-in for the ⌘O open panel, which a test can't drive (MIP2-1413):
  * `CCC_QA_PICK_PATHS="/abs/a:/abs/b"`. Only where the debugging port is
  * allowed (CCC_QA=1, unpackaged); refused otherwise.

@@ -91,7 +91,7 @@ describe('the channel band (MIP2-1488)', () => {
   it('names each session, offers Open and Check again, and leaves the update band out', () => {
     const html = renderToStaticMarkup(<SelfCheckBand report={late()} now={241_000} rows={new Map([[ID, { name: 'site-build', running: true, waiting: false }]])} />)
     expect(html).toContain("2 sessions aren&#x27;t connected to the app.")
-    expect(html).toContain('off for all sessions until these connect')
+    expect(html).toContain('off for these sessions until they connect; other sessions aren&#x27;t affected')
     expect(html).toContain('site-build · 4m')
     expect(html).toContain('>Restart<')
     expect(html).toContain('A session the app launched at')

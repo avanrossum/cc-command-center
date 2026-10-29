@@ -25,6 +25,24 @@ function deps(o: { running: boolean; channel: boolean; untrusted?: string | null
   }
 }
 
+describe('a session with no record of its mod copy (MIP2-1504)', () => {
+  it('records the copy its saved options name first, then resumes it bare, as any other', async () => {
+    const { steps, d } = deps({ running: false, channel: true })
+    let recorded = false
+    await resumeFromApp(SID, { ...d, unrecorded: () => true, backfill: () => ((recorded = true), null), modStuck: () => (recorded ? null : 'unrecorded') })
+    expect(steps).toEqual(['not-running', 'rekey-keep', 'resume', 'clear-mark', 'cleared'])
+  })
+
+  it('refuses with the reason, before anything else, when the copy can\'t be found or checked', async () => {
+    const { steps, d } = deps({ running: true, channel: true })
+    await expect(resumeFromApp(SID, { ...d, unrecorded: () => true, backfill: () => "its saved reporter mod copy no longer matches its name" })).rejects.toThrow(
+      /no longer matches its name\. Start a copy/,
+    )
+    expect(steps).toEqual([])
+    await expect(resumeFromApp(SID, { ...d, unrecorded: () => true })).rejects.toBeInstanceOf(ModStuck)
+  })
+})
+
 describe('resumeFromApp', () => {
   it('stops a running session before the re-key, so no process keeps the old secret', async () => {
     const { steps, d } = deps({ running: true, channel: true })

@@ -174,15 +174,19 @@ describe('SelfCheck', () => {
     expect(states(r)['event:turn.step']).toBe('pending')
   })
 
-  it('fails the channel when a launched session never reaches the app, and switches every control path off', () => {
+  it("fails the channel when a launched session never reaches the app, and switches that session's control paths off", () => {
     const check = new SelfCheck(memoryStore())
     check.setVersion(NEW)
     const quiet = channel({ contactAt: 0, createdAt: NOW - CHANNEL_DEADLINE_MS - 1 })
     expect(states(run(check, { channels: [{ ...quiet, createdAt: NOW - 1000 }] })).channel).toBe('pending')
     const r = run(check, { channels: [quiet] })
     expect(states(r).channel).toBe('fail')
-    expect(r.controlOff).toEqual(['card-answers', 'prompt-relay'])
-    expect([...check.degradedFields()]).toContain('tokens')
+    // Off for that session only; the others keep both paths (MIP2-1502).
+    expect(r.controlOff).toEqual([])
+    expect(r.controlOffFor).toEqual([A_ID])
+    // Only that session's mod fields read stale; another's don't (MIP2-1502).
+    expect([...check.degradedFields(A_ID)]).toContain('tokens')
+    expect([...check.degradedFields('c0ffee06-0000-4000-8000-000000000006')]).toEqual([])
   })
 
   it('names every late channel and fails while any is late, whatever the order (MIP2-1488)', () => {
@@ -402,7 +406,8 @@ describe('SupervisorWatchdog', () => {
     await w.tick()
     advance(5_000)
     await w.tick()
-    expect(respawned).toEqual(['c0ffee05'])
+    // By session id, which respawn and its check take; the short id failed every respawn (MIP2-1507 QA note).
+    expect(respawned).toEqual([A_ID])
   })
 
   it("doesn't respawn a session whose channel isn't trusted (gate run 3, M-1)", async () => {

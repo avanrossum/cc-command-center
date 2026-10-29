@@ -134,7 +134,9 @@ export function Focus({
   const isOther = targetId !== focused
   // Pasting into the attached view reaches any session; the relay needs the app's mod, so not one started outside the app.
   const viaView = !isOther && state === 'attached'
-  const blocked = !viaView && target.view.outside
+  // The relay needs the session's own channel: not one started outside the app, nor one whose mod hasn't connected (MIP2-1502).
+  const unconnected = !viaView && (selfCheck?.controlOffFor ?? []).includes(targetId)
+  const blocked = (!viaView && target.view.outside) || unconnected
   const draft = drafts[targetId] ?? ''
   const setDraft = (text: string) => {
     const next = { ...drafts, [targetId]: text }
@@ -241,7 +243,7 @@ export function Focus({
           />
           {blocked && (
             <div className="composer-err">
-              {targetName} started outside the app, so the app can send to it only through its attached view.{' '}
+              {unconnected ? `${targetName} isn't connected to the app yet, so the app can send to it only through its attached view.` : `${targetName} started outside the app, so the app can send to it only through its attached view.`}{' '}
               {isOther ? `Open ${targetName} to send.` : 'Reattach to send.'}
             </div>
           )}

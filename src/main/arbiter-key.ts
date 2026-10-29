@@ -50,6 +50,19 @@ export class ArbiterKey {
   }
 
   /**
+   * The key's state from one decryption (gate pass 17, L-2): none, usable
+   * (with its last four characters), an Admin key in the Arbiter's slot, or
+   * a file that can't be decrypted, which stays visible so it can be removed.
+   */
+  status(): { kind: 'none' } | { kind: 'ok'; end: string } | { kind: 'admin' } | { kind: 'unreadable' } {
+    if (!existsSync(this.path)) return { kind: 'none' }
+    const k = this.read()
+    if (k === null) return { kind: 'unreadable' }
+    if (this.kind === 'arbiter' && isAdminKey(k)) return { kind: 'admin' }
+    return { kind: 'ok', end: k.slice(-4) }
+  }
+
+  /**
    * The Arbiter's slot holds an Admin key, saved before 1.0.1 refused one.
    * It's never used; Settings asks for it to be replaced (gate pass 16, M-2).
    */
@@ -83,5 +96,21 @@ export class ArbiterKey {
 
   clear(): void {
     rmSync(this.path, { force: true })
+  }
+}
+
+/**
+ * An Admin key in the Arbiter's slot, saved before 1.0.1 refused one, is
+ * never used, so it's deleted once at start (gate pass 17, M-3). Returns the
+ * notice to show, or null when there was none. A delete that fails doesn't
+ * stop the app: the notice says so, and Settings shows Remove (pass 18, L-2).
+ */
+export function removeAdminKeyAtStart(key: Pick<ArbiterKey, 'holdsAdminKey' | 'clear'>): string | null {
+  if (!key.holdsAdminKey()) return null
+  try {
+    key.clear()
+    return 'Removed the Admin API key saved for the Arbiter: it has organization-admin rights. Save a workspace-scoped API key in Settings › Arbiter to turn the Arbiter on.'
+  } catch (err) {
+    return `The Admin API key saved for the Arbiter couldn't be removed (${err instanceof Error ? err.message : String(err)}). The Arbiter doesn't use it; remove it in Settings › Arbiter.`
   }
 }

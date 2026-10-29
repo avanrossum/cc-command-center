@@ -210,7 +210,7 @@ export class FleetPoller {
     const stale = !this.modHealth.ok || s.pid.value === null || this.now() - lastContact > MOD_SILENCE_MS
     const pending = livePending(this.readPending?.().get(s.sessionId) ?? [], s, this.now())
     // A source the self-check found broken on this version reads stale.
-    const degraded = this.selfCheck?.degradedFields() ?? new Set()
+    const degraded = this.selfCheck?.degradedFields(s.sessionId) ?? new Set()
     const fields = stale ? staleModFields(mod) : staleModFields(mod, degraded)
     // `blocked` with no `waitingFor` on a session awaiting its first message
     // isn't Alex's to answer: it reads idle (Research MIP2-1426). Only on the

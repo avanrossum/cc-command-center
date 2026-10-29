@@ -2,9 +2,9 @@
 // package's fleet poller, self-check and supervisor watchdog, and shows the
 // window. It reads Claude Code only through @ccc/coupling.
 
-import { chmodSync, lstatSync, mkdirSync, realpathSync, statSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import {
   AttachPool,
   ChannelHub,
@@ -27,6 +27,8 @@ import {
   resolveLoginPath,
   setLoginPath,
   checkSupervisorPath,
+  claudeConfigDir,
+  readSavedOptions,
   processStartedAt,
   sharedSupervisorStart,
   awaitLoginPath,
@@ -45,7 +47,7 @@ import { REAL_POLL_MS, RealSpendPoller, SpendLedger, type Fetch } from './spend.
 import { registerSpend } from './spend-control.ts'
 import type { SpendState } from '../shared/spend.ts'
 import type { SessionSnapshot } from '@ccc/contract'
-import { ArbiterKey } from './arbiter-key.ts'
+import { ArbiterKey, removeAdminKeyAtStart } from './arbiter-key.ts'
 import { registerArtifacts } from './artifacts.ts'
 import { registerFirstRun } from './first-run-control.ts'
 import { claudeSettingsPath } from './mailbox.ts'
@@ -53,11 +55,14 @@ import { decide, newMemory } from './notify-rules.ts'
 import { registerControl } from './control.ts'
 import { registerStore } from './store-control.ts'
 import { applyBeforeReady, applyWhenReady, isTrustedSender } from './security.ts'
-import { checkClaudeBinOverride, debugPortAllowed, qaPickPaths, resolveChannelRoot, resolveImportFolder, resolveUserData } from './paths.ts'
+import { checkClaudeBinOverride, debugPortAllowed, qaPackagedPaths, qaPickPaths, resolveChannelRoot, resolveImportFolder, resolveUserData } from './paths.ts'
 import { fileStore } from './self-check-store.ts'
 import { appMenuTemplate } from './app-menu.ts'
-import { modVerdict } from './mod-verdict.ts'
-import { checkModFolders, MOD_FOLDERS_MAX, modDir, type ModHealed } from './reporter-mod.ts'
+import { restartVerdict } from './mod-verdict.ts'
+import type { SessionMeta } from '../shared/store.ts'
+import { wireHosts } from './restart.ts'
+import { checkModFolders, copyTo, MOD_FOLDERS_MAX, modDir, modHash, modSource, type ModHealed } from './reporter-mod.ts'
+import { backfillVersion, savedOptionsRefusal } from './mod-backfill.ts'
 import { moveRequest } from './move.ts'
 import { registerSettings } from './settings-control.ts'
 import { setUpUpdates } from './update-setup.ts'
@@ -238,7 +243,10 @@ async function start(): Promise<void> {
   // copy stops the start, with a dialog (pass 5, H-1, M-5).
   // Folders that couldn't be moved aside are tried once per start (pass 6, M-3).
   const modOps = { stuck: new Set<string>() }
-  let pluginDir = await modDir(DIST, app.isPackaged, app.getPath('userData'), onModHeal, modOps)
+  // A packaged build's mod paths, or QA's run of them in an unpackaged build (MIP2-1507).
+  const modPackaged = app.isPackaged || qaPackagedPaths(process.env, app.isPackaged)
+  const modArgs = [app.isPackaged, app.getPath('userData'), onModHeal, modOps, modPackaged && !app.isPackaged] as const
+  let pluginDir = await modDir(DIST, ...modArgs)
   // The current copy and the older versions are checked on their own, so one failing doesn't skip the other (gate run 3, L-4).
   // A check that throws leaves its copy unchecked, so it fails the mod-integrity item (pass 4, M-3).
   let checkFailed: { what: string; why: string } | null = null
@@ -253,6 +261,21 @@ async function start(): Promise<void> {
       if (what === 'current') hub?.blockLaunches(`the reporter mod's copy is changed and couldn't be replaced (${checkFailed.why})`)
     }
   }
+  // App-launched sessions with no record of their mod copy, from an earlier build (MIP2-1504).
+  const unrecorded = (id: string) => modPackaged && store.get().sessions[id]?.origin === 'app' && !store.get().sessions[id]?.launch?.mod
+  // A session's saved --plugin-dir and --settings (Research MIP2-1506): the short id from the last poll, else its first
+  // 8 characters, which is what 2.1.312 uses; the file must name the same session, or it's refused.
+  const savedOptions = (id: string) =>
+    readSavedOptions(claudeConfigDir(), poller?.current()?.sessions.find(s => s.sessionId === id)?.shortId.value ?? id.slice(0, 8), id)
+  const modRoot = join(app.getPath('userData'), 'reporter-mod')
+  /**
+   * What Claude Code would restart a recorded app-launched session with, checked against the app's record (gate pass 17,
+   * M-1): a bare resume or respawn loads the saved --plugin-dir and --settings, which a session can rewrite. Refused
+   * unless the folder is the recorded copy and the settings file is its channel's. An unreadable file refuses too.
+   */
+  // The folder: the one recorded at launch, else the one the store keeps for the session (records before 1.0.1).
+  const savedRefusal = (id: string, rec: { mod: string; launch: NonNullable<SessionMeta['launch']> }) =>
+    savedOptionsRefusal(savedOptions(id), { modRoot, mod: rec.mod, settings: hub?.settingsPathOf(id) ?? null, launch: rec.launch, cwd: rec.launch.cwd ?? store.get().sessions[id]?.cwd ?? null })
   // The versions verified by the latest completed round, and whether it left any unchecked (pass 7, H-1).
   let verifiedVersions = new Set<string>([basename(pluginDir)])
   let uncheckedVersions = 0
@@ -264,12 +287,18 @@ async function start(): Promise<void> {
         .map(m => m.launch!.mod!),
     )
     referenced.add(basename(pluginDir))
+    // A folder an unrecorded session's saved options name isn't pruned, so it can still be checked and resumed on (MIP2-1504).
+    for (const [id, m] of Object.entries(store.get().sessions)) {
+      if (m.archivedAt || m.removedAt || !unrecorded(id)) continue
+      const saved = savedOptions(id)
+      if ('dir' in saved && resolve(dirname(saved.dir)) === modRoot) referenced.add(basename(saved.dir))
+    }
     const r = await checkModFolders(app.getPath('userData'), pluginDir, onModHeal, Date.now, modOps, referenced)
     verifiedVersions = new Set([...r.verified, basename(pluginDir)])
     uncheckedVersions = r.unchecked.length
     if (r.unchecked.length) throw new Error(`${r.unchecked.length} reporter mod folders over the ${MOD_FOLDERS_MAX} the app checks were left unchecked`)
   }
-  if (app.isPackaged) {
+  if (modPackaged) {
     await guarded('versions', checkVersions)
     // One round at a time, async between folders and for chflags. Hashing a folder is still synchronous, so a
     // round with a large changed folder holds the main thread while it's hashed (pass 6, M-3; pass 7, L-3).
@@ -279,7 +308,7 @@ async function start(): Promise<void> {
       checking = true
       void (async () => {
         await guarded('current', async () => {
-          const dir = await modDir(DIST, true, app.getPath('userData'), onModHeal, modOps)
+          const dir = await modDir(DIST, ...modArgs)
           if (dir !== pluginDir) {
             pluginDir = dir
             hub?.setModDir(dir)
@@ -291,21 +320,21 @@ async function start(): Promise<void> {
       })().finally(() => (checking = false))
     }, 60_000).unref()
   }
-  // Whether a session may start again on its saved mod copy: resume and the watchdog both ask (pass 7, H-1, L-4).
+  // Whether a session may start again on its saved options: every restart path asks, at the moment of the restart,
+  // through `restarts` below (pass 7, H-1, L-4; pass 18, H-1).
   const sessionModVerdict = (id: string): string | null =>
-    modVerdict(store.get().sessions[id]?.launch?.mod, {
-      packaged: app.isPackaged,
-      stuck: stuckVersions,
-      verified: verifiedVersions,
-      unchecked: uncheckedVersions,
-      launchBlocked: hub?.launchBlocked() ?? null,
-    }, store.get().sessions[id]?.origin === 'app')
+    restartVerdict(id, {
+      meta: sid => store.get().sessions[sid],
+      mod: { packaged: modPackaged, stuck: stuckVersions, verified: verifiedVersions, unchecked: uncheckedVersions, launchBlocked: hub?.launchBlocked() ?? null },
+      packaged: modPackaged,
+      savedRefusal,
+    })
   // Channels whose settings were brought up to date at recovery, for the self-check (pass 7, M-1).
   const migrated: string[] = []
   hub = new ChannelHub({
     modDir: pluginDir,
     // The whole mod root, every version's folder, is denied to sessions (gate run 2, L-1).
-    ...(app.isPackaged ? { modRoot: join(app.getPath('userData'), 'reporter-mod') } : {}),
+    ...(modPackaged ? { modRoot: join(app.getPath('userData'), 'reporter-mod') } : {}),
     // The app's data folder, store included, so a session's Edit tool can't change it (pass 5, M-3).
     denyAlso: [app.getPath('userData')],
     root: resolveChannelRoot(process.env, DEFAULT_CHANNEL_ROOT),
@@ -383,6 +412,14 @@ async function start(): Promise<void> {
     },
   })
   hostRef = host
+  // The host every restart the app starts goes through: resume, the watchdog's respawn, the respawn before a prompt,
+  // and an attach to a stopped session each ask the verdict at the moment of the restart (gate pass 18, H-1, M-2;
+  // pass 19, H-1). The supervisor's own restart of a session that exits is the one the app neither starts nor sees
+  // (restart.ts; detecting it is 1.0.2 work).
+  const hosts = wireHosts(host, sessionModVerdict, id => {
+    const s = fleet.current()?.sessions.find(x => x.sessionId === id)
+    return !s || s.pid.value === null || s.pid.stale
+  })
   for (const id of stopsWaiting.splice(0)) untrustedStop(id)
   poller = new FleetPoller({
     host,
@@ -401,7 +438,7 @@ async function start(): Promise<void> {
     // The watchdog spawns only `daemon run`; it goes through the shared start.
     spawn: args => (args[0] === 'daemon' && args[1] === 'run' ? startDaemon() : spawnClaude(args)),
     // Through the host, so the respawn carries the session's reload switch (MIP2-1463).
-    respawn: id => host.respawn(id),
+    respawn: id => hosts.watchdog.respawn(id),
     sessions: () => fleet.current()?.sessions ?? [],
     // Nor one whose mod copy is stuck or unverified (pass 5, H-1; pass 7, H-1).
     skip: id => channels.untrustedReason(id) !== null || sessionModVerdict(id) !== null,
@@ -410,17 +447,17 @@ async function start(): Promise<void> {
   void loginReady.then(() => watchdog?.start())
 
   // Focus: `claude attach` views, and the controls behind window.ccc.
-  pool = new AttachPool(host, {
+  pool = new AttachPool(hosts.pool, {
     data: (id, data) => broadcast(IPC.focusData, id, data),
     exit: (id, code) => broadcast(IPC.focusExit, id, code),
   })
   // A move from 0.24, through the move sheet or a parked session's trust step: its launch settings and source.
   const recordMoved = (from: string, to: string) => {
     const r = moveRequest(store.get().sessions[from], undefined)
-    store.recordMove(from, to, { model: r?.model, effort: r?.effort, mode: r?.permissionMode, ...(app.isPackaged ? { mod: basename(pluginDir) } : {}) })
+    store.recordMove(from, to, { model: r?.model, effort: r?.effort, mode: r?.permissionMode, cwd: r?.cwd, name: r?.name, ...(modPackaged ? { mod: basename(pluginDir) } : {}) })
   }
   const trust = new TrustRuns(
-    host,
+    hosts.trust,
     binary,
     {
       data: (id, data) => broadcast(IPC.trustData, id, data),
@@ -436,16 +473,16 @@ async function start(): Promise<void> {
     commandLog.wrapTrust(spawnAttach),
   )
   registerControl({
-    host,
+    host: hosts.control,
     hub: channels,
     pool,
     trust,
-    control: new SessionControl({ host, hub: channels, current: () => fleet.current() }),
+    control: new SessionControl({ host: hosts.control, hub: channels, current: () => fleet.current() }),
     onActivity: id => store.touch(id, Date.now()),
     onLaunched: (id, r, source) => {
       store.recordLaunch(
         id,
-        { model: r.model, effort: r.effort, mode: r.permissionMode, isolation: r.isolation, ultracode: r.ultracode, extraArgs: r.extraArgs, ...(app.isPackaged ? { mod: basename(pluginDir) } : {}) },
+        { model: r.model, effort: r.effort, mode: r.permissionMode, isolation: r.isolation, ultracode: r.ultracode, extraArgs: r.extraArgs, cwd: r.cwd, name: r.name, ...(modPackaged ? { mod: basename(pluginDir) } : {}) },
         source,
       )
       // On Auto, place it now rather than wait for a poll that won't (MIP2-1432). A copy keeps its
@@ -460,6 +497,32 @@ async function start(): Promise<void> {
     onRekeyed: id => store.clearUntrusted(id),
     // A resume keeps the session's saved --plugin-dir, so one on a stuck copy is refused (pass 6, H-1).
     modStuck: sessionModVerdict,
+    // An app-launched session with no record of its copy (an earlier build): the copy its saved options name is
+    // checked and recorded first, then it resumes on it as usual (MIP2-1504).
+    unrecorded,
+    backfill: id => {
+      const r = backfillVersion(savedOptions(id), {
+        modRoot,
+        current: pluginDir,
+        // The build's own mod, not the current copy, which may be the folder that was pruned (MIP2-1508).
+        source: modSource(DIST, app.isPackaged),
+        stuck: stuckVersions,
+        exists: existsSync,
+        isDir: p => {
+          try {
+            return lstatSync(p).isDirectory()
+          } catch {
+            return false
+          }
+        },
+        hash: modHash,
+        restore: (from, to) => void copyTo(from, to),
+      })
+      if ('refused' in r) return r.refused
+      verifiedVersions.add(r.version)
+      store.recordMod(id, r.version)
+      return null
+    },
     // A copy a resume started: a stray until it leaves the list, and listed as a session, not hidden as a
     // background contractor (MIP2-1467).
     onResumedAsCopy: (from, short) =>
@@ -483,6 +546,12 @@ async function start(): Promise<void> {
   registerStore({ store, importFolder, sessions: seen })
   registerArtifacts(() => fleet.current())
   const arbiterKey = new ArbiterKey(join(app.getPath('userData'), 'arbiter-key.bin'), safeStorage)
+  // An Admin key in the Arbiter's slot, saved before 1.0.1 refused one, is never used: it's deleted, once, and the
+  // window says so (gate pass 17, M-3).
+  const startupNotices: string[] = []
+  const adminNotice = removeAdminKeyAtStart(arbiterKey)
+  if (adminNotice) startupNotices.push(adminNotice)
+  ipcMain.handle(IPC.startupNotices, event => (isTrustedSender(event) ? startupNotices.splice(0) : []))
   // The Arbiter (MIP2-1411): off until a key is saved; reruns only when the waiting set changes.
   const arbiterLog = new ArbiterLog(join(app.getPath('userData'), 'arbiter-log.jsonl'))
   const arbiter = new Arbiter({
@@ -588,7 +657,7 @@ async function start(): Promise<void> {
   const lastNames = new Map<string, string>()
   poller.subscribe(snapshot => {
     // A control path the self-check failed is switched off; its sessions keep their dialog.
-    channels.setControl(snapshot.selfCheck?.controlOff ?? [])
+    channels.setControl(snapshot.selfCheck?.controlOff ?? [], snapshot.selfCheck?.controlOffFor ?? [])
     // New sessions take a category by folder before the renderer sees them (spec MIP2-1370 §7).
     store.assignNew(seen())
     // The lifecycle (MIP2-1410): roll-off, removal, contractor links. A failed list removes nothing.

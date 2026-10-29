@@ -206,11 +206,7 @@ export function SettingsSheet({
                   </button>
                 </div>
               )}
-              {status?.arbiterKeyIsAdmin && (
-                <p className="note warn">
-                  The saved key is an Admin API key, which has organization-admin rights, so the Arbiter doesn't use it. Remove it and save a workspace-scoped API key.
-                </p>
-              )}
+              {status?.arbiterKeyIsAdmin && <AdminKeyWarning onRemoved={refresh} />}
               <p className="note">
                 Use a workspace-scoped API key. The app refuses an Admin key, but it can't tell whether a personal key's account has admin rights. The key is encrypted on this Mac with a key kept in
                 your Keychain.
@@ -405,5 +401,31 @@ function SpendSettings() {
       </p>
       <p className="note">The key is encrypted on this Mac with a key kept in your Keychain. It's used only to read your organization's cost, every 15 minutes.</p>
     </>
+  )
+}
+
+/**
+ * An Admin key in the Arbiter's slot, saved before 1.0.1: the Arbiter never
+ * uses it, and Remove is right here so the warning can be followed (gate
+ * pass 17, M-3). The app also deletes one at start.
+ */
+export function AdminKeyWarning({ onRemoved }: { onRemoved: () => void }) {
+  const api = useStore()
+  return (
+    <div className="row">
+      <p className="note warn grow">The saved key is an Admin API key, which has organization-admin rights, so the Arbiter doesn't use it. Remove it and save a workspace-scoped API key.</p>
+      <button
+        type="button"
+        className="fchip"
+        onClick={async () => {
+          const r = await window.ccc.removeArbiterKey()
+          if (!r.ok) return api.notice(r.error)
+          onRemoved()
+          api.notice('Admin key removed.')
+        }}
+      >
+        Remove
+      </button>
+    </div>
   )
 }

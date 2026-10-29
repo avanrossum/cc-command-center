@@ -192,6 +192,15 @@ describe('AppStoreService', () => {
       expect(s.get().sessions[D]?.rolledOffAt).toBe(T + 38 * DAY)
     })
 
+    it('records the mod copy a session was found on, keeping its other launch settings (MIP2-1504)', () => {
+      const s = open()
+      s.recordLaunch(D, { model: 'opus' })
+      s.recordMod(D, '0123456789abcdef')
+      expect(s.get().sessions[D]?.launch).toEqual({ model: 'opus', mod: '0123456789abcdef' })
+      s.recordMod(E, '0123456789abcdef')
+      expect(s.get().sessions[E]).toBeUndefined()
+    })
+
     it('unpins and drops a session from the switcher when it is archived (MIP2-1494)', () => {
       const s = open()
       s.setSwitcher([D], [E], T)

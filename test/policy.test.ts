@@ -165,7 +165,7 @@ describe('control checks', async () => {
 })
 
 describe('QA isolation (MIP2-1408)', async () => {
-  const { debugPortAllowed, qaPickPaths, resolveChannelRoot, resolveUserData } = await import('../src/main/paths.ts')
+  const { debugPortAllowed, qaPackagedPaths, qaPickPaths, resolveChannelRoot, resolveUserData } = await import('../src/main/paths.ts')
   const appData = '/Users/x/Library/Application Support'
   const root = '/Users/x/.ccc/ch'
 
@@ -192,6 +192,12 @@ describe('QA isolation (MIP2-1408)', async () => {
     expect(debugPortAllowed({}, false)).toBe(false)
     expect(debugPortAllowed({ CCC_QA: 'yes' }, false)).toBe(false)
     expect(debugPortAllowed({ CCC_QA: '1' }, true)).toBe(false)
+    // QA's packaged-path switch: both variables, unpackaged only; a packaged build ignores it (MIP2-1507).
+    expect(qaPackagedPaths({ CCC_QA: '1', CCC_QA_PACKAGED_PATHS: '1' }, false)).toBe(true)
+    expect(qaPackagedPaths({ CCC_QA: '1', CCC_QA_PACKAGED_PATHS: '1' }, true)).toBe(false)
+    expect(qaPackagedPaths({ CCC_QA_PACKAGED_PATHS: '1' }, false)).toBe(false)
+    expect(qaPackagedPaths({ CCC_QA: '1' }, false)).toBe(false)
+    expect(qaPackagedPaths({ CCC_QA: '1', CCC_QA_PACKAGED_PATHS: 'yes' }, false)).toBe(false)
     // The ⌘O stand-in follows the port's rule (MIP2-1413).
     expect(qaPickPaths({}, false)).toBeNull()
     expect(qaPickPaths({ CCC_QA: '1', CCC_QA_PICK_PATHS: '/a b/c:/d' }, false)).toEqual(['/a b/c', '/d'])

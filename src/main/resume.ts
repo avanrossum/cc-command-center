@@ -20,6 +20,13 @@ export interface ResumeDeps {
    * run the changed copy; a copy goes through the current one instead.
    */
   modStuck?: (sessionId: string) => string | null
+  /**
+   * The app launched it but has no record of its mod copy, from an earlier
+   * build (MIP2-1504). `backfill` finds and checks the copy its saved
+   * options name, records it, and returns null; or returns why it can't.
+   */
+  unrecorded?: (sessionId: string) => boolean
+  backfill?: (sessionId: string) => string | null
 }
 
 /** A resume refused because the session's mod copy can't be trusted (pass 6, H-1). The card offers Start a copy. */
@@ -30,7 +37,15 @@ export class ModStuck extends Error {
   }
 }
 
-export async function resumeFromApp(sessionId: string, { host, hub, onRekeyed, modStuck = () => null }: ResumeDeps): Promise<void> {
+export async function resumeFromApp(
+  sessionId: string,
+  { host, hub, onRekeyed, modStuck = () => null, unrecorded = () => false, backfill = () => 'the app has no record of which reporter mod copy this session uses' }: ResumeDeps,
+): Promise<void> {
+  // First the copy is found and recorded, so the usual check below judges it like any other (MIP2-1504).
+  if (unrecorded(sessionId)) {
+    const why = backfill(sessionId)
+    if (why) throw new ModStuck(why)
+  }
   const stuck = modStuck(sessionId)
   if (stuck) throw new ModStuck(stuck)
   const channel = hub.channelOf(sessionId) !== null

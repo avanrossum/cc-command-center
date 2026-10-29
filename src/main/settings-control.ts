@@ -45,7 +45,7 @@ export function registerSettings({ key, selfCheck, watchdog, now = Date.now }: S
     (): AppStatus => {
       const w = watchdog()
       // Only the key's last four characters reach the window (spec §4.4: `Stored · …<last 4>`).
-      const stored = key.has() ? key.get() : null
+      const st = key.status()
       return {
         version: app.getVersion(),
         commit: BUILD.commit,
@@ -56,8 +56,9 @@ export function registerSettings({ key, selfCheck, watchdog, now = Date.now }: S
         floor: CLAUDE_CODE_FLOOR,
         supervisor: w?.state.kind ?? 'unknown',
         restartsToday: w?.restartsSince(startOfDay(now())) ?? 0,
-        arbiterKey: key.has() ? { end: stored ? stored.slice(-4) : null } : null,
-        arbiterKeyIsAdmin: key.holdsAdminKey(),
+        // One decryption for all three (gate pass 17, L-2); a key that can't be read stays visible, with Remove.
+        arbiterKey: st.kind === 'ok' ? { end: st.end } : st.kind === 'unreadable' ? { end: null } : null,
+        arbiterKeyIsAdmin: st.kind === 'admin',
       }
     },
     null,

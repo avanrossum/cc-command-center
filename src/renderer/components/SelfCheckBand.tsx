@@ -204,7 +204,7 @@ export function ChannelBand({ report, rows, now }: { report: SelfCheckReport | n
     <div className="band" role="status">
       <div className="band-t">
         <b>{list.length === 1 ? "A session isn't connected to the app." : `${list.length} sessions aren't connected to the app.`}</b> Answering from cards and sending prompts are
-        off for all sessions until {list.length === 1 ? 'it connects' : 'these connect'}. Sessions show their own permission dialogs meanwhile. {cause ? `${cause} ` : ''}Running
+        off for {list.length === 1 ? 'it until it connects' : 'these sessions until they connect'}; other sessions aren't affected. {list.length === 1 ? 'It shows' : 'They show'} their own permission dialogs meanwhile. {cause ? `${cause} ` : ''}Running
         sessions usually reconnect by themselves within a minute. If one stays listed, press Check again, then restart it from its row.
         <ul className="band-d">
           {list.map((u, i) => {

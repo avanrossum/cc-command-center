@@ -190,6 +190,14 @@ export class AppStoreService {
     this.save()
   }
 
+  /** The mod copy a session's saved options name, once the app checked it (MIP2-1504). */
+  recordMod(sessionId: string, mod: string): void {
+    const m = this.data.sessions[sessionId]
+    if (!m) return
+    m.launch = { ...(m.launch ?? {}), mod }
+    this.save()
+  }
+
   /**
    * A session moved in from 0.24 (MIP2-1425): now the app's, in its imported
    * category. Under a different id, the new session takes the old one's

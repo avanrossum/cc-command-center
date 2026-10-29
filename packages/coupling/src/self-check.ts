@@ -238,9 +238,13 @@ export class SelfCheck {
     this.persist()
   }
 
-  /** Fields to mark stale: those of failed events, or every mod field when the channel failed. */
-  degradedFields(): ReadonlySet<keyof ReporterFields> {
-    if (this.results.channel?.state === 'fail') return new Set(ALL_MOD_FIELDS)
+  /**
+   * Fields to mark stale for a session: every mod field when its own channel
+   * is late (MIP2-1502), and for every session those of failed events, a
+   * contract-level failure.
+   */
+  degradedFields(sessionId?: string): ReadonlySet<keyof ReporterFields> {
+    if (sessionId !== undefined && this.unconnected.some(u => u.sessionId === sessionId)) return new Set(ALL_MOD_FIELDS)
     const out = new Set<keyof ReporterFields>()
     for (const [id, fields] of Object.entries(EVENT_FIELDS) as [CheckId, (keyof ReporterFields)[]][]) {
       if (this.results[id]?.state === 'fail') for (const f of fields) out.add(f)
@@ -253,13 +257,23 @@ export class SelfCheck {
     return this.version !== null && belowFloor(this.version)
   }
 
+  /**
+   * Control paths off for every session: below the floor, or when a
+   * contract-level check failed. A session whose own channel hasn't
+   * connected doesn't count here; it's off for that session alone
+   * (controlOffFor, MIP2-1502).
+   */
   controlOff(): SelfCheckReport['controlOff'] {
     if (this.tooOld()) return ['card-answers', 'prompt-relay']
-    const channelDown = this.results.channel?.state === 'fail'
     const off: SelfCheckReport['controlOff'] = []
-    if (channelDown || this.results['control:card-answers']?.state === 'fail') off.push('card-answers')
-    if (channelDown || this.results['control:prompt-relay']?.state === 'fail') off.push('prompt-relay')
+    if (this.results['control:card-answers']?.state === 'fail') off.push('card-answers')
+    if (this.results['control:prompt-relay']?.state === 'fail') off.push('prompt-relay')
     return off
+  }
+
+  /** Sessions whose own channel hasn't reached the app: card answers and prompt relay are off for each (MIP2-1502). */
+  controlOffFor(): string[] {
+    return this.unconnected.flatMap(u => (u.sessionId ? [u.sessionId] : []))
   }
 
   /**
@@ -341,12 +355,12 @@ export class SelfCheck {
         state: 'fail',
         detail: `${this.version} is older than this app supports`,
       }
-      return { claudeVersion: this.version, state: 'too-old', checks: [floor, ...checks, ...extra], controlOff: this.controlOff(), checkedAt: this.checkedAt, unconnected: this.unconnected, causes: this.causes }
+      return { claudeVersion: this.version, state: 'too-old', checks: [floor, ...checks, ...extra], controlOff: this.controlOff(), controlOffFor: this.controlOffFor(), checkedAt: this.checkedAt, unconnected: this.unconnected, causes: this.causes }
     }
     // A changed mod is not a Claude Code change: it has its own band, not "degraded".
     const failed = checks.some(c => c.state === 'fail')
     const passed = REQUIRED.every(id => this.results[id]?.state === 'pass')
-    return { claudeVersion: this.version, state: failed ? 'degraded' : passed ? 'passed' : 'new', checks: [...checks, ...extra], controlOff: this.controlOff(), checkedAt: this.checkedAt, unconnected: this.unconnected, causes: this.causes }
+    return { claudeVersion: this.version, state: failed ? 'degraded' : passed ? 'passed' : 'new', checks: [...checks, ...extra], controlOff: this.controlOff(), controlOffFor: this.controlOffFor(), checkedAt: this.checkedAt, unconnected: this.unconnected, causes: this.causes }
   }
 
   private set(id: CheckId, state: 'pass' | 'fail', detail: string | null = null): void {
