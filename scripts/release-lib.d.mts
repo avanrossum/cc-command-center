@@ -5,6 +5,7 @@ export function windowRefusal(tag: string, window: { tombstone: string | null; c
 export function releaseArgs(o: { tag: string; repo: string; title: string; notesFile: string; files: string[]; draft: boolean; target?: string | null; prerelease?: boolean }): string[]
 export function latestFalseRefusal(args: string[]): string | null
 export function updateFileRefusal(files: string[]): string | null
+export function modPackRefusal(built: string, packaged: string): string | null
 export function teamOf(codesignOutput: string): string | null
 export function teamRefusal(appTeam: string | null, binaries: { path: string; team: string | null }[], adhoc: boolean): string | null
 export const FIRST_VERSION: string

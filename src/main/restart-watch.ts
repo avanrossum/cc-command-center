@@ -70,14 +70,19 @@ const RESTARTING = new Set<string | symbol>(['resume', 'respawn', 'attach', 'mov
  * runs. Main makes every other host from this one, so no restart the app
  * starts goes unrecorded.
  */
-export function recordRestarts<H extends Partial<Record<Restarting, (sessionId: string, ...rest: never[]) => unknown>>>(host: H, watch: Pick<RestartWatch, 'expect'>): H {
+export function recordRestarts<H extends Partial<Record<Restarting, (sessionId: string, ...rest: never[]) => unknown>>>(
+  host: H,
+  watch: Pick<RestartWatch, 'expect'>,
+  /** A session's current id for either of its ids after a /clear (MIP2-1557), so the expectation is where the poll sees it. */
+  currentOf: (sessionId: string) => string = id => id,
+): H {
   return new Proxy(host, {
     get(target, prop, receiver) {
       const v = Reflect.get(target, prop, receiver) as unknown
       if (typeof v !== 'function') return v
       if (!RESTARTING.has(prop)) return (v as (...a: unknown[]) => unknown).bind(target)
       return (sessionId: string, ...rest: unknown[]) => {
-        watch.expect(sessionId)
+        watch.expect(currentOf(sessionId))
         return (v as (id: string, ...a: unknown[]) => unknown).call(target, sessionId, ...rest)
       }
     },

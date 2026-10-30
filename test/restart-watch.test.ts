@@ -61,6 +61,15 @@ describe('recordRestarts', () => {
   })
 })
 
+describe('recordRestarts after a /clear (MIP2-1557)', () => {
+  it("records the session's current id when called with its launch id, where the poll sees it", async () => {
+    const seen: string[] = []
+    const host = { resume: async (_id: string) => {} }
+    await recordRestarts(host, { expect: id => void seen.push(id) }, id => (id === A ? B : id)).resume(A)
+    expect(seen).toEqual([B])
+  })
+})
+
 describe('unexplainedRestart', () => {
   it('passes when the verdict does, and names the refusal when it does not', () => {
     expect(unexplainedRestart(A, () => null)).toBeNull()

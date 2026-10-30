@@ -1,7 +1,7 @@
 // The release script's checks (docs/release-plan.md §2–§5).
 
 import { describe, expect, it } from 'vitest'
-import { assetRefusal, branchRefusal, builderConfig, comparePrerelease, installEnv, prereleaseRefusal, PUBLIC_REPO, bundleIdRefusal, identityRefusal, latestFalseRefusal, remoteTagRefusal, targetRefusal, testFeedRefusal, untrackedRefusal, newerThan, releaseArgs, teamOf, teamRefusal, updateConfigRefusal, updateFileRefusal, versionRefusal, windowRefusal } from '../scripts/release-lib.mjs'
+import { assetRefusal, branchRefusal, builderConfig, comparePrerelease, installEnv, prereleaseRefusal, PUBLIC_REPO, bundleIdRefusal, identityRefusal, latestFalseRefusal, remoteTagRefusal, targetRefusal, testFeedRefusal, untrackedRefusal, newerThan, releaseArgs, teamOf, teamRefusal, updateConfigRefusal, updateFileRefusal, versionRefusal, windowRefusal, modPackRefusal } from '../scripts/release-lib.mjs'
 
 describe('the beta window (§3)', () => {
   const open = { tombstone: 'v0.24.3', closed: false }
@@ -187,3 +187,12 @@ describe('betas (MIP2-1497)', () => {
     expect(versionRefusal('v1.0.1-beta.1', 'v0.25.0')).toBeNull()
   })
 })
+
+describe('the packaged reporter mod (MIP2-1560)', () => {
+  it('passes when the packaged mod hashes as the build did, and refuses otherwise, as the app would at start', () => {
+    expect(modPackRefusal('f00345a778f77507', 'f00345a778f77507')).toBeNull()
+    expect(modPackRefusal('c7134c5bb9710d40', 'f00345a778f77507')).toMatch(/the app would refuse to start/)
+    expect(modPackRefusal('refused: x is a symlink', 'f00345a778f77507')).toMatch(/can't be hashed/)
+  })
+})
+

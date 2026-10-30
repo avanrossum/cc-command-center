@@ -45,10 +45,12 @@ const UPDATE_TEST_FEED = process.env.CCC_UPDATE_TEST_FEED || null
 if (UPDATE_TEST_FEED && !/^http:\/\/127\.0\.0\.1:\d{2,5}$/.test(UPDATE_TEST_FEED)) throw new Error('CCC_UPDATE_TEST_FEED must be http://127.0.0.1:<port>')
 
 // The reporter mod beside the build: its manifest and hooks, not the types
-// the engine lays down on load.
+// the engine lays down on load. No .d.ts files: the hooks run the vendored
+// .js, and electron-builder leaves .d.ts files out of the package, so a copy
+// with one would hash differently from what ships (MIP2-1560).
 mkdirSync(`${out}/mod/.claude-plugin`, { recursive: true })
 cpSync(`${ROOT}/mod/.claude-plugin/plugin.json`, `${out}/mod/.claude-plugin/plugin.json`)
-cpSync(`${ROOT}/mod/hooks`, `${out}/mod/hooks`, { recursive: true })
+cpSync(`${ROOT}/mod/hooks`, `${out}/mod/hooks`, { recursive: true, filter: src => !src.endsWith('.d.ts') })
 
 // The mod's hash, embedded in main.cjs inside the integrity-checked asar: the
 // packaged app refuses an unpacked mod that doesn't match it (gate run 2, M-3).

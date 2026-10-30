@@ -1,7 +1,7 @@
 {
   "name": "cc-command-center-app",
   "productName": "CC Command Center App",
-  "version": "1.0.2-beta.2",
+  "version": "1.0.2-beta.3",
   "private": true,
   "description": "A command center for every Claude Code session at once.",
   "type": "module",

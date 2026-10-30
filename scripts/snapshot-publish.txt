@@ -53,5 +53,6 @@ docs/release-notes/v1.0.1.md
 docs/release-notes/v1.0.2.md
 docs/release-notes/v1.0.2-beta.1.md
 docs/release-notes/v1.0.2-beta.2.md
+docs/release-notes/v1.0.2-beta.3.md
 docs/release-plan.md
 test/fixtures/releases-0.24.atom

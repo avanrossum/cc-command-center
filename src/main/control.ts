@@ -55,6 +55,8 @@ export interface ControlDeps {
   metaOf?: (sessionId: string) => SessionMeta | undefined
   /** The session as last polled, for checks before acting on it. */
   snapshotOf?: (sessionId: string) => SessionSnapshot | undefined
+  /** A session's current id for the id it was launched under before a /clear; resume and stop act on it (MIP2-1557). */
+  currentIdOf?: (sessionId: string) => string | undefined
   /** The app launched it, so its mod will report (MIP2-1434 follow-up). */
   launchedHere?: (sessionId: string) => boolean
   /** A resume from the app re-keyed its channel: the app's copy of the untrusted mark is cleared (pass 4, M-2). */
@@ -83,6 +85,7 @@ export function registerControl({
   moveTarget = () => null,
   onMoved = () => {},
   snapshotOf = () => undefined,
+  currentIdOf = () => undefined,
   metaOf = () => undefined,
   launchedHere = () => false,
   onRekeyed = () => {},
@@ -181,8 +184,9 @@ export function registerControl({
     ],
     [IPC.stop, (id: string) => host.stop(id)],
   ] as const) {
-    invoke(channel, async (id: unknown) => {
-      if (!isSessionId(id)) return { ok: false, error: 'not a session id' }
+    invoke(channel, async (given: unknown) => {
+      if (!isSessionId(given)) return { ok: false, error: 'not a session id' }
+      const id = currentIdOf(given) ?? given
       try {
         await act(id)
         return { ok: true }

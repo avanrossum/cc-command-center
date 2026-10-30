@@ -585,5 +585,35 @@ describe('SessionControl.sendPrompt', async () => {
     list = job('done', t - 60_000)
     expect((await host.list()).sessions[0]!.jobNeeds).toBeUndefined()
   })
+
+  it("keeps a cleared session under its current id when stopped, and wakes it by its launch id (MIP2-1557, QA)", async () => {
+    const LAUNCH = 'c0ffee0c-0000-4000-8000-00000000000c'
+    const CURRENT = 'b55a99a6-0000-4000-8000-00000000000d'
+    // Stopped: Claude Code lists the job under its launch id again. Running: under the current id.
+    let listed = LAUNCH
+    let pid: number | undefined
+    const calls: string[][] = []
+    const host = new SupervisorHost({
+      sleep: async () => {},
+      currentIdOf: id => (id === LAUNCH ? CURRENT : undefined),
+      launchIdOf: id => (id === CURRENT ? LAUNCH : undefined),
+      run: async args => {
+        calls.push(args)
+        if (args[0] === 'agents') return JSON.stringify([{ id: 'c0ffee0c', sessionId: listed, kind: 'background', cwd: '/w', startedAt: 1, state: pid ? 'working' : 'done', ...(pid ? { pid, status: 'idle' } : {}) }])
+        if (args[0] === '--resume') return ((listed = CURRENT), (pid = 7), 'backgrounded · c0ffee0c')
+        return ''
+      },
+    })
+    expect((await host.list()).sessions.map(s => s.sessionId)).toEqual([CURRENT])
+    await host.resume(CURRENT)
+    expect(calls.find(a => a[0] === '--resume')).toEqual(['--resume', LAUNCH, '--bg'])
+    expect((await host.list()).sessions.map(s => [s.sessionId, s.pid.value])).toEqual([[CURRENT, 7]])
+    // Called with the launch id (a list read while it was stopped): the same session, and it comes back (QA rerun).
+    listed = LAUNCH
+    pid = undefined
+    calls.length = 0
+    await host.resume(LAUNCH)
+    expect(calls.find(a => a[0] === '--resume')).toEqual(['--resume', LAUNCH, '--bg'])
+  })
 })
 

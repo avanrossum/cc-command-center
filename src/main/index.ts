@@ -473,6 +473,8 @@ async function start(): Promise<void> {
   const startDaemon = sharedSupervisorStart(() => spawnClaude(['daemon', 'run']))
   // Every restart the app starts is recorded first, so a process change it didn't start stands out (MIP2-1512).
   const restartWatch = new RestartWatch()
+  /** A session's current id, for the id it was launched under before a /clear (MIP2-1557). */
+  const currentOfLaunch = (launchId: string) => store.launchIds().find(([, launch]) => launch === launchId)?.[0]
   const clearWatch = new ClearWatch()
   const host = recordRestarts(new SupervisorHost({
     run,
@@ -481,6 +483,9 @@ async function start(): Promise<void> {
     startSupervisor: () => void startDaemon(),
     // A session command ran with its reload switch in its settings file only (MIP2-1463).
     onSwitchUnconfirmed: () => selfCheck.noteSwitchUnconfirmed(Date.now()),
+    // A /clear's two ids for one session, from the store (MIP2-1557).
+    currentIdOf: launchId => currentOfLaunch(launchId),
+    launchIdOf: id => store.get().sessions[id]?.launchSessionId,
     // A state, status or wait the app doesn't know, raw, for the record (MIP2-1447).
     onUnknown: raw => void commandLog.note('unknown-state', raw),
     // New sessions an operation couldn't account for are reported, not removed (pass 6, H-2).
@@ -489,7 +494,7 @@ async function start(): Promise<void> {
       selfCheck.addStrays(ids)
       broadcast(IPC.appNotice, `Claude Code started ${ids.length === 1 ? 'a session' : `${ids.length} sessions`} the app can't account for (${ids.map(i => i.slice(0, 8)).join(', ')}). Check the session list.`)
     },
-  }), restartWatch)
+  }), restartWatch, id => currentOfLaunch(id) ?? id)
   hostRef = host
   // The host every restart the app starts goes through: resume, the watchdog's respawn, the respawn before a prompt,
   // and an attach to a stopped session each ask the verdict at the moment of the restart (gate pass 18, H-1, M-2;
@@ -572,6 +577,7 @@ async function start(): Promise<void> {
     commandLog.wrapTrust(spawnAttach),
   )
   registerControl({
+    currentIdOf: currentOfLaunch,
     host: hosts.control,
     hub: channels,
     pool,

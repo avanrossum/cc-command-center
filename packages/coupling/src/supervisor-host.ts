@@ -55,6 +55,16 @@ export interface SupervisorHostOptions {
   startSupervisor?: () => void
   /** A session command ran without its switch, because the supervisor couldn't be confirmed running first (MIP2-1463). */
   onSwitchUnconfirmed?: () => void
+  /**
+   * The ids a /clear left a session with (MIP2-1557): its current id for the
+   * id it was launched under, and back. Claude Code lists a running cleared
+   * job under the new id but a stopped one under its launch id again, and
+   * wakes it by the launch id (QA MIP2-1557; Research MIP2-1556).
+   */
+  currentIdOf?: (launchId: string) => string | undefined
+  launchIdOf?: (sessionId: string) => string | undefined
+  // Every method that takes a session id takes either one and works on the current id: a caller holding the launch
+  // id (a list read while the job was stopped) waits for the right session (QA MIP2-1557 rerun).
 }
 
 /** One launch or resume while it runs: set when any other starts or ends meanwhile (pass 6, H-2). */
@@ -195,6 +205,8 @@ export class SupervisorHost implements SessionHost {
   private readonly startSupervisor: (() => void) | null
   private ensuring: Promise<boolean> | null = null
   private readonly onSwitchUnconfirmed: () => void
+  private readonly currentIdOf: (launchId: string) => string | undefined
+  private readonly launchIdOf: (sessionId: string) => string | undefined
   /** The last unknown shape reported per session, so a poll every 2 s doesn't repeat it. */
   private readonly unknownSeen = new Map<string, string>()
 
@@ -208,6 +220,8 @@ export class SupervisorHost implements SessionHost {
     this.onUnknown = opts.onUnknown ?? (() => {})
     this.startSupervisor = opts.startSupervisor ?? null
     this.onSwitchUnconfirmed = opts.onSwitchUnconfirmed ?? (() => {})
+    this.currentIdOf = opts.currentIdOf ?? (() => undefined)
+    this.launchIdOf = opts.launchIdOf ?? (() => undefined)
     this.sleep = opts.sleep ?? (ms => new Promise(r => setTimeout(r, ms)))
   }
 
@@ -217,6 +231,11 @@ export class SupervisorHost implements SessionHost {
     const stdout = await this.run(['agents', '--json', '--all'])
     const observedAt = this.now()
     const { entries, rejected } = parseAgentsJson(stdout)
+    // A stopped cleared job is listed under its launch id again: it's the same session, under its current id (MIP2-1557).
+    for (const e of entries) {
+      const current = e.sessionId ? this.currentIdOf(e.sessionId) : undefined
+      if (current) e.sessionId = current
+    }
     for (const e of entries) {
       if (e.id && e.sessionId) this.shortIds.set(e.sessionId, e.id)
       if (e.sessionId && e.cwd.startsWith('/')) this.cwds.set(e.sessionId, e.cwd)
@@ -303,6 +322,7 @@ export class SupervisorHost implements SessionHost {
 
   /** A bare `claude --resume <id> --bg`: the same session, with its saved options. */
   async resume(sessionId: string): Promise<void> {
+    sessionId = this.currentIdOf(sessionId) ?? sessionId
     if (!UUID.test(sessionId)) throw new Error('not a session id')
     const cwd = await this.cwdOf(sessionId)
     await this.changingWhile(sessionId, () => this.watchingStrays(cwd, () => [sessionId], () => this.resumeNow(sessionId, cwd)))
@@ -310,11 +330,12 @@ export class SupervisorHost implements SessionHost {
 
   private async resumeNow(sessionId: string, cwd: string | undefined): Promise<void> {
     // From the session's own folder: a restart from elsewhere can be refused as untrusted (MIP2-1388).
-    const args = ['--resume', sessionId, '--bg']
+    // A cleared session is woken by the id it was launched under (Research MIP2-1556); it comes back under its current one.
+    const args = ['--resume', this.launchIdOf(sessionId) ?? sessionId, '--bg']
     const opts = { timeoutMs: 30_000, cwd, session: await this.sessionSwitch() }
     // Both streams: the `note:` line is on stderr (MIP2-1453).
     const { stdout, stderr } = this.run.full ? await this.run.full(args, opts) : { stdout: await this.run(args, opts), stderr: '' }
-    const copy = resumedCopy(stdout, sessionId, stderr)
+    const copy = resumedCopy(stdout, this.launchIdOf(sessionId) ?? sessionId, stderr)
     if (copy) throw new ResumedAsCopy(copy)
     // The command returns before the supervisor has the process up. An attach
     // started now finds the session stopped and exits at once (MIP2-1415).
@@ -329,6 +350,7 @@ export class SupervisorHost implements SessionHost {
    * any launch.
    */
   async startCopy(sessionId: string, opts: Omit<LaunchOptions, 'cwd' | 'prompt'>): Promise<{ sessionId: string }> {
+    sessionId = this.currentIdOf(sessionId) ?? sessionId
     if (!UUID.test(sessionId)) throw new Error('not a session id')
     const cwd = await this.cwdOf(sessionId)
     if (!cwd) throw new Error('no folder known for the session')
@@ -338,6 +360,8 @@ export class SupervisorHost implements SessionHost {
   private async startCopyNow(sessionId: string, cwd: string, opts: Omit<LaunchOptions, 'cwd' | 'prompt'>): Promise<{ sessionId: string }> {
     const prepared = await this.prepareLaunch({ ...opts, cwd })
     try {
+      // A copy takes the transcript of the id it's given, so a cleared session's copy goes by its current id, the
+      // conversation since the clear, never the launch id's (MIP2-1557).
       const stdout = await this.run(['--resume', sessionId, ...prepared.args], { cwd, timeoutMs: 30_000, session: await this.sessionSwitch() })
       const shortId = COPY_AS.exec(stdout)?.[1] ?? backgroundedId(stdout)
       if (!shortId) throw new Error(`claude --resume printed no copy id: ${stdout.trim().split('\n')[0] ?? ''}`)
@@ -398,6 +422,7 @@ export class SupervisorHost implements SessionHost {
    * session's folder is already trusted, and `/` must never be offered.
    */
   async attach(sessionId: string): Promise<AttachCommand> {
+    sessionId = this.currentIdOf(sessionId) ?? sessionId
     const shortId = await this.shortIdOf(sessionId)
     const cwd = this.cwds.get(sessionId)
     if (!cwd) throw new Error('no folder known for the session')
@@ -482,6 +507,7 @@ export class SupervisorHost implements SessionHost {
   }
 
   async stop(sessionId: string): Promise<void> {
+    sessionId = this.currentIdOf(sessionId) ?? sessionId
     await this.changingWhile(sessionId, async () => void (await this.run(['stop', await this.shortIdOf(sessionId)])))
   }
 
@@ -509,6 +535,7 @@ export class SupervisorHost implements SessionHost {
    * (MIP2-1441 live run). So the app stops it first.
    */
   async stopIfRunning(sessionId: string): Promise<boolean> {
+    sessionId = this.currentIdOf(sessionId) ?? sessionId
     const running = async () => (await this.list()).sessions.find(s => s.sessionId === sessionId)?.pid.value != null
     if (!(await running())) return false
     await this.stop(sessionId)
@@ -521,6 +548,7 @@ export class SupervisorHost implements SessionHost {
   }
 
   async respawn(sessionId: string): Promise<void> {
+    sessionId = this.currentIdOf(sessionId) ?? sessionId
     await this.changingWhile(sessionId, async () => void (await this.run(['respawn', await this.shortIdOf(sessionId)], { timeoutMs: 30_000, cwd: await this.cwdOf(sessionId), session: await this.sessionSwitch() })))
   }
 

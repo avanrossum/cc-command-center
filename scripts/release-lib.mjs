@@ -88,6 +88,17 @@ export function latestFalseRefusal(args) {
   return args.includes('--latest=false') && !args.some(a => a === '--latest' || a === '--latest=true') ? null : 'every release must be created with --latest=false'
 }
 
+/**
+ * Why the packaged reporter mod isn't the one the build hashed, or null
+ * (MIP2-1560): the hash built into main.cjs is taken from dist/mod, and the
+ * app refuses to start when the unpacked copy hashes differently. beta.2
+ * shipped with a file electron-builder had left out.
+ */
+export function modPackRefusal(built, packaged) {
+  if (!/^[0-9a-f]{16}$/.test(built)) return `the built reporter mod can't be hashed (${built})`
+  return packaged === built ? null : `the packaged reporter mod hashes to ${packaged}, not the built ${built}, so the app would refuse to start`
+}
+
 /** The update file a `ccc` channel build must carry, and refuses 0.24's (§3). */
 export function updateFileRefusal(files) {
   if (files.includes('latest-mac.yml')) return 'the build wrote latest-mac.yml, which 0.24 reads; only ccc-mac.yml may be published'
