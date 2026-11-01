@@ -177,7 +177,12 @@ describe('betas (MIP2-1497)', () => {
     expect(prereleaseRefusal('1.0.1', false)).toBeNull()
     expect(prereleaseRefusal('1.0.1', true)).toMatch(/publishes a beta version/)
     expect(prereleaseRefusal('1.0.1-rc.1', true)).toMatch(/publishes a beta version/)
-    expect(prereleaseRefusal('1.0.1-beta.1', false)).toMatch(/publish it with --prerelease/)
+    expect(prereleaseRefusal('1.0.1-beta.1', false)).toMatch(/its release takes --prerelease/)
+  })
+  it('take any version in a build-only run, which publishes nothing', () => {
+    expect(prereleaseRefusal('1.0.2-beta.3', false, true)).toBeNull()
+    expect(prereleaseRefusal('1.0.2-beta.3', true, true)).toBeNull()
+    expect(prereleaseRefusal('1.1.0', true, true)).toBeNull()
   })
   it('order by semver, so beta.10 follows beta.2', () => {
     expect(newerThan('v1.0.1-beta.10', 'v1.0.1-beta.2')).toBe(true)

@@ -475,6 +475,12 @@ async function start(): Promise<void> {
   const restartWatch = new RestartWatch()
   /** A session's current id, for the id it was launched under before a /clear (MIP2-1557). */
   const currentOfLaunch = (launchId: string) => store.launchIds().find(([, launch]) => launch === launchId)?.[0]
+  /** No process runs the session, as the last poll saw it: an attach to it restarts it (MIP2-1565). */
+  const noProcess = (id: string) => {
+    const current = currentOfLaunch(id) ?? id
+    const s = poller?.current()?.sessions.find(x => x.sessionId === current)
+    return !s || s.pid.value === null || s.pid.stale
+  }
   const clearWatch = new ClearWatch()
   const host = recordRestarts(new SupervisorHost({
     run,
@@ -494,16 +500,13 @@ async function start(): Promise<void> {
       selfCheck.addStrays(ids)
       broadcast(IPC.appNotice, `Claude Code started ${ids.length === 1 ? 'a session' : `${ids.length} sessions`} the app can't account for (${ids.map(i => i.slice(0, 8)).join(', ')}). Check the session list.`)
     },
-  }), restartWatch, id => currentOfLaunch(id) ?? id)
+  }), restartWatch, noProcess, id => currentOfLaunch(id) ?? id)
   hostRef = host
   // The host every restart the app starts goes through: resume, the watchdog's respawn, the respawn before a prompt,
   // and an attach to a stopped session each ask the verdict at the moment of the restart (gate pass 18, H-1, M-2;
   // pass 19, H-1). The supervisor's own restart of a session that exits is the one the app doesn't start; the poll
   // below catches it after the fact (MIP2-1512).
-  const hosts = wireHosts(host, sessionModVerdict, id => {
-    const s = fleet.current()?.sessions.find(x => x.sessionId === id)
-    return !s || s.pid.value === null || s.pid.stale
-  })
+  const hosts = wireHosts(host, sessionModVerdict, noProcess)
   for (const id of stopsWaiting.splice(0)) untrustedStop(id)
   poller = new FleetPoller({
     host,
@@ -820,6 +823,11 @@ async function start(): Promise<void> {
     // A /clear: the same job and process under a new sessionId (MIP2-1557). Moved only when the session's mod said it
     // was cleared too, where it has one; first, so the new id takes the old record rather than a new one.
     for (const { from, to } of clearWatch.observe(snapshot.sessions.flatMap(s => (s.shortId.value ? [{ sessionId: s.sessionId, shortId: s.shortId.value, pid: s.pid.stale ? null : s.pid.value }] : [])))) {
+      // A session the app launched under that id is the job's own id, not a /clear's new one (MIP2-1570).
+      if (store.get().sessions[to]?.launch) {
+        void commandLog.note('clear-ignored', { from, to })
+        continue
+      }
       const withMod = channels.channelOf(from) !== null
       if (withMod && !channels.reportedClear(from)) {
         void commandLog.note('clear-unconfirmed', { from, to })

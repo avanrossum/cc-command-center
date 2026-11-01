@@ -24,4 +24,4 @@ export function builderConfig(o: { identity: string | null; adhoc: boolean; repo
 export const PUBLIC_REPO: string
 export function installEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv
 export function comparePrerelease(a: string, b: string): number
-export function prereleaseRefusal(version: string, prerelease: boolean): string | null
+export function prereleaseRefusal(version: string, prerelease: boolean, buildOnly?: boolean): string | null

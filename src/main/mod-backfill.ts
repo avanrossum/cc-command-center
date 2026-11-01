@@ -66,19 +66,43 @@ export function backfillVersion(saved: Pick<Extract<SavedOptions, { dir: string 
   return { refused: "its saved reporter mod copy was removed, and the restored copy didn't check out" }
 }
 
-/** The launch flags whose values the app checks against its record; `--name` may hold any name. */
-const VALUED = ['--name', '--model', '--effort', '--permission-mode', '--plugin-dir', '--settings'] as const
+/**
+ * The permission modes Shift+Tab reaches in any session, with no launch flag
+ * (code.claude.com/docs/en/permission-modes, read 2026-10-30). Auto is in the
+ * cycle where the account has it. bypassPermissions joins the cycle only
+ * after a launch that enables it, and dontAsk only comes from a launch flag,
+ * so either is accepted only when the app launched with it (MIP2-1572).
+ */
+const CYCLE_MODES: readonly string[] = ['default', 'acceptEdits', 'plan', 'auto']
+
+/** The launch flags that take a value, each at most once; `--name`, `--model`, `--effort` and `--proactivity` may hold any value. */
+const VALUED = ['--name', '--model', '--effort', '--permission-mode', '--plugin-dir', '--settings', '--proactivity'] as const
+/** The longest `--add-dir` path accepted. */
+const ADD_DIR_MAX = 4096
+/** The longest `--watch-artifact` link accepted, and the links it may hold: a claude.ai artifact (MIP2-1576). */
+const WATCH_MAX = 2048
+const ARTIFACT_LINK = ['https://claude.ai/artifact/', 'https://claude.ai/code/artifact/']
+/** The repeatable flags a session saves for itself, each with one value, not compared with the launch (MIP2-1576). */
+const REPEATED = ['--add-dir', '--watch-artifact']
 type Launch = { model?: string; effort?: string; mode?: string; extraArgs?: string[]; name?: string }
 
 /**
  * Why the saved flags aren't the ones the app launched the session with,
  * or null (gate pass 18, M-1; pass 19, L-1). Each of VALUED appears at most
- * once, with a value that doesn't start with "-". The name is the recorded
- * one, when the app recorded it. Model, effort and permission mode, when
- * present, are the recorded ones; Claude Code 2.1.312 can leave one out
- * (QA saw no --model after a launch with one, MIP2-1507), which falls back
- * to the default and grants nothing. What's left must be exactly the
- * recorded extra arguments. Any other flag, such as
+ * once, with a value that doesn't start with "-". Name, model, effort and
+ * proactivity may hold any value, or be left out: they grant nothing, and
+ * Claude Code saves the session's current ones, which a rename, /model and
+ * /effort change, and fills them in when the launch had none (MIP2-1572,
+ * MIP2-1576). The permission mode, when present, is the recorded one or one
+ * Shift+Tab reaches in any session (CYCLE_MODES), which Claude Code also
+ * saves; Claude Code 2.1.312 can leave it out (QA saw no --model after a
+ * launch with one, MIP2-1507), which falls back to the default and grants
+ * nothing. `--add-dir` may repeat, each with one absolute path other than
+ * the root, since /add-dir saves it; `--watch-artifact` may repeat, each with
+ * one claude.ai artifact link (Research MIP2-1573; MIP2-1576). Neither is
+ * compared with the launch. What's left must be exactly the recorded extra
+ * arguments, less their own `--add-dir`, `--watch-artifact` and
+ * `--proactivity`. Any other flag, such as
  * --dangerously-skip-permissions or --mcp-config, refuses. Claude Code
  * saves the flags in its own order, so they're compared by name, not as a
  * sequence.
@@ -88,6 +112,15 @@ export function savedFlagsRefusal(flags: readonly string[], launch: Launch): str
   const rest: string[] = []
   for (let i = 0; i < flags.length; i++) {
     const f = flags[i]!
+    if (REPEATED.includes(f)) {
+      const v = flags[i + 1]
+      if (v === undefined || v.startsWith('-')) return 'its saved options repeat a flag or leave out a value'
+      if (f === '--add-dir' && (!v.startsWith('/') || v.includes('\0') || v.length > ADD_DIR_MAX)) return "its saved options add a folder that isn't a plain absolute path"
+      if (f === '--add-dir' && resolve(v) === '/') return 'its saved options add the whole disk as a folder'
+      if (f === '--watch-artifact' && (!ARTIFACT_LINK.some(p => v.startsWith(p) && v.length > p.length) || v.includes('\0') || v.length > WATCH_MAX)) return "its saved options watch something that isn't a claude.ai artifact link"
+      i++
+      continue
+    }
     if (!(VALUED as readonly string[]).includes(f)) {
       rest.push(f)
       continue
@@ -97,19 +130,21 @@ export function savedFlagsRefusal(flags: readonly string[], launch: Launch): str
     values.set(f, v)
     i++
   }
-  const wants: [string, string | undefined][] = [
-    ['--model', launch.model],
-    ['--effort', launch.effort],
-    ['--permission-mode', launch.mode],
-  ]
-  for (const [flag, want] of wants) {
-    const got = values.get(flag)
-    if (got !== undefined && got !== want) return `its saved options change ${flag} from what the app launched it with`
-  }
-  if (launch.name !== undefined && values.has('--name') && values.get('--name') !== launch.name) return 'its saved options change --name from what the app launched it with'
-  const extra = launch.extraArgs ?? []
+  const mode = values.get('--permission-mode')
+  if (mode !== undefined && mode !== launch.mode && !CYCLE_MODES.includes(mode)) return 'its saved options change --permission-mode to one the app never launched it with'
+  const extra = withoutAccepted(launch.extraArgs ?? [])
   if (rest.length !== extra.length || rest.some((a, i) => a !== extra[i])) return 'its saved options hold flags the app never passed'
   return null
+}
+
+/** The extra arguments less `--add-dir`, `--watch-artifact` and `--proactivity` and their values, which the saved flags may change. */
+function withoutAccepted(args: readonly string[]): string[] {
+  const out: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    if ((REPEATED.includes(args[i]!) || args[i] === '--proactivity') && args[i + 1] !== undefined && !args[i + 1]!.startsWith('-')) i++
+    else out.push(args[i]!)
+  }
+  return out
 }
 
 /**

@@ -2,7 +2,7 @@
 
 import type { SessionSnapshot } from '@ccc/contract'
 import { describe, expect, it } from 'vitest'
-import { classOn, decide, newMemory, NOTIFY_GAP_MS, SETTLE_MS, type NotifyMemory } from '../src/main/notify-rules.ts'
+import { classOn, decide, EPISODE_GAP_MS, newMemory, NOTIFY_GAP_MS, SETTLE_MS, type NotifyMemory } from '../src/main/notify-rules.ts'
 import { emptyStore, type AppStore } from '../src/shared/store.ts'
 
 const T = 1_793_000_000_000
@@ -105,6 +105,26 @@ describe('decide', () => {
     decide(front, { sessions: [waitingNow], store: store(), focused: true, now: T })
     expect(decide(front, { sessions: [waitingNow], store: store(), focused: true, now: T + SETTLE_MS })).toEqual([])
     expect(decide(front, { sessions: [waitingNow], store: store(), focused: false, now: T + 2 * SETTLE_MS })).toEqual([])
+  })
+
+  it('notifies once while a session stays waiting, though its need or its listing drops out for a poll (MIP2-1574)', () => {
+    const mem = settled([snap({ activity: 'working' })])
+    const waiting = snap({ activity: 'waiting', needs: { kind: 'permission', detail: 'permission prompt' } })
+    const pending = snap({ activity: 'waiting', needs: { kind: 'permission', detail: 'permission prompt' }, pending: [{ requestId: 'r1', tool: 'Bash', summary: 'npm test', questions: null }] })
+    const polls = [waiting, snap({ activity: 'waiting' }), pending, waiting, null, pending, snap(), waiting]
+    let sent = 0
+    polls.forEach((s, i) => (sent += decide(mem, { sessions: s ? [s] : [], store: store(), focused: false, now: T + 20_000 + i * 11_000 }).length))
+    // The first need, then r1, a request it hadn't announced; nothing for the flickers.
+    expect(sent).toBe(2)
+  })
+
+  it('notifies a new need once the session has needed nothing for EPISODE_GAP_MS', () => {
+    const mem = settled([snap()])
+    const waiting = snap({ activity: 'waiting', needs: { kind: 'permission', detail: 'permission prompt' } })
+    expect(decide(mem, { sessions: [waiting], store: store(), focused: false, now: T + 20_000 })).toHaveLength(1)
+    decide(mem, { sessions: [snap()], store: store(), focused: false, now: T + 30_000 })
+    decide(mem, { sessions: [snap()], store: store(), focused: false, now: T + 30_000 + EPISODE_GAP_MS })
+    expect(decide(mem, { sessions: [waiting], store: store(), focused: false, now: T + 50_000 + EPISODE_GAP_MS })).toHaveLength(1)
   })
 
   it('announces once a session first seen after startup that is already waiting', () => {

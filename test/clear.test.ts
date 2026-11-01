@@ -28,6 +28,15 @@ describe('ClearWatch', () => {
     expect(copy.observe([{ sessionId: OLD, shortId: 'aaaaaaaa', pid: 10 }, { sessionId: NEW, shortId: 'c0ffee01', pid: 10 }])).toEqual([])
     expect(new ClearWatch().observe([{ sessionId: OTHER, shortId: 'c0ffee03', pid: 3 }])).toEqual([])
   })
+
+  it('ignores a restart listed under another id for one poll, then under its own again (MIP2-1570)', () => {
+    const w = new ClearWatch()
+    w.observe([{ sessionId: OLD, shortId: 'c0ffee01', pid: 10 }])
+    expect(w.observe([{ sessionId: NEW, shortId: 'c0ffee01', pid: 11 }])).toEqual([])
+    expect(w.observe([{ sessionId: OLD, shortId: 'c0ffee01', pid: 11 }])).toEqual([])
+    // A /clear after it is still seen.
+    expect(w.observe([{ sessionId: OTHER, shortId: 'c0ffee01', pid: 11 }])).toEqual([{ from: OLD, to: OTHER }])
+  })
 })
 
 describe('AppStoreService.renameSession', () => {

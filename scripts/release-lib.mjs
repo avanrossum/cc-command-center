@@ -308,11 +308,14 @@ export function installEnv(env) {
 
 /**
  * Why the version and the mode don't agree, or null (MIP2-1497): --prerelease
- * publishes only an `X.Y.Z-beta.N` version, and a release only a plain one.
+ * publishes only an `X.Y.Z-beta.N` version, and a release only a plain one. A
+ * build-only run publishes nothing, so it takes any version, with or without
+ * the flag (MIP2-1562).
  */
-export function prereleaseRefusal(version, prerelease) {
+export function prereleaseRefusal(version, prerelease, buildOnly = false) {
+  if (buildOnly) return null
   const beta = /^\d+\.\d+\.\d+-beta\.\d+$/.test(version)
   if (prerelease && !beta) return `--prerelease publishes a beta version (X.Y.Z-beta.N), not ${version}`
-  if (!prerelease && /-/.test(version)) return `${version} is a prerelease; publish it with --prerelease`
+  if (!prerelease && /-/.test(version)) return `${version} is a prerelease; its release takes --prerelease`
   return null
 }

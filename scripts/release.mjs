@@ -4,7 +4,7 @@
 //     node scripts/release.mjs --dry-run --repo <owner>/<private repo> --notes <file> [--adhoc]
 //   The signed, notarized build only, checked as a release and published nowhere, from main (for
 //   the farewell release's copy of the new app's disk image, MIP2-61):
-//     node scripts/release.mjs --build-only
+//     node scripts/release.mjs --build-only           (any version; --prerelease is ignored)
 //   A beta (MIP2-1497): the same as a real release, for an X.Y.Z-beta.N version, published as a
 //   GitHub prerelease and never "latest"; add --prerelease to the real-release command.
 //   A real release, only with the maintainer's go, from main, after this commit's snapshot is pushed to the
@@ -83,7 +83,7 @@ const window = JSON.parse(readFileSync(join(ROOT, 'scripts', 'release-window.jso
 // Dry runs too: a draft is the release that would be made.
 const versionRefused = versionRefusal(tag, window.tombstone)
 if (versionRefused) fail(versionRefused)
-const prereleaseRefused = prereleaseRefusal(version, prerelease)
+const prereleaseRefused = prereleaseRefusal(version, prerelease, buildOnly)
 if (prereleaseRefused) fail(prereleaseRefused)
 
 // 1. The tree is committed and pushed, so the release is a known commit.
@@ -153,7 +153,8 @@ if (!adhoc) {
 
 // 4. Build. The local `npm run package` config is overridden for a release only.
 // electron-builder adds to release/ without clearing it, so an earlier build's files would be uploaded too.
-rmSync(join(ROOT, 'release'), { recursive: true, force: true })
+// Retries cover Finder writing a .DS_Store into the folder mid-delete (ENOTEMPTY; MIP2-1562).
+rmSync(join(ROOT, 'release'), { recursive: true, force: true, maxRetries: 5 })
 // A distributed build installs its dependencies from package-lock.json, so what's signed is what the
 // commit names, not whatever node_modules holds (pass 10, L-1). npm run setup rebuilds node-pty for Electron.
 if (!dryRun) {

@@ -27,6 +27,12 @@ export interface NotifyMemory {
   last: Map<string, { needs: string | null; running: boolean }>
   /** When each session last notified. */
   sentAt: Map<string, number>
+  /**
+   * Each session's current stretch of needing Alex: the requests it has
+   * announced, and since when it has needed nothing or been out of the
+   * list. A stretch ends only after EPISODE_GAP_MS of that (MIP2-1574).
+   */
+  episodes: Map<string, { requests: Set<string>; clearSince: number | null }>
   /** When the rule first ran, and how many good agents polls it has seen: startup settles at the later of the second and 5 s. */
   firstAt: number | null
   goodPolls: number
@@ -37,10 +43,16 @@ export interface NotifyMemory {
 export const SETTLE_MS = 5_000
 
 export const NOTIFY_GAP_MS = 10_000
+/**
+ * How long a session must need nothing, or be out of the list, before a new
+ * need is a new notice. A need that drops out for a poll, or a session listed
+ * under another id for a poll, stays one notice (MIP2-1574).
+ */
+export const EPISODE_GAP_MS = 15_000
 const BODY_CHARS = 180
 
 export function newMemory(): NotifyMemory {
-  return { last: new Map(), sentAt: new Map(), firstAt: null, goodPolls: 0, settled: false }
+  return { last: new Map(), sentAt: new Map(), episodes: new Map(), firstAt: null, goodPolls: 0, settled: false }
 }
 
 /** A key that changes when a session asks for something new. */
@@ -49,6 +61,38 @@ function needsKey(s: SessionSnapshot): string | null {
   if (pending.length) return pending.map(p => p.requestId).join(',')
   const n = s.needsYou.value
   return n ? `${n.kind}:${n.detail ?? ''}` : null
+}
+
+const requestIds = (s: SessionSnapshot) => (s.pendingRequests?.value ?? []).map(p => p.requestId)
+
+/**
+ * Records this poll's need in the session's stretch, and says whether it's
+ * news: the stretch's first need, or a request it hasn't announced.
+ */
+function needsNews(mem: NotifyMemory, s: SessionSnapshot, now: number): boolean {
+  const ep = mem.episodes.get(s.sessionId)
+  if (!needsKey(s)) {
+    if (ep) ep.clearSince ??= now
+    return false
+  }
+  const ids = requestIds(s)
+  if (!ep) {
+    mem.episodes.set(s.sessionId, { requests: new Set(ids), clearSince: null })
+    return true
+  }
+  ep.clearSince = null
+  const fresh = ids.filter(id => !ep.requests.has(id))
+  for (const id of fresh) ep.requests.add(id)
+  return fresh.length > 0
+}
+
+/** Ends the stretches of sessions that have needed nothing, or been out of the list, for EPISODE_GAP_MS. */
+function endEpisodes(mem: NotifyMemory, sessions: readonly SessionSnapshot[], now: number): void {
+  const listed = new Set(sessions.map(s => s.sessionId))
+  for (const [id, ep] of mem.episodes) {
+    if (!listed.has(id)) ep.clearSince ??= now
+    if (ep.clearSince !== null && now - ep.clearSince >= EPISODE_GAP_MS) mem.episodes.delete(id)
+  }
 }
 
 function running(s: SessionSnapshot): boolean {
@@ -122,7 +166,11 @@ export function decide(mem: NotifyMemory, { sessions, store, focused, now, listO
   // Until startup settles, only record. At that moment, sessions already
   // waiting get one notice between them (UX ruling, MIP2-1387 §4.3).
   if (!mem.settled) {
-    for (const s of sessions) mem.last.set(s.sessionId, { needs: needsKey(s), running: running(s) })
+    for (const s of sessions) {
+      mem.last.set(s.sessionId, { needs: needsKey(s), running: running(s) })
+      needsNews(mem, s, now)
+    }
+    endEpisodes(mem, sessions, now)
     if (mem.goodPolls < 2 || now - mem.firstAt < SETTLE_MS) return out
     mem.settled = true
     if (focused || !s0.notifyEnabled) return out
@@ -137,13 +185,15 @@ export function decide(mem: NotifyMemory, { sessions, store, focused, now, listO
     const needs = needsKey(s)
     const run = running(s)
     mem.last.set(s.sessionId, { needs, running: run })
+    const news = needsNews(mem, s, now)
     if (focused || !s0.notifyEnabled) continue
     const meta = store.sessions[s.sessionId]
     // Archived sessions stay quiet; a contractor that needs Alex still asks (MIP2-1393 §4.4).
     if (quiet(store, s.sessionId)) continue
     let cls: NotifyClass | null = null
-    // A session first seen after startup that's already waiting is announced once.
-    if (needs && needs !== prev?.needs) cls = classOn(store, s.sessionId, 'needs') ? 'needs' : null
+    // Once per stretch of needing Alex, and again for each new request in it. A session first seen after startup that's
+    // already waiting is announced once.
+    if (news) cls = classOn(store, s.sessionId, 'needs') ? 'needs' : null
     else if (prev && !needs && prev.running && !run && !meta?.contractor) cls = classOn(store, s.sessionId, 'turn') ? 'turn' : null
     if (!cls) continue
     if (now - (mem.sentAt.get(s.sessionId) ?? 0) < NOTIFY_GAP_MS) continue
@@ -155,5 +205,6 @@ export function decide(mem: NotifyMemory, { sessions, store, focused, now, listO
     )
   }
   for (const id of mem.last.keys()) if (!sessions.some(s => s.sessionId === id)) mem.last.delete(id)
+  endEpisodes(mem, sessions, now)
   return out
 }
