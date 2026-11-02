@@ -17,7 +17,7 @@ export type PaneState =
   | { kind: 'attaching' }
   | { kind: 'attached' }
   | { kind: 'left'; reason: 'left' | 'stopped' | 'error' }
-  | { kind: 'failed'; error: string; terminal?: boolean }
+  | { kind: 'failed'; error: string; terminal?: boolean; settings?: string }
 
 /**
  * The title Claude Code sets while the pane shows agent view, not a session:
@@ -96,7 +96,15 @@ export function FocusPane({
     t.reset()
     fit.current.fit()
     const r = await window.ccc.focusOpen(id, Math.max(t.cols, 20), Math.max(t.rows, 5))
-    set(r.ok ? { kind: 'attached' } : { kind: 'failed', error: r.error, ...(r.kind === 'terminal' ? { terminal: true } : {}) })
+    set(r.ok ? { kind: 'attached' } : { kind: 'failed', error: r.error, ...(r.kind === 'terminal' ? { terminal: true } : {}), ...(r.kind === 'confirm' && r.settings ? { settings: r.settings } : {}) })
+  }
+
+  // "Resume with these settings" (D-040): the settings shown are recorded as its launch's and it resumes, then attaches.
+  const confirmSettings = async (settings: string) => {
+    set({ kind: 'attaching' })
+    const r = await window.ccc.confirmSettings(id, settings)
+    if (r.ok) await attach()
+    else set({ kind: 'failed', error: r.error })
   }
 
   // The terminal, once per pane.
@@ -282,6 +290,11 @@ export function FocusPane({
             {state.terminal && (
               <button className="fchip on" onClick={() => store.openMove(id)}>
                 Move into the app…
+              </button>
+            )}
+            {state.settings && (
+              <button className="fchip on" onClick={() => void confirmSettings(state.settings!)}>
+                Resume with these settings
               </button>
             )}
             <button className="fchip" onClick={() => void attach()}>

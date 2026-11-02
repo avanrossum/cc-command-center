@@ -5,6 +5,7 @@
 import type { AnswerRequest, LaunchRequest } from '../shared/ipc.ts'
 import { checkFlags } from '../shared/flags.ts'
 import { SIDEBAR_WIDTH, type Category } from '../shared/store.ts'
+import { resolve } from 'node:path'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** The largest single input, paste or prompt accepted from the renderer. */
@@ -26,12 +27,29 @@ export function isSize(v: unknown): v is number {
   return Number.isInteger(v) && (v as number) > 0 && (v as number) <= 2000
 }
 
+/** A folder that resolves to the disk root, which no session's record may hold (MIP2-1602 gate pass 39, M-2; pass 40, L-2). */
+export function isWholeDisk(cwd: string): boolean {
+  return resolve(cwd) === '/'
+}
+
 /** A launch request with only known fields and values; null if anything is off. */
 export function checkLaunch(v: unknown): LaunchRequest | null {
   if (typeof v !== 'object' || v === null) return null
   const r = v as Record<string, unknown>
   if (typeof r.cwd !== 'string' || !r.cwd.startsWith('/') || r.cwd.length > 4096 || r.cwd.includes('\0')) return null
-  const out: LaunchRequest = { cwd: r.cwd }
+  const rest = checkCopy(v)
+  return rest && { cwd: r.cwd, ...rest }
+}
+
+/**
+ * A copy's request: a launch's settings without a folder, which any `cwd`
+ * sent is ignored for, since a copy runs in its session's own folder
+ * (MIP2-1602).
+ */
+export function checkCopy(v: unknown): Omit<LaunchRequest, 'cwd'> | null {
+  if (typeof v !== 'object' || v === null) return null
+  const r = v as Record<string, unknown>
+  const out: Omit<LaunchRequest, 'cwd'> = {}
   if (r.name !== undefined) {
     if (typeof r.name !== 'string' || !NAME.test(r.name)) return null
     out.name = r.name

@@ -88,6 +88,7 @@ const pct = (x: number) => `${Math.round(x * 100)}%`
 
 /** The panel's status line for a window (§4.5 item 1). */
 export function statusLine(kind: WindowKind, p: Pace): string {
+  if (p.state === 'absent') return `${kind} · Not reported now`
   if (p.used === null || p.resetsAt === null) return `${kind} · No reading yet`
   const head = `${kind} · ${PACE_LABEL[p.state]} · ${Math.round(p.used)}% used`
   if ((p.state === 'tight' || p.state === 'over') && p.projected !== null) return `${head} · ~${Math.round(Math.min(p.projected, 999))}% by ${resetText(kind, p.resetsAt)}`

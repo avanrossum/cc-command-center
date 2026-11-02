@@ -12,7 +12,7 @@ import type { ImportParts, ImportSummary } from '../shared/ipc.ts'
 import { emptyStore, PICKABLE_COLORS, type AppStore, type Category, type SessionMeta } from '../shared/store.ts'
 import type { QuitReport } from '../shared/quit.ts'
 import { importRegistry } from './registry-import.ts'
-import { checkStore, uniqueCategoryId } from './store-schema.ts'
+import { checkStore, REFUSED_STARTS_MAX, uniqueCategoryId } from './store-schema.ts'
 import { checkImportedSettings } from './validate.ts'
 
 /** The longest session name Rename keeps. */
@@ -191,6 +191,44 @@ export class AppStoreService {
     this.save()
   }
 
+  /**
+   * Settings Alex confirmed, with "Resume with these settings" or "Confirm
+   * these settings" (D-040): the saved mode replaces any confirmed before,
+   * and the folders join those confirmed before. Kept apart from `launch`,
+   * which stays what the app launched with (gate pass 21, L-3).
+   */
+  recordConfirmed(sessionId: string, confirmed: { mode: string | null; dirs: readonly string[] }): void {
+    const m = this.data.sessions[sessionId]
+    if (!m) return
+    const c = { ...(m.confirmed ?? {}) }
+    if (confirmed.mode) c.mode = confirmed.mode
+    if (confirmed.dirs.length) c.addDirs = [...new Set([...(c.addDirs ?? []), ...confirmed.dirs])]
+    m.confirmed = c
+    this.save()
+  }
+
+  /** What was confirmed before a confirmation that didn't go through, put back as it was (D-043 prototype). */
+  restoreConfirmed(sessionId: string, confirmed: { mode?: string; addDirs?: string[] } | undefined): void {
+    const m = this.data.sessions[sessionId]
+    if (!m) return
+    if (confirmed) m.confirmed = confirmed
+    else delete m.confirmed
+    this.save()
+  }
+
+  /** The `startedAt` of each session's process that passed the restart check, saved once for the poll, and only on a change (gate pass 20, M-1). */
+  recordVerifiedStarts(starts: readonly (readonly [sessionId: string, startedAt: number])[]): void {
+    let changed = false
+    for (const [id, at] of starts) {
+      const m = this.data.sessions[id]
+      // A session marked untrusted isn't verified until a resume from the app clears the mark (gate pass 28, M-1).
+      if (!m || m.untrusted || m.verifiedStartedAt === at) continue
+      m.verifiedStartedAt = at
+      changed = true
+    }
+    if (changed) this.save()
+  }
+
   /** The mod copy a session's saved options name, once the app checked it (MIP2-1504). */
   recordMod(sessionId: string, mod: string): void {
     const m = this.data.sessions[sessionId]
@@ -285,8 +323,52 @@ export class AppStoreService {
   /** Its channel was re-keyed by a resume from the app. */
   clearUntrusted(sessionId: string): void {
     const m = this.data.sessions[sessionId]
-    if (!m?.untrusted) return
-    delete m.untrusted
+    if (!m?.untrusted && m?.refusedStarts === undefined && !m?.legacyMark) return
+    delete m!.untrusted
+    // The refused processes ended with the resume that re-keyed it (gate pass 28, M-1).
+    delete m!.refusedStarts
+    delete m!.legacyMark
+    this.save()
+  }
+
+  /**
+   * The `startedAt` of a process the restart check refused, kept with the
+   * latest ones (gate pass 28, M-1; pass 29, M-1). Returns the start dropped
+   * to keep REFUSED_STARTS_MAX, for the log (gate pass 30, L-4).
+   */
+  recordRefusedStart(sessionId: string, startedAt: number): number | undefined {
+    const m = this.data.sessions[sessionId]
+    if (!m || m.refusedStarts?.includes(startedAt)) return undefined
+    const all = [...(m.refusedStarts ?? []), startedAt]
+    m.refusedStarts = all.slice(-REFUSED_STARTS_MAX)
+    this.save()
+    return all.length > REFUSED_STARTS_MAX ? all[0] : undefined
+  }
+
+  /**
+   * Once, on this build's first start (gate pass 30, M-2): each session
+   * marked untrusted with no refused starts was marked by a build that kept
+   * none, and is flagged so its first process seen is refused. Marks made
+   * later never are. Returns how many were flagged.
+   */
+  flagLegacyMarks(now: number): number {
+    if (this.data.refusedStartsSince !== undefined) return 0
+    let n = 0
+    for (const m of Object.values(this.data.sessions)) {
+      if (!m.untrusted || m.refusedStarts?.length) continue
+      m.legacyMark = true
+      n++
+    }
+    this.data.refusedStartsSince = now
+    this.save()
+    return n
+  }
+
+  /** No process of the session counts as verified: the next one seen is checked (gate pass 28, L-1). */
+  clearVerifiedStart(sessionId: string): void {
+    const m = this.data.sessions[sessionId]
+    if (m?.verifiedStartedAt === undefined) return
+    delete m.verifiedStartedAt
     this.save()
   }
 

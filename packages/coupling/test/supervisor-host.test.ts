@@ -343,7 +343,8 @@ describe('SupervisorHost lifecycle', () => {
       { pid: 2, id: 'c0ffee0a', cwd: '/w', kind: 'background', startedAt: 2, sessionId: COPY, status: 'idle', state: 'done' },
     ])
     const { host, calls, bound } = fake({ agents: listed, '--resume': 'background session c0ffee01 keeps its own saved options, so the flags you passed started a copy as c0ffee0a.' })
-    expect(await host.startCopy(SID, { model: 'opus', effort: 'high' })).toEqual({ sessionId: COPY })
+    // With the folder it runs in, for the app's record of the launch (MIP2-1602).
+    expect(await host.startCopy(SID, { model: 'opus', effort: 'high' })).toEqual({ sessionId: COPY, cwd: '/w' })
     const run = calls.find(c => c.args[0] === '--resume')!
     expect(run).toEqual({ args: ['--resume', SID, '--bg', '--model', 'opus', '--effort', 'high', '--plugin-dir', '/mod', '--settings', '/s.json'], cwd: '/w' })
     expect(bound).toEqual([['ch-none', COPY]])

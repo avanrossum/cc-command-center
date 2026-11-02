@@ -3,14 +3,14 @@
 // sockets. `$` is stood in by a clock and an http.fetch that speaks over a
 // socket, the two engine calls the client makes.
 
-import { existsSync, lstatSync, readdirSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync } from 'node:fs'
 import { createServer, request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { channelCall, channelFrom, channelHello, channelSend, type Channel, type ChannelEngine } from '../../../mod/hooks/channel.ts'
 import { ANSWER_CHARS, CHANNEL_PATHS, HEADER, requestText, type PermissionAsk } from '../../../mod/hooks/channel-wire.ts'
-import { ChannelHub, memoryReplyKeys, type ReplyKeys } from '../src/channel/hub.ts'
+import { ChannelHub, memoryReplyKeys, memoryVersions, type ReplyKeys } from '../src/channel/hub.ts'
 import { importReplyKey, newReplyKey, newSecret, sign } from '../src/channel/crypto.ts'
 import { ChannelServer } from '../src/channel/server.ts'
 
@@ -421,6 +421,115 @@ describe('ChannelHub', () => {
       await channelSend($, fresh, CHANNEL_PATHS.report, JSON.parse(A_TEXT))
       expect(again.health()[0]?.keyPending).toBeUndefined()
       await again.closeAll()
+    })
+
+    it("recovered at version 4 with a kept key it can't read, it's marked for now, and the key file and settings stay (gate pass 20, M-2)", async () => {
+      const root = join(base, 'ch-unreadable')
+      const versions = memoryVersions()
+      const kept = memoryReplyKeys()
+      const first = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, versions, replyKeys: kept })
+      const l = await first.prepareLaunch()
+      first.bind(l.channelId, A_ID)
+      await first.closeAll()
+      const before = readFileSync(l.settingsPath, 'utf8')
+      const sets: string[] = []
+      const stopped: (string | null)[] = []
+      const unreadable: ReplyKeys = { ...kept, read: () => ({ state: 'unreadable', why: "its key file won't decrypt" }), set: id => void sets.push(id) }
+      const second = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, versions, replyKeys: unreadable, onUntrusted: id => void stopped.push(id) })
+      await second.recover()
+      expect(second.untrustedReason(A_ID)).toBe("its kept reply key can't be read (its key file won't decrypt)")
+      // Nothing replaced, no mark on disk, and the session isn't stopped: a locked Keychain clears on the next start.
+      expect(sets).toEqual([])
+      expect(readFileSync(l.settingsPath, 'utf8')).toBe(before)
+      expect(existsSync(join(root, l.channelId, 'untrusted'))).toBe(false)
+      expect(stopped).toEqual([])
+      await second.closeAll()
+      const third = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, versions, replyKeys: kept })
+      await third.recover()
+      expect(third.untrustedReason(A_ID)).toBeNull()
+      await third.closeAll()
+      // With no version in the store for it, the same: kept and marked, never replaced (gate pass 21, M-3).
+      versions.delete(l.channelId)
+      const fourth = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, versions, replyKeys: unreadable })
+      await fourth.recover()
+      expect(fourth.untrustedReason(A_ID)).toMatch(/can't be read/)
+      expect(sets).toEqual([])
+      expect(readFileSync(l.settingsPath, 'utf8')).toBe(before)
+      await fourth.closeAll()
+    })
+
+    it('a restart refusal on a transient-marked channel is the reason it is stopped and saved for (gate pass 27, L-1)', async () => {
+      const root = join(base, 'ch-tr')
+      const versions = memoryVersions()
+      const kept = memoryReplyKeys()
+      const first = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, versions, replyKeys: kept })
+      const l = await first.prepareLaunch()
+      first.bind(l.channelId, A_ID)
+      await first.closeAll()
+      const stopped: [string | null, string][] = []
+      const unreadable: ReplyKeys = { ...kept, read: () => ({ state: 'unreadable', why: "its key file won't decrypt" }) }
+      const second = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, versions, replyKeys: unreadable, onUntrusted: (id, why) => void stopped.push([id, why]) })
+      await second.recover()
+      expect(stopped).toEqual([])
+      second.markSession(A_ID, 'Claude Code restarted it by itself, and its saved options hold flags the app never passed')
+      expect(stopped).toEqual([[A_ID, 'Claude Code restarted it by itself, and its saved options hold flags the app never passed']])
+      expect(existsSync(join(root, l.channelId, 'untrusted'))).toBe(true)
+      await second.closeAll()
+    })
+
+    it('a transient-marked channel whose socket is replaced, or whose session the store marked, is marked for good and stopped (gate pass 30, H-1)', async () => {
+      const root = join(base, 'ch-th')
+      const versions = memoryVersions()
+      const kept = memoryReplyKeys()
+      const first = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, versions, replyKeys: kept })
+      const l = await first.prepareLaunch()
+      first.bind(l.channelId, A_ID)
+      await first.closeAll()
+      const stopped: [string | null, string][] = []
+      const unreadable: ReplyKeys = { ...kept, read: () => ({ state: 'unreadable', why: "its key file won't decrypt" }) }
+      const second = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, versions, replyKeys: unreadable, onUntrusted: (id, why) => void stopped.push([id, why]) })
+      await second.recover()
+      expect(stopped).toEqual([])
+      // Another process replaces the socket.
+      const socketPath = join(root, l.channelId, 's.sock')
+      unlinkSync(socketPath)
+      const squatter = createServer()
+      await new Promise<void>(r => squatter.listen(socketPath, () => r()))
+      try {
+        second.checkSockets()
+        expect(stopped).toEqual([[A_ID, 'the socket file was replaced']])
+        expect(existsSync(join(root, l.channelId, 'untrusted'))).toBe(true)
+      } finally {
+        await new Promise<void>(r => squatter.close(() => r()))
+        await second.closeAll()
+      }
+      // A store's mark, restored over a transient one, is applied too.
+      const fourth = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, versions, replyKeys: unreadable, onUntrusted: (id, why) => void stopped.push([id, why]) })
+      rmSync(join(root, l.channelId, 'untrusted'), { force: true })
+      await fourth.recover()
+      stopped.length = 0
+      fourth.restoreMarks([[A_ID, 'its saved options hold flags the app never passed']])
+      expect(stopped).toEqual([[A_ID, 'its saved options hold flags the app never passed']])
+      await fourth.closeAll()
+    })
+
+    it("recovered from a store that keeps keys with the key file gone, it's marked for now, not re-keyed (gate pass 22, L-3)", async () => {
+      const root = join(base, 'ch-missing')
+      const versions = memoryVersions()
+      const kept = memoryReplyKeys()
+      const first = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, versions, replyKeys: kept })
+      const l = await first.prepareLaunch()
+      first.bind(l.channelId, A_ID)
+      await first.closeAll()
+      const before = readFileSync(l.settingsPath, 'utf8')
+      const sets: string[] = []
+      const gone: ReplyKeys = { ...kept, persistent: true, read: () => ({ state: 'missing' }), set: id => void sets.push(id) }
+      const second = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, versions, replyKeys: gone })
+      await second.recover()
+      expect(second.untrustedReason(A_ID)).toBe('its reply key file was removed. Resume it from the app to give it a new one')
+      expect(sets).toEqual([])
+      expect(readFileSync(l.settingsPath, 'utf8')).toBe(before)
+      await second.closeAll()
     })
 
     it('a launch fails, writing nothing, when its key can\'t be kept', async () => {

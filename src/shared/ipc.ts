@@ -21,6 +21,7 @@ export const IPC = {
   startCopy: 'session:start-copy',
   moveIn: 'session:move-in',
   resume: 'session:resume',
+  confirmSettings: 'session:confirm-settings',
   stop: 'session:stop',
   answer: 'session:answer',
   sendPrompt: 'session:send-prompt',
@@ -130,7 +131,7 @@ export const IPC = {
 
 export type Result<T = object> =
   | ({ ok: true } & T)
-  | { ok: false; error: string; kind?: 'untrusted' | 'copy' | 'mod-stuck' | 'terminal'; variant?: 'trust' | 'home' | 'missing' }
+  | { ok: false; error: string; kind?: 'untrusted' | 'copy' | 'mod-stuck' | 'terminal' | 'confirm'; variant?: 'trust' | 'home' | 'missing'; settings?: string }
 
 export interface LaunchRequest {
   cwd: string
@@ -190,6 +191,8 @@ export interface CccApi {
 
   launch(req: LaunchRequest): Promise<Result<{ sessionId: string }>>
   resume(sessionId: string): Promise<Result>
+  /** Records the saved settings shown, if they still read the same, then resumes (D-040). */
+  confirmSettings(sessionId: string, settings: string): Promise<Result>
   /** Launch settings… and Resume with different settings: a copy under a new id (MIP2-1387 §2.3). `req.cwd` is ignored; the session's own folder is used. */
   startCopy(sessionId: string, req: LaunchRequest): Promise<Result<{ sessionId: string }>>
   /** Moves a session from CC Command Center 0.24 once its process there has exited (MIP2-1425). `sameId` false means it came back under a new id. */

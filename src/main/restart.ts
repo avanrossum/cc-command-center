@@ -16,7 +16,7 @@
 // MIP2-1512).
 
 import type { SessionHost } from '@ccc/coupling'
-import { ModStuck } from './resume.ts'
+import { stuckError, type RefusalError } from './resume.ts'
 
 /**
  * The host, with `resume`, `respawn`, and `attach` to a stopped session,
@@ -27,6 +27,7 @@ export function guardRestarts<H extends Pick<SessionHost, 'resume' | 'respawn' |
   host: H,
   verdict: (sessionId: string) => string | null,
   stopped: (sessionId: string) => boolean = () => true,
+  errorFor: RefusalError = stuckError,
 ): H {
   return new Proxy(host, {
     get(target, prop, receiver) {
@@ -34,14 +35,14 @@ export function guardRestarts<H extends Pick<SessionHost, 'resume' | 'respawn' |
       if (prop === 'attach') {
         return async (sessionId: string, ...rest: unknown[]) => {
           const why = stopped(sessionId) ? verdict(sessionId) : null
-          if (why) throw new ModStuck(why)
+          if (why) throw errorFor(sessionId, why)
           return (target.attach as (id: string, ...a: unknown[]) => unknown).call(target, sessionId, ...rest)
         }
       }
       if (prop === 'resume' || prop === 'respawn') {
         return async (sessionId: string, ...rest: unknown[]) => {
           const why = verdict(sessionId)
-          if (why) throw new ModStuck(why)
+          if (why) throw errorFor(sessionId, why)
           return (target[prop] as (id: string, ...a: unknown[]) => Promise<void>).call(target, sessionId, ...rest)
         }
       }
@@ -57,7 +58,7 @@ export function guardRestarts<H extends Pick<SessionHost, 'resume' | 'respawn' |
  * Focus views (attach), and the trust step. Each gets the guarded host, so
  * none can be handed the raw one by mistake.
  */
-export function wireHosts<H extends Pick<SessionHost, 'resume' | 'respawn' | 'attach'>>(host: H, verdict: (sessionId: string) => string | null, stopped: (sessionId: string) => boolean) {
-  const restarts = guardRestarts(host, verdict, stopped)
+export function wireHosts<H extends Pick<SessionHost, 'resume' | 'respawn' | 'attach'>>(host: H, verdict: (sessionId: string) => string | null, stopped: (sessionId: string) => boolean, errorFor?: RefusalError) {
+  const restarts = guardRestarts(host, verdict, stopped, errorFor)
   return { watchdog: restarts, control: restarts, pool: restarts, trust: restarts }
 }

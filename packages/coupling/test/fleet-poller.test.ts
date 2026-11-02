@@ -136,6 +136,119 @@ describe('FleetPoller', () => {
       expect(meterOf(q)([])?.value.fiveHour?.usedPercent).toBe(20)
     })
 
+    it("shows a reading with the 7-day window only, from /usage, a file or a mod (MIP2-1590)", async () => {
+      const { host } = hostWith([FIXTURE])
+      const weekly = (used: number, observedAt: number, source: R['source']) => ({ value: { fiveHour: null, sevenDay: { usedPercent: used, resetsAt: 2_000_000_000 } }, source, observedAt, stale: false })
+      const fromReport = new FleetPoller({ host, readUsage: async () => null, readReport: () => weekly(3, 9000, 'usage-report') as never })
+      expect((await fromReport.pollOnce()).usage?.value.sevenDay?.usedPercent).toBe(3)
+      const fromFile = new FleetPoller({ host, readUsage: async () => weekly(4, 5000, 'statusline') as never })
+      expect((await fromFile.pollOnce()).usage?.value).toEqual({ fiveHour: null, sevenDay: { usedPercent: 4, resetsAt: 2_000_000_000, observedAt: 5000, source: 'statusline' } })
+      const fromMod = new FleetPoller({ host, readUsage: async () => null, now: () => 1_800_000_000_000 })
+      expect((meterOf(fromMod) as (s: unknown[]) => { value: { sevenDay: { usedPercent: number } } } | null)([{ rateLimits: weekly(5, 100, 'mod') }])?.value.sevenDay.usedPercent).toBe(5)
+    })
+
+    it("keeps a window from an older complete reading when a newer one lacks it (gate pass 24, M-5)", async () => {
+      const { host } = hostWith([FIXTURE])
+      const full = { value: { fiveHour: { usedPercent: 40, resetsAt: 2_000_000_000 }, sevenDay: { usedPercent: 10, resetsAt: 2_000_000_000 } }, source: 'usage-report' as const, observedAt: 9000, stale: false }
+      const weekly = { value: { fiveHour: null, sevenDay: { usedPercent: 11, resetsAt: 2_000_000_000 } }, source: 'statusline' as const, observedAt: 9500, stale: false }
+      const p = new FleetPoller({ host, readUsage: async () => weekly as never, readReport: () => full as never, now: () => 1_800_000_000_000 })
+      const u = (await p.pollOnce()).usage
+      // Each window says where its own reading came from (gate pass 25, L-3).
+      expect(u?.value.fiveHour).toEqual({ usedPercent: 40, resetsAt: 2_000_000_000, observedAt: 9000, source: 'usage-report' })
+      expect(u?.value.sevenDay).toEqual({ usedPercent: 11, resetsAt: 2_000_000_000, observedAt: 9500, source: 'statusline' })
+    })
+
+    it('shows a window as not reported once its last reading has reset and no source carries it (MIP2-1590)', async () => {
+      const { host } = hostWith([FIXTURE])
+      let t = 1_800_000_000_000
+      let report: unknown = { value: { fiveHour: { usedPercent: 40, resetsAt: t / 1000 + 60 }, sevenDay: { usedPercent: 10, resetsAt: t / 1000 + 86_400 } }, source: 'usage-report', observedAt: t, stale: false }
+      const p = new FleetPoller({ host, readUsage: async () => null, readReport: () => report as never, now: () => t })
+      expect((await p.pollOnce()).usage?.value.fiveHour?.usedPercent).toBe(40)
+      // The server stops reporting the 5-hour window: it holds until its reset, then it's gone.
+      t += 30_000
+      report = { value: { fiveHour: null, sevenDay: { usedPercent: 11, resetsAt: t / 1000 + 86_400 } }, source: 'usage-report', observedAt: t, stale: false }
+      expect((await p.pollOnce()).usage?.value.fiveHour?.usedPercent).toBe(40)
+      t += 60_000
+      report = { value: { fiveHour: null, sevenDay: { usedPercent: 12, resetsAt: t / 1000 + 86_400 } }, source: 'usage-report', observedAt: t, stale: false }
+      expect((await p.pollOnce()).usage?.value.fiveHour).toBeNull()
+    })
+
+    it('lets a held window that has reset give way to an older reading that still carries it (gate pass 25, L-3)', async () => {
+      const { host } = hostWith([FIXTURE])
+      let t = 1_800_000_000_000
+      let report: unknown = { value: { fiveHour: { usedPercent: 40, resetsAt: t / 1000 + 60 }, sevenDay: null }, source: 'usage-report', observedAt: t, stale: false }
+      const file = { value: { fiveHour: { usedPercent: 5, resetsAt: t / 1000 + 18_000 }, sevenDay: null }, source: 'statusline', observedAt: t - 10_000, stale: false }
+      const p = new FleetPoller({ host, readUsage: async () => file as never, readReport: () => report as never, now: () => t })
+      expect((await p.pollOnce()).usage?.value.fiveHour?.usedPercent).toBe(40)
+      // The report goes stale and its window resets; the older file's reading, still in its window, is shown.
+      t += 120_000
+      report = { ...(report as object), stale: true }
+      expect((await p.pollOnce()).usage?.value.fiveHour?.usedPercent).toBe(5)
+    })
+
+    it('keeps a held window that has reset rather than step back to an older reading from an earlier window (gate pass 26, L-1)', async () => {
+      const { host } = hostWith([FIXTURE])
+      let t = 1_800_000_000_000
+      let report: unknown = { value: { fiveHour: { usedPercent: 40, resetsAt: t / 1000 + 60 }, sevenDay: null }, source: 'usage-report', observedAt: t, stale: false }
+      const older = { value: { fiveHour: { usedPercent: 90, resetsAt: t / 1000 - 3600 }, sevenDay: null }, source: 'statusline', observedAt: t - 7_200_000, stale: false }
+      const p = new FleetPoller({ host, readUsage: async () => older as never, readReport: () => report as never, now: () => t })
+      expect((await p.pollOnce()).usage?.value.fiveHour?.usedPercent).toBe(40)
+      t += 120_000
+      report = { ...(report as object), stale: true }
+      expect((await p.pollOnce()).usage?.value.fiveHour?.usedPercent).toBe(40)
+    })
+
+    it("keeps a window still in its own window over a newer reading whose window has reset (gate pass 27, L-3)", async () => {
+      const { host } = hostWith([FIXTURE])
+      const t = 1_800_000_000_000
+      const report = { value: { fiveHour: { usedPercent: 40, resetsAt: t / 1000 + 3600 }, sevenDay: null }, source: 'usage-report', observedAt: t - 100_000, stale: false }
+      const expired = { value: { fiveHour: { usedPercent: 99, resetsAt: t / 1000 - 60 }, sevenDay: null }, source: 'statusline', observedAt: t - 1000, stale: false }
+      let file: unknown = null
+      const p = new FleetPoller({ host, readUsage: async () => file as never, readReport: () => report as never, now: () => t })
+      expect((await p.pollOnce()).usage?.value.fiveHour?.usedPercent).toBe(40)
+      file = expired
+      expect((await p.pollOnce()).usage?.value.fiveHour?.usedPercent).toBe(40)
+    })
+
+    it('with no window held, takes a reading still in its window over a newer one past its reset (gate pass 28, L-3)', async () => {
+      const { host } = hostWith([FIXTURE])
+      const t = 1_800_000_000_000
+      const report = { value: { fiveHour: { usedPercent: 40, resetsAt: t / 1000 + 3600 }, sevenDay: null }, source: 'usage-report', observedAt: t - 100_000, stale: false }
+      const expired = { value: { fiveHour: { usedPercent: 99, resetsAt: t / 1000 - 60 }, sevenDay: null }, source: 'statusline', observedAt: t - 1000, stale: false }
+      const p = new FleetPoller({ host, readUsage: async () => expired as never, readReport: () => report as never, now: () => t })
+      expect((await p.pollOnce()).usage?.value.fiveHour?.usedPercent).toBe(40)
+    })
+
+    it('ranks a source whose reset time is unknown above a mod still in its window (gate pass 29, L-4)', async () => {
+      const { host } = hostWith([FIXTURE])
+      const t = 1_800_000_000_000
+      const report = { value: { fiveHour: { usedPercent: 40, resetsAt: null }, sevenDay: null }, source: 'usage-report', observedAt: t - 100_000, stale: false }
+      const mod = { value: { fiveHour: { usedPercent: 7, resetsAt: t / 1000 + 3600 }, sevenDay: null }, source: 'mod', observedAt: t, stale: false }
+      const p = new FleetPoller({ host, readUsage: async () => null, readReport: () => report as never, now: () => t })
+      await p.pollOnce()
+      const meter = (p as unknown as { usage: (s: unknown[]) => { value: { fiveHour: { usedPercent: number } | null } } | null }).usage.bind(p)
+      expect(meter([{ rateLimits: mod }])?.value.fiveHour?.usedPercent).toBe(40)
+    })
+
+    it('lets a newer source with an unknown reset time replace a held reading still in its window (gate pass 30, L-3)', async () => {
+      const { host } = hostWith([FIXTURE])
+      const t = 1_800_000_000_000
+      let report: unknown = { value: { fiveHour: { usedPercent: 40, resetsAt: t / 1000 + 3600 }, sevenDay: null }, source: 'usage-report', observedAt: t - 10_000, stale: false }
+      const p = new FleetPoller({ host, readUsage: async () => null, readReport: () => report as never, now: () => t })
+      expect((await p.pollOnce()).usage?.value.fiveHour?.usedPercent).toBe(40)
+      report = { value: { fiveHour: { usedPercent: 55, resetsAt: null }, sevenDay: null }, source: 'usage-report', observedAt: t, stale: false }
+      expect((await p.pollOnce()).usage?.value.fiveHour?.usedPercent).toBe(55)
+    })
+
+    it('says when its session list was read, before the rest of the poll (gate pass 25, M-1)', async () => {
+      const { host } = hostWith([FIXTURE])
+      let t = 1000
+      const p = new FleetPoller({ host, readUsage: async () => ((t = 5000), null), now: () => t })
+      const snap = await p.pollOnce()
+      expect(snap.listedAt).toBe(1000)
+      expect(snap.at).toBe(5000)
+    })
+
     it('passes the listed sessions to the file read', async () => {
       const { host } = hostWith([FIXTURE])
       let seen: ReadonlySet<string> | null = null

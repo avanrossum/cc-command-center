@@ -87,6 +87,19 @@ export interface SessionMeta {
   /** `mod`: the reporter mod version (its folder's hash) a packaged app launched it with (gate run 2, L-1). */
   /** What the app launched the session with; `cwd` and `name` are checked against Claude Code's saved options on every restart (gate pass 19). */
   launch?: { model?: string; effort?: string; mode?: string; isolation?: 'none' | 'worktree'; ultracode?: boolean; extraArgs?: string[]; mod?: string; cwd?: string; name?: string }
+  /**
+   * What Alex confirmed beyond the launch with "Resume with these settings": a
+   * permission mode, and folders as real paths.
+   * Only the restart check reads it, so `launch` stays what the app launched
+   * with (gate pass 21, L-3).
+   */
+  confirmed?: { mode?: string; addDirs?: string[] }
+  /** The `startedAt` of its last process the app saw pass the restart check, or start itself (gate pass 20, M-1). */
+  verifiedStartedAt?: number
+  /** The `startedAt` of each process the restart check refused, the latest 16, kept until a resume from the app clears the mark (gate pass 28, M-1; pass 29, M-1). */
+  refusedStarts?: number[]
+  /** Marked untrusted before this build kept refused starts: its first process seen is refused until a resume from the app (gate pass 29, L-1; pass 30, M-2). */
+  legacyMark?: boolean
   /** Started as a copy of this session, with new settings: the card reads "copy of <name>". */
   copyOf?: string
   /** Started from this session (D-014): the card reads "from <name>". */
@@ -169,6 +182,8 @@ export interface AppStore {
   channelVersions?: Record<string, number>
   /** What the last quit closed and failed to, for the toast on the next launch (MIP2-1528); cleared once shown. */
   lastQuit?: QuitReport
+  /** When this build first flagged the marks from before refused starts were kept (gate pass 30, M-2). Set once. */
+  refusedStartsSince?: number
 }
 
 export function emptyStore(): AppStore {

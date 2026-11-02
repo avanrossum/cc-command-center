@@ -6,16 +6,15 @@
 // (Research MIP2-1527, Claude Code 2.1.312). After three crashes within 5 s
 // of spawn it settles `failed` and stops restarting.
 //
-// So the app records each restart it starts itself (resume, respawn, an
-// attach to a stopped session, a move in) and watches each poll for a process change it didn't
-// start. Each one runs the restart verdict, the same check every restart the
-// app starts goes through (restart.ts); a refusal stops the session and marks
-// it untrusted. Not confirmed by Research: a kill mid-turn, and whether a
-// crash later than 5 s after spawn resets the count. The watch covers both,
-// since it looks only at the process changing.
+// So every new process the app sees is checked, whoever started it (D-043
+// prototype): a changed pid, and a first sighting the app hasn't verified.
+// Each runs the restart verdict, the check every restart the app starts
+// already passed (restart.ts), so the app's own restarts pass it a second
+// time, and nothing has to tell them apart from the supervisor's; a refusal
+// stops the session and marks it untrusted. Not confirmed by Research: a
+// kill mid-turn, and whether a crash later than 5 s after spawn resets the
+// count. The watch covers both, since it looks only at the process changing.
 
-/** How long a restart the app started accounts for a process change. A resume returns once the process is up. */
-export const OWN_RESTART_MS = 60_000
 /**
  * How long a session that left the list keeps its last pid. During a restart
  * Claude Code can list the job under another sessionId for a poll, then under
@@ -28,105 +27,140 @@ export interface ProcessSeen {
   /** null while no process runs it, or while the reading is stale. */
   pid: number | null
   startedAt: number
+  /** The reading is stale: the pid is unknown, not absent, so it says nothing about a stop (gate pass 24, M-3). */
+  stale?: boolean
 }
 
 export class RestartWatch {
-  private readonly seen = new Map<string, { pid: number; startedAt: number; goneAt?: number }>()
-  private readonly own = new Map<string, number>()
+  private readonly seen = new Map<string, { pid: number; startedAt: number; goneAt?: number; stopped?: boolean }>()
+  /**
+   * The first sightings of the last poll that no check covers (gate pass 20,
+   * M-1): a process other than the last one the app verified (by its start,
+   * compared for equality, so a clock set back doesn't hide one; pass 21,
+   * L-1), or with none verified. The app may have been closed when the
+   * supervisor restarted it, or the session out of the list longer than
+   * ABSENT_KEEP_MS.
+   */
+  unverified: string[] = []
+  /**
+   * Refused processes, by pid, while the watch remembers the session: their
+   * stop may have failed (gate pass 27, M-2). Dropped only when the session
+   * is listed with another process, or the watch forgets it after
+   * ABSENT_KEEP_MS; a missed listing or one with no pid doesn't clear it
+   * (gate pass 28, M-1; pass 29, M-1).
+   */
+  private readonly refusedPid = new Map<string, number>()
+  /** The refused processes the last poll still listed: never verified, and stopped again (gate pass 27, M-2). */
+  stillRefused: string[] = []
 
-  constructor(private readonly now: () => number = Date.now) {}
+  /**
+   * `verifiedStart`: the `startedAt` of the session's last verified process,
+   * kept across app starts; without it, first sightings aren't checked.
+   * `isRefusedStart`: whether a process with this `startedAt` was refused, kept
+   * across app starts until a resume from the app clears it: that process,
+   * first seen after a restart of the app, is still refused, with no new
+   * verdict to pass on options rewritten meanwhile (gate pass 28, M-1).
+   * `markedWithoutStart`: the session was marked untrusted by a build before
+   * refused starts were kept, as the store flags once (gate pass 29, L-1;
+   * pass 30, M-2); a mark made since isn't one.
+   */
+  constructor(
+    private readonly now: () => number = Date.now,
+    private readonly verifiedStart?: (sessionId: string) => number | undefined,
+    private readonly isRefusedStart?: (sessionId: string, startedAt: number) => boolean,
+    private readonly markedWithoutStart?: (sessionId: string) => boolean,
+  ) {}
 
-  /** The app is starting a process for this session; the next change within OWN_RESTART_MS is its own. */
-  expect(sessionId: string): void {
-    this.own.set(sessionId, this.now() + OWN_RESTART_MS)
+  /**
+   * The check refused the session's current process; it's kept refused while
+   * that pid is listed (gate pass 27, M-2). Returns its `startedAt`, for the
+   * store to keep.
+   */
+  refuse(sessionId: string): number | undefined {
+    const last = this.seen.get(sessionId)
+    if (!last) return undefined
+    this.refusedPid.set(sessionId, last.pid)
+    return last.startedAt
+  }
+
+  /** Forgets the session's process, so the one it runs now is a first sighting again (gate pass 28, L-1). */
+  forget(sessionId: string): void {
+    this.seen.delete(sessionId)
+    this.refusedPid.delete(sessionId)
   }
 
   /**
-   * One poll's sessions. Returns the sessions whose process changed, a new pid
-   * after an earlier one, that the app didn't start. A session with no
-   * process keeps its last pid, so the restart after the gap is still seen; a
-   * session that left the list keeps it for ABSENT_KEEP_MS, then is forgotten.
+   * The watch saw the session's process and then a poll with none, and
+   * nothing since. A stale reading isn't a stop (gate pass 24, M-3).
+   */
+  knownStopped(sessionId: string): boolean {
+    const last = this.seen.get(sessionId)
+    return last !== undefined && last.goneAt === undefined && last.stopped === true
+  }
+
+  /**
+   * One poll's sessions. Returns the sessions whose process changed: a new
+   * pid after an earlier one, whoever started it. A session with no process
+   * keeps its last pid, so the restart after the gap is still seen; a session
+   * that left the list keeps it for ABSENT_KEEP_MS, then is forgotten. A first
+   * sighting is never a change; it goes into `unverified` unless the store
+   * verified that very process.
    */
   observe(sessions: readonly ProcessSeen[]): string[] {
     const now = this.now()
     const changed: string[] = []
+    this.unverified = []
+    this.stillRefused = []
     const listed = new Set<string>()
     for (const s of sessions) {
       listed.add(s.sessionId)
       const before = this.seen.get(s.sessionId)
-      if (s.pid === null) {
+      const refused = this.refusedPid.get(s.sessionId)
+      if (s.stale) {
         if (before) delete before.goneAt
+        if (refused !== undefined) this.stillRefused.push(s.sessionId)
+        continue
+      }
+      if (s.pid === null) {
+        // No process listed: the refusal stands, so the refused pid, listed again, is still refused (gate pass 29, M-1).
+        if (before) (delete before.goneAt, (before.stopped = true))
         continue
       }
       this.seen.set(s.sessionId, { pid: s.pid, startedAt: s.startedAt })
-      if (!before || before.pid === s.pid) continue
-      const ownUntil = this.own.get(s.sessionId)
-      this.own.delete(s.sessionId)
-      if (ownUntil !== undefined && ownUntil >= now) continue
+      // Any sighting of a refused process is refused, ahead of every other branch: by its pid while the watch
+      // remembers it, by its saved start across a missed listing, another pid between, or an app restart, with no new
+      // verdict to pass on options rewritten meanwhile (gate pass 28, M-1; pass 29, M-1).
+      if (s.pid === refused || this.isRefusedStart?.(s.sessionId, s.startedAt)) {
+        this.refusedPid.set(s.sessionId, s.pid)
+        this.stillRefused.push(s.sessionId)
+        continue
+      }
+      // Another process: the refusal was for one that has ended.
+      this.refusedPid.delete(s.sessionId)
+      // The same process: the same pid and start. A reused pid with another start is a new process (gate pass 30, L-1).
+      if (before?.pid === s.pid && before.startedAt === s.startedAt) continue
+      // Marked untrusted by a build that kept no refused start: its first process seen is refused until a resume from the
+      // app clears the mark, unless it's the one the app verified (gate pass 29, L-1).
+      if (!before && this.markedWithoutStart?.(s.sessionId) && s.startedAt !== this.verifiedStart?.(s.sessionId)) {
+        this.refusedPid.set(s.sessionId, s.pid)
+        this.stillRefused.push(s.sessionId)
+        continue
+      }
+      if (!before) {
+        const last = this.verifiedStart?.(s.sessionId)
+        if (this.verifiedStart && (last === undefined || s.startedAt !== last)) this.unverified.push(s.sessionId)
+        continue
+      }
       changed.push(s.sessionId)
     }
     for (const [id, last] of this.seen) {
       if (listed.has(id)) continue
       last.goneAt ??= now
-      if (now - last.goneAt > ABSENT_KEEP_MS) this.seen.delete(id)
+      if (now - last.goneAt > ABSENT_KEEP_MS) (this.seen.delete(id), this.refusedPid.delete(id))
     }
-    for (const [id, until] of this.own) if (until < now) this.own.delete(id)
     return changed
   }
 }
 
-type Restarting = 'resume' | 'respawn' | 'attach' | 'moveIn'
-const RESTARTING = new Set<string | symbol>(['resume', 'respawn', 'attach', 'moveIn'])
-
-/**
- * The host, recording each restart the app starts with `watch` before it
- * runs. Main makes every other host from this one, so no restart the app
- * starts goes unrecorded.
- *
- * An attach starts a process only for a stopped session: Claude Code
- * restarts it when the attach command runs, after `attach` returns. So an
- * attach is recorded after it returns, and only when the session was
- * stopped. An attach to a running session, or one that fails, records
- * nothing, and the supervisor's restart of a running session in the next
- * minute is still checked (MIP2-1565).
- */
-export function recordRestarts<H extends Partial<Record<Restarting, (sessionId: string, ...rest: never[]) => unknown>>>(
-  host: H,
-  watch: Pick<RestartWatch, 'expect'>,
-  /** Whether no process runs the session, so an attach to it starts one. */
-  stopped: (sessionId: string) => boolean,
-  /** A session's current id for either of its ids after a /clear (MIP2-1557), so the expectation is where the poll sees it. */
-  currentOf: (sessionId: string) => string = id => id,
-): H {
-  return new Proxy(host, {
-    get(target, prop, receiver) {
-      const v = Reflect.get(target, prop, receiver) as unknown
-      if (typeof v !== 'function') return v
-      if (!RESTARTING.has(prop)) return (v as (...a: unknown[]) => unknown).bind(target)
-      if (prop === 'attach') {
-        return async (sessionId: string, ...rest: unknown[]) => {
-          const starts = stopped(sessionId)
-          const command = await (v as (id: string, ...a: unknown[]) => unknown).call(target, sessionId, ...rest)
-          if (starts) watch.expect(currentOf(sessionId))
-          return command
-        }
-      }
-      return (sessionId: string, ...rest: unknown[]) => {
-        watch.expect(currentOf(sessionId))
-        return (v as (id: string, ...a: unknown[]) => unknown).call(target, sessionId, ...rest)
-      }
-    },
-  })
-}
-
-/**
- * What to do about a process change the app didn't start: nothing when the
- * verdict passes; otherwise the reason the session is stopped and marked
- * with, which the security band lists with the session.
- */
-export function unexplainedRestart(sessionId: string, verdict: (sessionId: string) => string | null): string | null {
-  const why = verdict(sessionId)
-  return why === null ? null : `Claude Code restarted it by itself, and ${lowerFirst(why)}`
-}
-
-const lowerFirst = (s: string) => (/^[A-Z][a-z]/.test(s) && !s.startsWith('Claude') ? s[0]!.toLowerCase() + s.slice(1) : s)
+/** A refusal's reason to follow "…, and ": its first word in lower case, unless it's a name. */
+export const lowerFirst = (s: string) => (/^[A-Z][a-z]/.test(s) && !s.startsWith('Claude') ? s[0]!.toLowerCase() + s.slice(1) : s)

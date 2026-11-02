@@ -5,7 +5,7 @@ import { SessionControl, type SessionHost } from '@ccc/coupling'
 import { field, type FleetSnapshot } from '@ccc/contract'
 import { restartVerdict, type RestartDeps } from '../src/main/mod-verdict.ts'
 import { guardRestarts, wireHosts } from '../src/main/restart.ts'
-import { ModStuck, resumeFromApp } from '../src/main/resume.ts'
+import { ModStuck, NeedsConfirm, ResumeGate, resumeConfirmed, resumeFromApp } from '../src/main/resume.ts'
 import { removeAdminKeyAtStart } from '../src/main/arbiter-key.ts'
 
 const SID = 'c0ffee01-0000-4000-8000-000000000001'
@@ -22,6 +22,17 @@ function fakeHost() {
 }
 
 describe('guardRestarts (gate pass 18, H-1)', () => {
+  it('turns a refusal into the error main gives it, so settings to confirm offer the button (D-040)', async () => {
+    const { host, calls } = fakeHost()
+    const text = 'Saved settings: auto. Launched as default.'
+    const errorFor = (id: string, why: string) => (why === text ? new NeedsConfirm(id, why) : new ModStuck(why))
+    const guarded = guardRestarts(host, () => text, () => true, errorFor)
+    await expect(guarded.resume(SID)).rejects.toBeInstanceOf(NeedsConfirm)
+    await expect(guarded.attach(SID)).rejects.toMatchObject({ settings: text, sessionId: SID })
+    await expect(guardRestarts(host, () => 'its copy could not be moved aside', () => true, errorFor).respawn(SID)).rejects.toBeInstanceOf(ModStuck)
+    expect(calls).toEqual([])
+  })
+
   it('refuses resume and respawn when the verdict gives a reason, and leaves other methods alone', async () => {
     const { host, calls } = fakeHost()
     const guarded = guardRestarts(host, () => 'its saved options hold flags the app never passed')
@@ -133,3 +144,44 @@ describe('clearing a gone session\'s mark (MIP2-1518)', () => {
     expect(clearGoneRefusal(running, { removedAt: 1 }, true)).toMatch(/still exists/)
   })
 })
+
+describe('resumeConfirmed (gate pass 21, L-2)', () => {
+  const steps = (beginWhy: string | null = null) => {
+    const calls: string[] = []
+    const confirm = {
+      begin: (id: string, s: string) => (calls.push(`begin ${s}`), beginWhy),
+      commit: (id: string) => void calls.push('commit'),
+      abort: (id: string) => void calls.push('abort'),
+    }
+    return { calls, confirm }
+  }
+  it('records the settings before the restart and keeps them once it passed (D-043 prototype)', async () => {
+    const { calls, confirm } = steps()
+    await resumeConfirmed(SID, 'Saved settings: auto. Launched as default.', confirm, async () => void calls.push('resume'))
+    expect(calls).toEqual(['begin Saved settings: auto. Launched as default.', 'resume', 'commit'])
+  })
+  it('puts the record back when the restart fails, and resumes nothing when they no longer read as shown', async () => {
+    const failed = steps()
+    await expect(resumeConfirmed(SID, 'x', failed.confirm, async () => { throw new ModStuck('its copy could not be moved aside') })).rejects.toBeInstanceOf(ModStuck)
+    expect(failed.calls).toEqual(['begin x', 'abort'])
+    const changed = steps('its saved settings changed since they were shown')
+    let resumed = false
+    await expect(resumeConfirmed(SID, 'x', changed.confirm, async () => void (resumed = true))).rejects.toThrow(/changed since/)
+    expect(resumed).toBe(false)
+  })
+})
+
+describe('ResumeGate (gate pass 30, L-2)', () => {
+  it('takes a resume within 15 s of another as a repeat, but not a confirmed one', async () => {
+    let t = 0
+    const gate = new ResumeGate(() => t)
+    let runs = 0
+    await gate.run(SID, async () => void runs++)
+    t += 5_000
+    await gate.run(SID, async () => void runs++)
+    expect(runs).toBe(1)
+    await gate.run(SID, async () => void runs++, { fresh: true })
+    expect(runs).toBe(2)
+  })
+})
+

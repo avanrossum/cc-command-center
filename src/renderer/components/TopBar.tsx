@@ -9,7 +9,7 @@ import { UsagePanel } from './UsagePanel.tsx'
 import { SpendIndicator } from './Spend.tsx'
 import type { SpendState } from '../../shared/spend.ts'
 import { untilReset } from '../model/format.ts'
-import { addReading, PACE_LABEL, paceHover, paceOf, paceWords, type Pace, type PaceState, type Reading, type WindowKind } from '../model/pace.ts'
+import { ABSENT, addReading, PACE_LABEL, paceHover, paceOf, paceWords, type Pace, type PaceState, type Reading, type WindowKind } from '../model/pace.ts'
 import { splitAttention, type Counts } from '../model/fleet.ts'
 import { Glyph } from './bits.tsx'
 
@@ -49,7 +49,7 @@ export function usePace(usage: Field<RateLimits> | null, now: number): { paces: 
   let changed = false
   for (const [kind, w] of [['5h', usage?.value.fiveHour], ['7d', usage?.value.sevenDay]] as const) {
     if (!usage || !w || w.resetsAt === null) continue
-    const next = addReading(h[kind], { at: usage.observedAt, used: w.usedPercent, resetsAt: w.resetsAt })
+    const next = addReading(h[kind], { at: w.observedAt ?? usage.observedAt, used: w.usedPercent, resetsAt: w.resetsAt })
     if (next.length !== h[kind].length || next.at(-1) !== h[kind].at(-1)) (h[kind] = next), (changed = true)
   }
   if (changed) {
@@ -61,6 +61,11 @@ export function usePace(usage: Field<RateLimits> | null, now: number): { paces: 
   }
   const out = {} as Record<WindowKind, Pace>
   for (const kind of ['5h', '7d'] as const) {
+    // A window the latest reading leaves out isn't reported now: not an old reading, and not an error (MIP2-1590).
+    if (usage && !(kind === '5h' ? usage.value.fiveHour : usage.value.sevenDay)) {
+      out[kind] = ABSENT
+      continue
+    }
     out[kind] = paceOf(kind, h[kind], now, prev.current[kind])
     if (['onpace', 'tight', 'over'].includes(out[kind].state)) prev.current[kind] = out[kind].state
   }
@@ -115,7 +120,7 @@ export function useExtraPaces(extra: Field<UsageLimit[]> | null | undefined, now
 function Meter({ kind, p, now }: { kind: WindowKind; p: Pace; now: number }) {
   const used = p.used ?? 0
   const heat = used >= 85 ? 'hot' : used >= 65 ? 'warm' : ''
-  const empty = p.state === 'reset' || p.state === 'never'
+  const empty = p.state === 'reset' || p.state === 'never' || p.state === 'absent'
   const words = paceWords(kind, p, now)
   const hover = paceHover(kind, p)
   return (
@@ -134,7 +139,7 @@ function Meter({ kind, p, now }: { kind: WindowKind; p: Pace; now: number }) {
             <b className={`pace-w ${p.state}`}>{words.word}</b>
             <span className="pace-detail"> · {words.detail}</span>
           </>
-        ) : p.state === 'never' || p.state === 'reset' ? (
+        ) : empty ? (
           ''
         ) : (
           untilReset(p.resetsAt, now)

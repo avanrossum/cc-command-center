@@ -6,7 +6,7 @@
 import { untilReset } from './format.ts'
 
 export type WindowKind = '5h' | '7d'
-export type PaceState = 'never' | 'reset' | 'out' | 'stale' | 'learning' | 'onpace' | 'tight' | 'over'
+export type PaceState = 'never' | 'absent' | 'reset' | 'out' | 'stale' | 'learning' | 'onpace' | 'tight' | 'over'
 
 export interface Reading {
   /** When the reading was taken, Unix ms. */
@@ -85,7 +85,7 @@ export function settle(next: 'onpace' | 'tight' | 'over', prev: PaceState | null
 }
 
 /** Each state in words, for the panel and screen readers. */
-export const PACE_LABEL: Record<PaceState, string> = { onpace: 'On pace', tight: 'Tight', over: 'Over', out: 'Out', learning: 'Learning', stale: 'Stale', reset: 'Reset', never: 'No reading' }
+export const PACE_LABEL: Record<PaceState, string> = { onpace: 'On pace', tight: 'Tight', over: 'Over', out: 'Out', learning: 'Learning', stale: 'Stale', reset: 'Reset', never: 'No reading', absent: 'Not reported' }
 
 /** The projected state, before hysteresis. */
 function band(projected: number): 'onpace' | 'tight' | 'over' {
@@ -113,6 +113,9 @@ export function paceOf(kind: WindowKind, list: readonly Reading[], now: number, 
   return { ...base, state: settle(band(projected), prev, projected), projected, outAt }
 }
 
+/** A window the latest reading doesn't carry: Claude Code isn't reporting it now, which isn't an error (MIP2-1590). */
+export const ABSENT: Pace = { state: 'absent', used: null, resetsAt: null, projected: null, outAt: null, age: null }
+
 const clock = (ms: number) => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 const dayClock = (ms: number) => `${new Date(ms).toLocaleDateString('en-US', { weekday: 'short' })} ${clock(ms)}`
 /** A reset time as the row says it: `3:45 PM` for 5h, `Sat 3:00 PM` for 7d. */
@@ -139,6 +142,8 @@ export function paceHover(kind: WindowKind, p: Pace): string {
   switch (p.state) {
     case 'never':
       return `No reading yet. It comes with the next request a session here sends.`
+    case 'absent':
+      return `Claude Code isn't reporting a ${kind === '5h' ? '5-hour' : '7-day'} limit for this account right now.`
     case 'reset':
       return `Reset at ${resetText(kind, p.resetsAt!)}. Waiting for a new reading.`
     case 'stale':

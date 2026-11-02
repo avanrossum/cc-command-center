@@ -16,22 +16,23 @@ import {
 import type { SessionSnapshot } from '@ccc/contract'
 import type { SessionMeta } from '../shared/store.ts'
 import { copyRefusal, movePreflight, terminalMessage } from './move.ts'
-import { ModStuck, ResumeGate, resumeFromApp } from './resume.ts'
+import { ModStuck, NeedsConfirm, ResumeGate, resumeConfirmed, resumeFromApp, stuckError, type Confirmation, type RefusalError } from './resume.ts'
 import { IPC, type LaunchRequest, type Result } from '../shared/ipc.ts'
 import { lookup as dnsLookup } from 'node:dns/promises'
 import { openTerminalLink, type LinkResult } from './policy.ts'
 import { isTrustedSender } from './security.ts'
-import { checkAnswer, checkLaunch, droppedPaths, isSessionId, isSize, isText } from './validate.ts'
+import { checkAnswer, checkCopy, checkLaunch, droppedPaths, isSessionId, isSize, isText } from './validate.ts'
 
 function fail(err: unknown): Result {
   if (err instanceof WorkspaceNotTrusted) return { ok: false, error: err.message, kind: 'untrusted', variant: err.variant }
   if (err instanceof ResumedAsCopy) return { ok: false, error: err.message, kind: 'copy' }
+  if (err instanceof NeedsConfirm) return { ok: false, error: err.message, kind: 'confirm', settings: err.settings }
   if (err instanceof ModStuck) return { ok: false, error: err.message, kind: 'mod-stuck' }
   return { ok: false, error: err instanceof Error ? err.message : String(err) }
 }
 
 /** Channels that act on sessions: refused while the app is read-only. */
-const WRITES = new Set<string>([IPC.launch, IPC.startCopy, IPC.moveIn, IPC.resume, IPC.stop, IPC.answer, IPC.sendPrompt, IPC.focusOpen, IPC.trustStart])
+const WRITES = new Set<string>([IPC.launch, IPC.startCopy, IPC.moveIn, IPC.resume, IPC.confirmSettings, IPC.stop, IPC.answer, IPC.sendPrompt, IPC.focusOpen, IPC.trustStart])
 
 export interface ControlDeps {
   host: SessionHost
@@ -66,6 +67,15 @@ export interface ControlDeps {
   /** App-launched with no record of its mod copy: found from its saved options and checked first (MIP2-1504). */
   unrecorded?: (sessionId: string) => boolean
   backfill?: (sessionId: string) => string | null
+  /** The error a restart refusal becomes: NeedsConfirm when only saved settings need Alex's confirmation (D-040). */
+  errorFor?: RefusalError
+  /**
+   * "Resume with these settings" (D-040; gate pass 21, L-2): `begin` accepts
+   * the settings offered, if they still read as `settings`, for the restart
+   * only, or says why not; `commit` records them once it passed; `abort`
+   * drops them when it didn't.
+   */
+  confirmSettings?: Confirmation
   /** The terminal app a process runs under, or null (MIP2-1466). */
   terminalHost?: (pid: number) => Promise<string | null>
   /** A resume from the app started a copy (Claude Code's note says so): kept visible and alerted on (MIP2-1467). */
@@ -92,6 +102,8 @@ export function registerControl({
   modStuck = () => null,
   unrecorded = () => false,
   backfill = () => null,
+  errorFor = stuckError,
+  confirmSettings = { begin: () => 'there are no saved settings to confirm', commit: () => {}, abort: () => {} },
   onResumedAsCopy = () => {},
   terminalHost = async () => null,
 }: ControlDeps): void {
@@ -125,15 +137,17 @@ export function registerControl({
 
   // A copy with new settings; the folder is the session's own (MIP2-1387 §2.3).
   invoke(IPC.startCopy, async (id: unknown, req: unknown) => {
-    const r = checkLaunch({ ...(typeof req === 'object' && req ? req : {}), cwd: '/' })
+    const r = checkCopy(req)
     if (!isSessionId(id) || !r) return { ok: false, error: 'bad request' }
     const why = copyRefusal(snapshotOf(id), launchedHere(id))
     if (why) return { ok: false, error: why }
     try {
-      const { cwd: _cwd, prompt: _prompt, fromSession: _from, ...opts } = r
+      const { prompt: _prompt, fromSession: _from, ...opts } = r
       const copy = await host.startCopy(id, opts)
-      onLaunched(copy.sessionId, r, { copyOf: id })
-      return { ok: true, ...copy }
+      // Recorded with the folder the host started it in, the session's own: the restart check compares it with Claude
+      // Code's saved folder (MIP2-1602).
+      onLaunched(copy.sessionId, { ...opts, cwd: copy.cwd }, { copyOf: id })
+      return { ok: true, sessionId: copy.sessionId }
     } catch (err) {
       return fail(err)
     }
@@ -166,22 +180,32 @@ export function registerControl({
     return { ok: true }
   }, untrusted)
 
+  const resume = async (id: string, fresh = false) => {
+    // A job still listed and waiting on something in the session has no process to wake: a resume would start a
+    // second job beside it (QA MIP2-1559, r8). Opening it attaches, where Alex answers (MIP2-1558).
+    if (snapshotOf(id)?.jobNeeds) throw new Error("it's waiting on something in the session. Open it to answer there; resuming would start a copy beside it")
+    await resumes
+      .run(id, () => resumeFromApp(id, { host, hub, onRekeyed, modStuck, unrecorded, backfill, errorFor }), { fresh })
+      .catch(err => {
+        if (err instanceof ResumedAsCopy) onResumedAsCopy(id, err.copyId)
+        throw err
+      })
+    onActivity(id)
+  }
+
+  // "Resume with these settings" (D-040): the settings Alex was shown are recorded as the launch's, then it resumes.
+  invoke(IPC.confirmSettings, async (given: unknown, settings: unknown): Promise<Result> => {
+    if (!isSessionId(given) || !isText(settings)) return { ok: false, error: 'bad request' }
+    try {
+      await resumeConfirmed(currentIdOf(given) ?? given, settings, confirmSettings, id => resume(id, true))
+      return { ok: true }
+    } catch (err) {
+      return fail(err)
+    }
+  }, untrusted)
+
   for (const [channel, act] of [
-    [
-      IPC.resume,
-      async (id: string) => {
-        // A job still listed and waiting on something in the session has no process to wake: a resume would start a
-        // second job beside it (QA MIP2-1559, r8). Opening it attaches, where Alex answers (MIP2-1558).
-        if (snapshotOf(id)?.jobNeeds) throw new Error("it's waiting on something in the session. Open it to answer there; resuming would start a copy beside it")
-        await resumes
-          .run(id, () => resumeFromApp(id, { host, hub, onRekeyed, modStuck, unrecorded, backfill }))
-          .catch(err => {
-            if (err instanceof ResumedAsCopy) onResumedAsCopy(id, err.copyId)
-            throw err
-          })
-        onActivity(id)
-      },
-    ],
+    [IPC.resume, resume],
     [IPC.stop, (id: string) => host.stop(id)],
   ] as const) {
     invoke(channel, async (given: unknown) => {

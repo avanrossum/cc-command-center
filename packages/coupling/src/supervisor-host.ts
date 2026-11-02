@@ -347,14 +347,17 @@ export class SupervisorHost implements SessionHost {
    * (spec MIP2-1387 §2.3). Flags on `--resume <id> --bg` make Claude Code
    * start a copy under a new id and leave the original as it was
    * (MIP2-1377 1b). The copy gets its own channel, so the app hosts it like
-   * any launch.
+   * any launch. Returns the folder it runs in too, for the app's record of
+   * the launch, which the restart check compares with Claude Code's
+   * (MIP2-1602).
    */
-  async startCopy(sessionId: string, opts: Omit<LaunchOptions, 'cwd' | 'prompt'>): Promise<{ sessionId: string }> {
+  async startCopy(sessionId: string, opts: Omit<LaunchOptions, 'cwd' | 'prompt'>): Promise<{ sessionId: string; cwd: string }> {
     sessionId = this.currentIdOf(sessionId) ?? sessionId
     if (!UUID.test(sessionId)) throw new Error('not a session id')
     const cwd = await this.cwdOf(sessionId)
     if (!cwd) throw new Error('no folder known for the session')
-    return this.watchingStrays(cwd, r => [r.sessionId], () => this.startCopyNow(sessionId, cwd, opts))
+    const copy = await this.watchingStrays(cwd, r => [r.sessionId], () => this.startCopyNow(sessionId, cwd, opts))
+    return { ...copy, cwd }
   }
 
   private async startCopyNow(sessionId: string, cwd: string, opts: Omit<LaunchOptions, 'cwd' | 'prompt'>): Promise<{ sessionId: string }> {

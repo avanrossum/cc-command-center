@@ -241,7 +241,12 @@ export function App() {
       resuming.current.add(sessionId)
       setNotice(`Resuming ${e.name}…`)
       const r = await window.ccc.resume(sessionId).finally(() => resuming.current.delete(sessionId))
-      setNotice(r.ok ? null : r.kind === 'copy' ? 'Resumed as a different session. The original conversation is unchanged on disk.' : `Can't resume: ${r.error}`)
+      // Settings that go beyond its launch: Alex confirms them once, then it resumes and opens (D-040).
+      const settings = !r.ok && r.kind === 'confirm' ? r.settings : undefined
+      const confirm = settings
+        ? { label: 'Resume with these settings', run: () => void window.ccc.confirmSettings(sessionId, settings).then(c => (c.ok ? (setNotice(null), setSheet(null), setFocused(sessionId)) : setNotice(`Can't resume: ${c.error}`))) }
+        : undefined
+      setNotice(r.ok ? null : r.kind === 'copy' ? 'Resumed as a different session. The original conversation is unchanged on disk.' : `Can't resume: ${r.error}`, confirm)
       if (!r.ok) return
     }
     setSheet(null)

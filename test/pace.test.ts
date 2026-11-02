@@ -1,7 +1,7 @@
 // The pace meter (spec MIP2-1498 §4): projection, bands, hysteresis, Learning, Stale.
 
 import { describe, expect, it } from 'vitest'
-import { addReading, PACE_LABEL, paceHover, paceOf, paceWords, settle, type Reading } from '../src/renderer/model/pace.ts'
+import { ABSENT, addReading, PACE_LABEL, paceHover, paceOf, paceWords, settle, type Reading } from '../src/renderer/model/pace.ts'
 
 const NOW = 1_800_000_000_000
 const H = 3_600_000
@@ -10,6 +10,12 @@ const RESET = (NOW + 2 * H) / 1000
 const at = (minsAgo: number, used: number, resetsAt = RESET): Reading => ({ at: NOW - minsAgo * 60_000, used, resetsAt })
 
 describe('pace (MIP2-1498 §4)', () => {
+  it('says a window Claude Code leaves out is not reported now, with no words in place of a countdown (MIP2-1590)', () => {
+    expect(PACE_LABEL[ABSENT.state]).toBe('Not reported')
+    expect(paceHover('5h', ABSENT)).toBe("Claude Code isn't reporting a 5-hour limit for this account right now.")
+    expect(paceWords('5h', ABSENT, NOW)).toBeNull()
+  })
+
   it('is on pace, tight or over from the projection at reset', () => {
     expect(paceOf('5h', [at(60, 10), at(30, 12), at(0, 14)], NOW).state).toBe('onpace')
     const tight = paceOf('5h', [at(60, 40), at(30, 50), at(0, 60)], NOW)

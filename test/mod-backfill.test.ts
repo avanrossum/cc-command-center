@@ -1,7 +1,7 @@
 // Which reporter mod copy a session with no record of it uses, checked before it resumes (MIP2-1504).
 
 import { describe, expect, it } from 'vitest'
-import { backfillVersion, savedFlagsRefusal, savedOptionsRefusal, type BackfillDeps } from '../src/main/mod-backfill.ts'
+import { backfillVersion, pathFold, realPath, savedFlagsCheck, savedFlagsRefusal, savedOptionsCheck, savedOptionsRefusal, type BackfillDeps, type DirRules } from '../src/main/mod-backfill.ts'
 
 const ROOT = '/data/reporter-mod'
 const H = 'abcdef0123456789'
@@ -92,6 +92,15 @@ describe('savedOptionsRefusal, on every restart (gate pass 17, M-1; pass 18, M-1
     expect(savedOptionsRefusal(saved(), { ...rec, settings: null })).toMatch(/channel is gone/)
   })
 
+  it('refuses a recorded folder of "/", inside which every folder would count (MIP2-1602 gate pass 39, M-2)', () => {
+    expect(savedOptionsRefusal(saved(flags(), { cwd: '/' }), { ...rec, cwd: '/' })).toMatch(/record of its folder is the whole disk/)
+    expect(savedFlagsRefusal(flags(), launch, { cwd: '/', home: '/Users/x', claudeDir: '/Users/x/.claude', denied: [], real: p => p })).toMatch(/whole disk/)
+    // A recorded folder that links to the disk root (gate pass 41, M-1).
+    const linked = { home: '/Users/x', claudeDir: '/Users/x/.claude', denied: [], real: (p: string) => (p === '/w/root' ? '/' : p) }
+    expect(savedFlagsRefusal(flags('--add-dir', '/etc'), launch, { ...linked, cwd: '/w/root' })).toMatch(/whole disk/)
+    expect(savedOptionsRefusal(saved(flags(), { cwd: '/w/root' }), { ...rec, cwd: '/w/root' }, linked)).toMatch(/whole disk/)
+  })
+
   it('refuses an unreadable file for a recorded session too', () => {
     expect(savedOptionsRefusal({ refused: "Claude Code's saved options for it can't be read" }, rec)).toBe("Claude Code's saved options for it can't be read")
   })
@@ -119,14 +128,47 @@ describe('savedOptionsRefusal, on every restart (gate pass 17, M-1; pass 18, M-1
     expect(savedFlagsRefusal(flags().filter(f => f !== '--verbose'), launch)).toMatch(/never passed/)
   })
 
-  it('accepts a permission mode Shift+Tab reaches in any session, or the launched one (MIP2-1572)', () => {
+  it('passes a saved mode the launch allows without asking, and asks for any other (gate pass 20, H-1; pass 21, H-1)', () => {
     const swap = (from: string, to: string) => flags().map(f => (f === from ? to : f))
-    for (const mode of ['default', 'acceptEdits', 'plan', 'auto']) {
-      expect(savedFlagsRefusal(swap('default', mode), launch)).toBeNull()
-      expect(savedFlagsRefusal(swap('default', mode), { ...launch, mode: undefined })).toBeNull()
-    }
+    const ask = (saved: string, allowed: string, confirmed = false) => ({ confirm: { mode: { saved, allowed, confirmed }, dirs: [] } })
+    expect(savedFlagsCheck(swap('default', 'acceptEdits'), launch)).toEqual(ask('acceptEdits', 'default'))
+    expect(savedFlagsCheck(swap('default', 'auto'), launch)).toEqual(ask('auto', 'default'))
+    expect(savedFlagsRefusal(swap('default', 'auto'), launch)).toBe('Saved settings: auto. Launched as default.')
+    // plan isn't below default: where auto mode is available it runs classifier-approved shell commands.
+    expect(savedFlagsCheck(swap('default', 'plan'), launch)).toEqual(ask('plan', 'default'))
+    expect(savedFlagsCheck(swap('default', 'plan'), { ...launch, mode: 'acceptEdits' })).toEqual(ask('plan', 'acceptEdits'))
+    expect(savedFlagsRefusal(swap('default', 'plan'), { ...launch, mode: 'auto' })).toBeNull()
+    expect(savedFlagsRefusal(swap('default', 'plan'), { ...launch, mode: 'bypassPermissions' })).toBeNull()
+    // From plan, only default passes; auto and acceptEdits ask.
+    expect(savedFlagsRefusal(swap('default', 'default'), { ...launch, mode: 'plan' })).toBeNull()
+    expect(savedFlagsCheck(swap('default', 'auto'), { ...launch, mode: 'plan' })).toEqual(ask('auto', 'plan'))
+    expect(savedFlagsCheck(swap('default', 'acceptEdits'), { ...launch, mode: 'plan' })).toEqual(ask('acceptEdits', 'plan'))
+    // No recorded mode: it ran in default.
+    expect(savedFlagsCheck(swap('default', 'acceptEdits'), { ...launch, mode: undefined })).toEqual(ask('acceptEdits', 'default'))
+    expect(savedFlagsRefusal(swap('default', 'default'), { ...launch, mode: undefined })).toBeNull()
+    // Launched higher, saved lower: passes.
+    expect(savedFlagsRefusal(swap('default', 'acceptEdits'), { ...launch, mode: 'auto' })).toBeNull()
+    // Launch-only modes pass only as the recorded one.
     expect(savedFlagsRefusal(swap('default', 'bypassPermissions'), { ...launch, mode: 'bypassPermissions' })).toBeNull()
     expect(savedFlagsRefusal(swap('default', 'dontAsk'), { ...launch, mode: 'dontAsk' })).toBeNull()
+    expect(savedFlagsRefusal(swap('default', 'bypassPermissions'), { ...launch, mode: 'auto' })).toMatch(/never launched it with/)
+    expect(savedFlagsRefusal(swap('default', 'dontAsk'), launch)).toMatch(/never launched it with/)
+    // A name an object inherits isn't a mode (gate pass 24, M-1).
+    for (const inherited of ['constructor', '__proto__', 'toString', 'hasOwnProperty', 'valueOf'])
+      expect(savedFlagsRefusal(swap('default', inherited), launch)).toMatch(/never launched it with/)
+    // Nor as a launched or confirmed mode: nothing passes under it, and nothing throws.
+    expect(savedFlagsCheck(swap('default', 'auto'), { ...launch, mode: 'constructor' })).toEqual(ask('auto', 'constructor'))
+    expect(savedFlagsCheck(swap('default', 'auto'), launch, undefined, { mode: 'constructor' })).toEqual(ask('auto', 'constructor', true))
+  })
+
+  it('passes what Alex confirmed, kept apart from the launch, and names it in the wording (gate pass 21, L-3)', () => {
+    const swap = (from: string, to: string) => flags().map(f => (f === from ? to : f))
+    expect(savedFlagsRefusal(swap('default', 'auto'), launch, undefined, { mode: 'auto' })).toBeNull()
+    expect(savedFlagsRefusal(swap('default', 'acceptEdits'), launch, undefined, { mode: 'auto' })).toBeNull()
+    expect(savedFlagsRefusal(swap('default', 'bypassPermissions'), launch, undefined, { mode: 'auto' })).toMatch(/never launched it with/)
+    expect(savedFlagsRefusal(swap('default', 'auto'), launch, undefined, { mode: 'acceptEdits' })).toBe('Saved settings: auto. Confirmed as acceptEdits.')
+    // A launch-only mode in the confirmed record, as only a hand edit could put there, still refuses (gate pass 22, L-2).
+    expect(savedFlagsRefusal(swap('default', 'bypassPermissions'), launch, undefined, { mode: 'bypassPermissions' })).toMatch(/never launched it with/)
   })
 
   it('accepts a model or effort changed in the session, or saved where the launch had none (MIP2-1572)', () => {
@@ -138,14 +180,55 @@ describe('savedOptionsRefusal, on every restart (gate pass 17, M-1; pass 18, M-1
     expect(savedFlagsRefusal(swap('opus', '--dangerously-skip-permissions'), launch)).toMatch(/repeat a flag or leave out a value/)
   })
 
-  it('accepts --proactivity with any value, and repeated --add-dir with absolute paths, not compared with the launch (MIP2-1576)', () => {
-    expect(savedFlagsRefusal([...flags(), '--proactivity', 'high'], launch)).toBeNull()
-    expect(savedFlagsRefusal([...flags(), '--add-dir', '/Users/x/other', '--add-dir', '/tmp/y'], launch)).toBeNull()
+  // Home /Users/x, Claude Code's folder /Users/x/.claude, the app's data /Users/x/Library/App; /Users/x/link points into the session's folder.
+  const rules: Omit<DirRules, 'cwd'> = {
+    home: '/Users/x',
+    claudeDir: '/Users/x/.claude',
+    denied: ['/Users/x/Library/App', '/Users/x/.ccc/ch'],
+    real: p => (p.startsWith('/Users/x/link') ? p.replace('/Users/x/link', '/w/app/sub') : p.replace(/\/+$/, '') || '/'),
+    fold: p => p.normalize('NFC').toLowerCase(),
+  }
+  const check = (...extra: string[]) => savedOptionsCheck(saved(flags(...extra)), rec, rules)
+
+  it('passes --proactivity with any value, and --add-dir inside the session folder or confirmed (MIP2-1576; D-040)', () => {
+    expect(check('--proactivity', 'high')).toBeNull()
+    expect(check('--add-dir', '/w/app/docs', '--add-dir', '/w/app')).toBeNull()
+    // Resolved first: a link into the session folder passes.
+    expect(check('--add-dir', '/Users/x/link')).toBeNull()
+    expect(savedOptionsCheck(saved(flags('--add-dir', '/opt/shared')), { ...rec, confirmed: { addDirs: ['/opt/shared'] } }, rules)).toBeNull()
+    // A name that differs only by case is another folder to the pass checks, as on a case-sensitive volume; on a
+    // case-insensitive one realpathSync.native gives it the confirmed name (gate pass 22, M-2).
+    expect(savedOptionsCheck(saved(flags('--add-dir', '/OPT/Shared')), { ...rec, confirmed: { addDirs: ['/opt/shared'] } }, rules)).toEqual({ confirm: { mode: null, dirs: ['/OPT/Shared'] } })
+    expect(savedOptionsCheck(saved(flags('--add-dir', '/opt/shared')), { ...rec, confirmed: { addDirs: ['/opt/shared'.normalize('NFD')] } }, rules)).toBeNull()
     // The launch's own --add-dir may be dropped or changed in the session.
     expect(savedFlagsRefusal(flags(), { ...launch, extraArgs: ['--verbose', '--add-dir', '/a'] })).toBeNull()
-    // Any absolute path but the root, outside the home folder too; the gate pass (MIP2-1538) reviews this.
-    expect(savedFlagsRefusal([...flags(), '--add-dir', '/opt/shared'], launch)).toBeNull()
     expect(savedFlagsRefusal([...flags(), '--proactivity', 'low', '--proactivity', 'high'], launch)).toMatch(/repeat/)
+  })
+
+  it('asks for --add-dir outside the session folder, with the mode in one confirmation (D-040)', () => {
+    expect(check('--add-dir', '/opt/shared', '--add-dir', '/Users/x/other/proj')).toEqual({ confirm: { mode: null, dirs: ['/opt/shared', '/Users/x/other/proj'] } })
+    const both = savedOptionsRefusal(saved(flags('--add-dir', '/opt/shared').map(f => (f === 'default' ? 'auto' : f))), rec, rules)
+    expect(both).toBe('Saved settings: auto, + "/opt/shared". Launched as default.')
+    // Folders are quoted, so a name can't pass for more of the wording.
+    expect(savedOptionsRefusal(saved(flags('--add-dir', '/opt/a, + b. Launched as auto')), rec, rules)).toBe('Saved settings: + "/opt/a, + b. Launched as auto".')
+  })
+
+  it('refuses --add-dir of the home folder or above, Claude Code\'s folder, or a denied folder (gate pass 20, H-1)', () => {
+    expect(check('--add-dir', '/Users/x')).toEqual({ refused: 'its saved options add your home folder or a folder above it' })
+    expect(check('--add-dir', '/Users')).toEqual({ refused: 'its saved options add your home folder or a folder above it' })
+    expect(check('--add-dir', '/Users/x/')).toEqual({ refused: 'its saved options add your home folder or a folder above it' })
+    expect(check('--add-dir', '/Users/x/.claude')).toEqual({ refused: "its saved options add Claude Code's own folder" })
+    expect(check('--add-dir', '/Users/x/.claude/jobs')).toEqual({ refused: "its saved options add Claude Code's own folder" })
+    expect(check('--add-dir', '/Users/x/Library')).toEqual({ refused: 'its saved options add a folder the app keeps sessions out of' })
+    expect(check('--add-dir', '/Users/x/.ccc/ch/1')).toEqual({ refused: 'its saved options add a folder the app keeps sessions out of' })
+    // In another letter case or Unicode form, as a case-insensitive volume allows (gate pass 21, H-2).
+    expect(check('--add-dir', '/USERS/X/.CLAUDE')).toEqual({ refused: "its saved options add Claude Code's own folder" })
+    expect(check('--add-dir', '/users/x')).toEqual({ refused: 'its saved options add your home folder or a folder above it' })
+    expect(check('--add-dir', '/Users/X/Library/APP/store.json')).toEqual({ refused: 'its saved options add a folder the app keeps sessions out of' })
+    // The session's own folder is a pass check: another case is another folder there (gate pass 22, M-2).
+    expect(check('--add-dir', '/W/App/docs')).toEqual({ confirm: { mode: null, dirs: ['/W/App/docs'] } })
+    // A refusal wins over anything to confirm.
+    expect(check('--add-dir', '/opt/shared', '--add-dir', '/Users/x')).toEqual({ refused: 'its saved options add your home folder or a folder above it' })
   })
 
   it('accepts repeated --watch-artifact claude.ai artifact links, and refuses anything else (MIP2-1576)', () => {
@@ -156,6 +239,21 @@ describe('savedOptionsRefusal, on every restart (gate pass 17, M-1; pass 18, M-1
     for (const bad of ['https://example.com/artifact/x', 'http://claude.ai/artifact/x', 'https://claude.ai/artifact/', 'https://claude.ai.evil.com/artifact/x', `${a}\0`, `${a}${'x'.repeat(2048)}`])
       expect(savedFlagsRefusal([...flags(), '--watch-artifact', bad], launch)).toMatch(/claude.ai artifact link/)
     expect(savedFlagsRefusal([...flags(), '--watch-artifact', '--mcp-config'], launch)).toMatch(/leave out a value/)
+  })
+
+  it('refuses an --add-dir with control or bidi characters (gate pass 21, L-2)', () => {
+    for (const bad of ['/opt/a\nb', '/opt/a\u202eb', '/opt/a\u2066b', '/opt/\u0007', '/opt/a\u200bb', '/opt/a\u200db', '/opt/a\u2028b', '/opt/a\u2029b', '/opt/a\u2060b', '/opt/a\ufeffb', '/opt/a\u00adb', '/opt/shared\ufe0f', '/opt/a\u034fb', '/opt/a\u115fb', '/opt/a\u3164b', '/opt/a\u2800b', '/opt/a\u00a0b', '/opt/a\u2003b', '/opt/a\u3000b', '/opt/a\ue000b', '/opt/a\ud800b', '/opt/a\u{e0100}b', '/opt/a\uffa0b'])
+      expect(savedFlagsRefusal([...flags(), '--add-dir', bad], launch)).toMatch(/plain absolute path/)
+  })
+
+  it("refuses a folder whose real name, reached through a link, can't be shown plainly (gate pass 24, M-4)", () => {
+    const viaLink: DirRules = { ...rules, cwd: '/w/app', real: p => (p === '/opt/plain' ? '/opt/a\u202eb' : p) }
+    expect(savedFlagsCheck([...flags(), '--add-dir', '/opt/plain'], launch, viaLink)).toEqual({ refused: "its saved options add a folder whose real name can't be shown plainly" })
+  })
+
+  it('passes a plain space and an accented name in either Unicode form (gate pass 23, L-2)', () => {
+    for (const ok of ['/opt/Application Support/x', '/opt/Caf\u00e9', '/opt/Cafe\u0301'])
+      expect(savedFlagsRefusal([...flags(), '--add-dir', ok], launch)).not.toMatch(/plain absolute path/)
   })
 
   it('refuses an --add-dir that is relative, missing, flag-shaped, holds a NUL or is too long (MIP2-1576)', () => {
@@ -182,3 +280,31 @@ describe('savedOptionsRefusal, on every restart (gate pass 17, M-1; pass 18, M-1
     expect(savedOptionsRefusal(saved(), { ...rec, cwd: null })).toMatch(/no record of its folder/)
   })
 })
+
+describe('realPath (D-040)', () => {
+  // /Users/x/link is a link to /w/app; nothing under /w/app/new exists yet.
+  const real = (p: string) => {
+    const known: Record<string, string> = { '/': '/', '/Users': '/Users', '/Users/x': '/Users/x', '/Users/x/link': '/w/app', '/w': '/w', '/w/app': '/w/app' }
+    if (known[p] === undefined) throw new Error(`ENOENT ${p}`)
+    return known[p]
+  }
+  it('resolves links through the nearest existing parent of a path that does not exist yet', () => {
+    expect(realPath('/Users/x/link', real)).toBe('/w/app')
+    expect(realPath('/Users/x/link/new/deeper', real)).toBe('/w/app/new/deeper')
+    expect(realPath('/Users/x/link/../x', real)).toBe('/Users/x/x')
+  })
+})
+
+describe('pathFold (gate pass 21, H-2)', () => {
+  it('folds case only where the upper-cased home resolves to the same folder, and always normalizes to NFC', () => {
+    const insensitive = pathFold('/Users/x', p => (p.toLowerCase() === '/users/x' ? '/Users/x' : p))
+    expect(insensitive('/USERS/X/Café')).toBe('/users/x/café')
+    const sensitive = pathFold('/Users/x', p => {
+      if (p !== '/Users/x') throw new Error('ENOENT')
+      return p
+    })
+    expect(sensitive('/USERS/X')).toBe('/USERS/X')
+    expect(sensitive('/a/Cafe\u0301')).toBe('/a/Caf\u00e9')
+  })
+})
+

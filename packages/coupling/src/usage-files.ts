@@ -3,8 +3,11 @@
 // statusLine, and the reporter mod writes them for app-launched sessions
 // (D-011 item 9). Both carry the statusLine's `rate_limits` shape.
 //
-// The rule matches `usage-governor.sh`: the newest file whose 5-hour window
-// hasn't reset yet. An idle session re-renders an old payload whose reset
+// The rule matches `usage-governor.sh`: the newest file whose window hasn't
+// reset yet, chosen for each window on its own (gate pass 24, M-5). Either
+// window may be absent from a file (Claude Code's status-line docs, not
+// re-verified; MIP2-1590), and a window with no reset time is left out, so
+// nothing else's reset guards it (L-7). An idle session re-renders an old payload whose reset
 // time has passed, so that guard keeps a stale window off the meter. When
 // every file is past its reset, the newest of them comes back, so the meter
 // can say the window reset and it waits for a new reading (MIP2-1498 §4.4).
@@ -49,20 +52,29 @@ export async function readUsageDir(dir = DEFAULT_USAGE_DIR, now = Date.now(), ke
     }),
   )
   const newest = stats.filter((s): s is { name: string; mtimeMs: number } => s !== null).sort((a, b) => b.mtimeMs - a.mtimeMs)
-  let pastReset: Field<RateLimits> | null = null
+  type Pick = { w: RateLimitWindow; at: number }
+  const unreset: Record<'fiveHour' | 'sevenDay', Pick | null> = { fiveHour: null, sevenDay: null }
+  const pastReset: Record<'fiveHour' | 'sevenDay', Pick | null> = { fiveHour: null, sevenDay: null }
   for (const { name, mtimeMs } of newest.slice(0, NEWEST_READ)) {
+    if (unreset.fiveHour && unreset.sevenDay) break
     try {
       const data = JSON.parse(await readFile(join(dir, name), 'utf8')) as { session_id?: unknown; rate_limits?: { five_hour?: unknown; seven_day?: unknown } }
       const sessionId = typeof data.session_id === 'string' ? data.session_id : name.slice(0, -'.json'.length)
       if (keep && !keep(sessionId)) continue
-      const fiveHour = windowOf(data.rate_limits?.five_hour)
-      if (!fiveHour || fiveHour.resetsAt === null) continue
-      const reading = field({ fiveHour, sevenDay: windowOf(data.rate_limits?.seven_day) }, 'statusline', mtimeMs)
-      if (fiveHour.resetsAt * 1000 > now) return reading
-      pastReset ??= reading
+      for (const [key, raw] of [['fiveHour', data.rate_limits?.five_hour], ['sevenDay', data.rate_limits?.seven_day]] as const) {
+        const w = windowOf(raw)
+        if (!w || w.resetsAt === null) continue
+        if (w.resetsAt * 1000 > now) unreset[key] ??= { w, at: mtimeMs }
+        else pastReset[key] ??= { w, at: mtimeMs }
+      }
     } catch {
       // A file mid-write reads short; the next poll reads it whole.
     }
   }
-  return pastReset
+  const fiveHour = unreset.fiveHour ?? pastReset.fiveHour
+  const sevenDay = unreset.sevenDay ?? pastReset.sevenDay
+  if (!fiveHour && !sevenDay) return null
+  const at = Math.max(fiveHour?.at ?? 0, sevenDay?.at ?? 0)
+  const out = (p: Pick | null) => (p ? { ...p.w, observedAt: p.at } : null)
+  return field({ fiveHour: out(fiveHour), sevenDay: out(sevenDay) }, 'statusline', at)
 }

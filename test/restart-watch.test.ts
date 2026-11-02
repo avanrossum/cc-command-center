@@ -1,34 +1,23 @@
-// The supervisor's own restart of a session (MIP2-1512, Research MIP2-1527).
+// The supervisor's own restart of a session (MIP2-1512, Research MIP2-1527). Every new process is checked, whoever
+// started it (D-043 prototype).
 
 import { describe, expect, it } from 'vitest'
-import { ABSENT_KEEP_MS, OWN_RESTART_MS, recordRestarts, RestartWatch, unexplainedRestart } from '../src/main/restart-watch.ts'
+import { ABSENT_KEEP_MS, RestartWatch } from '../src/main/restart-watch.ts'
 
 const A = 'c0ffee01-0000-4000-8000-000000000001'
 const B = 'c0ffee02-0000-4000-8000-000000000002'
 
 describe('RestartWatch', () => {
-  it('ignores a process change the app started, and reports one it did not', () => {
+  it("reports every process change, the app's own restarts included", () => {
     let t = 1_000_000
     const watch = new RestartWatch(() => t)
     expect(watch.observe([{ sessionId: A, pid: 100, startedAt: 1 }, { sessionId: B, pid: 200, startedAt: 1 }])).toEqual([])
     // The app resumes A; the supervisor restarts B on its own about 10 s after its process exits.
-    watch.expect(A)
     expect(watch.observe([{ sessionId: A, pid: null, startedAt: 1 }, { sessionId: B, pid: null, startedAt: 1 }])).toEqual([])
     t += 10_400
-    expect(watch.observe([{ sessionId: A, pid: 101, startedAt: t }, { sessionId: B, pid: 201, startedAt: t }])).toEqual([B])
+    expect(watch.observe([{ sessionId: A, pid: 101, startedAt: t }, { sessionId: B, pid: 201, startedAt: t }])).toEqual([A, B])
     // Steady again: nothing to report.
     expect(watch.observe([{ sessionId: A, pid: 101, startedAt: t }, { sessionId: B, pid: 201, startedAt: t }])).toEqual([])
-    // The app's restart accounts for one change only; a second one is the supervisor's.
-    expect(watch.observe([{ sessionId: A, pid: 102, startedAt: t + 1 }])).toEqual([A])
-  })
-
-  it("an app restart older than the window doesn't account for a change", () => {
-    let t = 1_000_000
-    const watch = new RestartWatch(() => t)
-    watch.observe([{ sessionId: A, pid: 100, startedAt: 1 }])
-    watch.expect(A)
-    t += OWN_RESTART_MS + 1
-    expect(watch.observe([{ sessionId: A, pid: 101, startedAt: t }])).toEqual([A])
   })
 
   it('sees a restart listed under another id for one poll, then under its own again (MIP2-1570)', () => {
@@ -58,74 +47,76 @@ describe('RestartWatch', () => {
     expect(watch.observe([])).toEqual([])
     expect(watch.observe([{ sessionId: A, pid: 300, startedAt: 2 }])).toEqual([A])
   })
-})
 
-describe('recordRestarts', () => {
-  it('records resume, respawn and a move in before they run, an attach to a stopped session after it returns, and leaves other methods alone', async () => {
-    const order: string[] = []
-    const watch = { expect: (id: string) => void order.push(`expect ${id}`) }
-    const host = {
-      resume: async (id: string) => void order.push(`resume ${id}`),
-      respawn: async (id: string) => void order.push(`respawn ${id}`),
-      attach: async (id: string) => (order.push(`attach ${id}`), { file: 'claude' }),
-      moveIn: async (id: string) => (order.push(`moveIn ${id}`), { sessionId: id, sameId: true }),
-      stop: async (id: string) => void order.push(`stop ${id}`),
-    }
-    const recorded = recordRestarts(host, watch, () => true)
-    await recorded.resume(A)
-    await recorded.respawn(A)
-    await recorded.attach(A)
-    await recorded.moveIn(A)
-    await recorded.stop(A)
-    expect(order).toEqual([`expect ${A}`, `resume ${A}`, `expect ${A}`, `respawn ${A}`, `attach ${A}`, `expect ${A}`, `expect ${A}`, `moveIn ${A}`, `stop ${A}`])
+  it("doesn't take a stale reading as a stop (gate pass 24, M-3)", () => {
+    const watch = new RestartWatch(() => 0)
+    watch.observe([{ sessionId: A, pid: 100, startedAt: 1 }])
+    watch.observe([{ sessionId: A, pid: null, startedAt: 1, stale: true }])
+    expect(watch.knownStopped(A)).toBe(false)
+    expect(watch.observe([{ sessionId: A, pid: 100, startedAt: 1 }])).toEqual([])
+    watch.observe([{ sessionId: A, pid: null, startedAt: 1 }])
+    expect(watch.knownStopped(A)).toBe(true)
   })
 
-  it("doesn't record an attach to a running session, or an attach that fails (MIP2-1565)", async () => {
-    const seen: string[] = []
-    const host = {
-      attach: async (id: string) => {
-        if (id === B) throw new Error('no such session')
-        return { file: 'claude' }
-      },
-    }
-    const recorded = recordRestarts(host, { expect: id => void seen.push(id) }, id => id === B)
-    await recorded.attach(A)
-    await expect(recorded.attach(B)).rejects.toThrow('no such session')
-    expect(seen).toEqual([])
-  })
-
-  it("checks the supervisor's restart of a running session in the minute after Focus attached to it (MIP2-1565)", async () => {
+  it('keeps a refused process refused while its pid is listed, and checks a new one as any other (gate pass 27, M-2)', () => {
     let t = 1_000_000
     const watch = new RestartWatch(() => t)
-    const pids = new Map([[A, 100 as number | null]])
-    const host = { attach: async (_id: string) => ({ file: 'claude' }) }
-    const recorded = recordRestarts(host, watch, id => pids.get(id) === null)
     watch.observe([{ sessionId: A, pid: 100, startedAt: 1 }])
-    // Focus opens on the running session; its process is killed and the supervisor restarts it 10 s later.
-    await recorded.attach(A)
-    t += 10_400
-    expect(watch.observe([{ sessionId: A, pid: 101, startedAt: t }])).toEqual([A])
-    // An attach to the stopped session is the app's own restart.
-    pids.set(A, null)
-    await recorded.attach(A)
+    t += 10_000
+    expect(watch.observe([{ sessionId: A, pid: 200, startedAt: t }])).toEqual([A])
+    watch.refuse(A)
+    // The stop failed: the same pid, still refused, on each poll, a stale one included.
     t += 2_000
-    expect(watch.observe([{ sessionId: A, pid: 102, startedAt: t }])).toEqual([])
+    watch.observe([{ sessionId: A, pid: 200, startedAt: t }])
+    expect(watch.stillRefused).toEqual([A])
+    watch.observe([{ sessionId: A, pid: null, startedAt: t, stale: true }])
+    expect(watch.stillRefused).toEqual([A])
+    // It ends; the supervisor's next restart is a change like any other, and nothing is still refused.
+    t += 2_000
+    watch.observe([{ sessionId: A, pid: null, startedAt: t }])
+    expect(watch.stillRefused).toEqual([])
+    t += 10_000
+    expect(watch.observe([{ sessionId: A, pid: 300, startedAt: t }])).toEqual([A])
+    expect(watch.stillRefused).toEqual([])
   })
 })
 
-describe('recordRestarts after a /clear (MIP2-1557)', () => {
-  it("records the session's current id when called with its launch id, where the poll sees it", async () => {
-    const seen: string[] = []
-    const host = { resume: async (_id: string) => {} }
-    await recordRestarts(host, { expect: id => void seen.push(id) }, () => true, id => (id === A ? B : id)).resume(A)
-    expect(seen).toEqual([B])
+describe('first sightings against the verified start (gate pass 20, M-1)', () => {
+  it('reports a first sighting with no verified start, or one started later, and not one started by then', () => {
+    const verified = new Map([[A, 500]])
+    const watch = new RestartWatch(() => 1_000_000, id => verified.get(id))
+    watch.observe([{ sessionId: A, pid: 100, startedAt: 500 }, { sessionId: B, pid: 200, startedAt: 400 }])
+    // A started when it was last verified; B has no verified start.
+    expect(watch.unverified).toEqual([B])
+    // Steady: nothing more to check.
+    watch.observe([{ sessionId: A, pid: 100, startedAt: 500 }, { sessionId: B, pid: 200, startedAt: 400 }])
+    expect(watch.unverified).toEqual([])
+    // Restarted while the app was closed: a new watch, a later start.
+    const next = new RestartWatch(() => 2_000_000, id => verified.get(id))
+    next.observe([{ sessionId: A, pid: 101, startedAt: 900 }])
+    expect(next.unverified).toEqual([A])
   })
-})
 
-describe('unexplainedRestart', () => {
-  it('passes when the verdict does, and names the refusal when it does not', () => {
-    expect(unexplainedRestart(A, () => null)).toBeNull()
-    expect(unexplainedRestart(A, () => 'its saved options hold flags the app never passed')).toBe('Claude Code restarted it by itself, and its saved options hold flags the app never passed')
-    expect(unexplainedRestart(A, () => "Claude Code's saved options for it can't be read")).toBe("Claude Code restarted it by itself, and Claude Code's saved options for it can't be read")
+  it('reports a session back after ABSENT_KEEP_MS with a later start', () => {
+    let t = 1_000_000
+    const watch = new RestartWatch(() => t, () => 500)
+    watch.observe([{ sessionId: A, pid: 100, startedAt: 500 }])
+    watch.observe([])
+    t += ABSENT_KEEP_MS + 1
+    watch.observe([])
+    watch.observe([{ sessionId: A, pid: 101, startedAt: 800 }])
+    expect(watch.unverified).toEqual([A])
+  })
+
+  it('checks nothing at a first sighting without a verified-start source', () => {
+    const plain = new RestartWatch(() => 1_000_000)
+    plain.observe([{ sessionId: A, pid: 100, startedAt: 900 }])
+    expect(plain.unverified).toEqual([])
+  })
+
+  it('compares the verified start for equality, so a process started earlier is checked too (gate pass 21, L-1)', () => {
+    const watch = new RestartWatch(() => 1_000_000, () => 500)
+    watch.observe([{ sessionId: A, pid: 100, startedAt: 400 }])
+    expect(watch.unverified).toEqual([A])
   })
 })

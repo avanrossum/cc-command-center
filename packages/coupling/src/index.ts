@@ -31,7 +31,7 @@ export {
   type ReporterRead,
 } from './reporter.ts'
 export { PeerResolver } from './channel/peer.ts'
-export { ChannelHub, DEFAULT_CHANNEL_ROOT, memoryReplyKeys, type ReplyKeys, type AnswerInput, type ChannelHubOptions, type ChannelLaunch, type PromptStatus } from './channel/hub.ts'
+export { ChannelHub, DEFAULT_CHANNEL_ROOT, memoryReplyKeys, type ReplyKeyRead, type ReplyKeys, type AnswerInput, type ChannelHubOptions, type ChannelLaunch, type PromptStatus } from './channel/hub.ts'
 export { validateReporterFile, type Validated } from './reporter-schema.ts'
 export {
   NotBuiltYet,

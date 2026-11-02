@@ -7,7 +7,7 @@ import { field, type SessionSnapshot } from '@ccc/contract'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ArbiterLog } from '../src/main/arbiter.ts'
 import { checkTipFacts, keptTips, tipsPrompt, UsageTips, type TipsCall } from '../src/main/usage-tips.ts'
-import { paceOf, type Reading } from '../src/renderer/model/pace.ts'
+import { ABSENT, paceOf, type Reading } from '../src/renderer/model/pace.ts'
 import { noteBaselines, plainHelp, sharesOf, statusLine, tipFacts } from '../src/renderer/model/usage-help.ts'
 
 const NOW = new Date(2026, 9, 28, 12, 0).getTime()
@@ -35,6 +35,10 @@ function snap(id: string, cost: number, over: Partial<SessionSnapshot> = {}): Se
 }
 
 describe('shares of this app\'s estimated cost (MIP2-1498 §4.5)', () => {
+  it("says a window Claude Code leaves out is not reported now, not that there's no reading yet (MIP2-1590)", () => {
+    expect(statusLine('5h', ABSENT)).toBe('5h · Not reported now')
+  })
+
   it('counts each session from its cost when the window began, or from zero if it started inside it', () => {
     let b = noteBaselines({}, '5h', RESET, [snap('a', 10), snap('new', 0, { startedAt: f(NOW - H) })], NOW)
     // Counting starts when the app first noted the window, three hours after it began.

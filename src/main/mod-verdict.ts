@@ -55,3 +55,37 @@ export function restartVerdict(sessionId: string, d: RestartDeps): string | null
   if (!d.packaged || !appLaunched || !m?.launch?.mod) return null
   return d.savedRefusal(sessionId, { mod: m.launch.mod, launch: m.launch })
 }
+
+/** How long a failed backfill stands before the next restart check tries it again. */
+export const BACKFILL_RETRY_MS = 60_000
+
+/**
+ * The restart verdict, with the backfill first (MIP2-1583): an app-launched
+ * session with no record of its mod copy, from an earlier build, has the copy
+ * its saved options name found, checked and recorded (MIP2-1504), then the
+ * verdict judges it like any other. Every restart path asks this, not only a
+ * resume from the app. A failed backfill is its refusal, kept for
+ * BACKFILL_RETRY_MS, since the watchdog asks often and a backfill may restore
+ * a folder.
+ */
+export function withBackfill(
+  verdict: (sessionId: string) => string | null,
+  unrecorded: (sessionId: string) => boolean,
+  backfill: (sessionId: string) => string | null,
+  now: () => number = Date.now,
+): (sessionId: string) => string | null {
+  const failed = new Map<string, { why: string; at: number }>()
+  return sessionId => {
+    if (unrecorded(sessionId)) {
+      const last = failed.get(sessionId)
+      if (last && now() - last.at < BACKFILL_RETRY_MS) return last.why
+      const why = backfill(sessionId)
+      if (why) {
+        failed.set(sessionId, { why, at: now() })
+        return why
+      }
+      failed.delete(sessionId)
+    }
+    return verdict(sessionId)
+  }
+}

@@ -75,6 +75,10 @@ export interface RateLimitWindow {
   usedPercent: number
   /** When the window resets, Unix seconds (the usage governor's unit). */
   resetsAt: number | null
+  /** When this window's reading was taken, Unix milliseconds, where it differs from the field's: each window is chosen on its own (MIP2-1591). */
+  observedAt?: number
+  /** Where this window's reading came from, where it differs from the field's (gate pass 25, L-3). */
+  source?: FieldSource
 }
 
 export interface RateLimits {
@@ -289,6 +293,8 @@ export interface FleetSnapshot {
   contractVersion: typeof CONTRACT_VERSION
   /** When this snapshot was assembled, Unix milliseconds. */
   at: number
+  /** When its session list was read, Unix milliseconds: before `at`, by the rest of the poll (gate pass 25, M-1). */
+  listedAt?: number
   sessions: SessionSnapshot[]
   /** The freshest 5-hour and 7-day windows across sessions, for the usage meter; null with no reading. */
   usage: Field<RateLimits> | null

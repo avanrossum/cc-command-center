@@ -61,18 +61,19 @@ import { applyBeforeReady, applyWhenReady, isTrustedSender } from './security.ts
 import { checkClaudeBinOverride, debugPortAllowed, qaPackagedPaths, qaPickPaths, qaUsageDir, resolveChannelRoot, resolveImportFolder, resolveUserData } from './paths.ts'
 import { fileStore } from './self-check-store.ts'
 import { appMenuTemplate } from './app-menu.ts'
-import { restartVerdict } from './mod-verdict.ts'
+import { restartVerdict, withBackfill } from './mod-verdict.ts'
 import type { SessionMeta } from '../shared/store.ts'
 import { inArchive } from '../shared/lifecycle.ts'
 import { wireHosts } from './restart.ts'
-import { recordRestarts, RestartWatch, unexplainedRestart } from './restart-watch.ts'
+import { RestartWatch } from './restart-watch.ts'
+import { restartPoll, StopRetries } from './restart-poll.ts'
 import { DISPLAY_NAME, nameToPin } from './app-name.ts'
 import { ClearWatch } from '../shared/clear.ts'
 import { QuitControl } from './quit-control.ts'
 import { checkQuitAnswer, closable, quitNotices } from '../shared/quit.ts'
-import { clearGoneRefusal } from './resume.ts'
+import { clearGoneRefusal, ModStuck, NeedsConfirm, rollBackConfirmation } from './resume.ts'
 import { checkModFolders, copyTo, MOD_FOLDERS_MAX, modDir, modHash, modSource, type ModHealed } from './reporter-mod.ts'
-import { backfillVersion, savedOptionsRefusal } from './mod-backfill.ts'
+import { backfillVersion, escalationText, pathFold, realPath, savedOptionsCheck, type Escalation } from './mod-backfill.ts'
 import { moveRequest } from './move.ts'
 import { registerSettings } from './settings-control.ts'
 import { setUpUpdates } from './update-setup.ts'
@@ -262,21 +263,49 @@ async function start(): Promise<void> {
   const stopsWaiting: string[] = []
   // Stopped, then given a new secret with the mark kept: a wake from the CLI or the supervisor reads a secret the
   // impostor never saw, and the card stays off until a resume from the app (pass 4, M-2, L-5).
-  const untrustedStop = (id: string) => {
-    if (!hostRef) return void stopsWaiting.push(id)
-    void hostRef
+  // A refused process still listed is stopped again, one stop at a time, backing off from 2 s to 60 s (gate pass 28,
+  // L-2; pass 29, L-3).
+  const stopRetries = new StopRetries()
+  // With `told`, the notice that said "Stopping…" is followed by whether it stopped (gate pass 27, M-2). A retry of a
+  // refused process still listed re-keys only until a re-key has finished (pass 28, L-2; pass 29, L-2). Resolves to
+  // whether it stopped.
+  const untrustedStop = (id: string, told?: string, { rekey = true } = {}): Promise<boolean> => {
+    if (!hostRef) return (stopsWaiting.push(id), Promise.resolve(false))
+    const done = hostRef
       .stop(id)
-      .catch(err => console.warn(`stopping ${id.slice(0, 8)} after its channel changed: ${String(err)}`))
-      .then(() => hub?.rekey(id, { keepMark: true }))
-      .catch(err => console.warn(`new secret for ${id.slice(0, 8)} after its channel changed: ${String(err)}`))
+      .then(
+        () => (told && broadcast(IPC.appNotice, `Stopped a session: ${told}`), true),
+        err => {
+          console.warn(`stopping ${id.slice(0, 8)} after its channel changed: ${String(err)}`)
+          if (told) broadcast(IPC.appNotice, `Couldn't stop a session yet, and the app keeps trying: ${told}`)
+          return false
+        },
+      )
+      .then(async stopped => {
+        if (rekey)
+          await hub
+            ?.rekey(id, { keepMark: true })
+            .then(() => stopRetries.rekeyed(id))
+            .catch(err => console.warn(`new secret for ${id.slice(0, 8)} after its channel changed: ${String(err)}`))
+        return stopped
+      })
+    // The marking's own stop (told) ends the running entry a refusal seeded, so the first retry waits for it (gate pass 30, M-1).
+    if (told) void done.then(stopped => stopRetries.finish(id, stopped))
+    return done
+  }
+  const retryStop = (id: string) => {
+    if (!stopRetries.start(id)) return
+    void untrustedStop(id, undefined, { rekey: stopRetries.needsRekey(id) }).then(stopped => {
+      void commandLog.note('stop-retry', { sessionId: id, stopped, nextDelayMs: stopRetries.finish(id, stopped) })
+    })
   }
   // A supervisor restart the verdict refuses (MIP2-1512): marked through its channel, which stops it and says why; a
   // session with no channel is marked and stopped here.
   const markRestarted = (id: string, why: string) => {
     if (hub?.channelOf(id)) return hub.markSession(id, why)
     storeRef?.markUntrusted(id, why)
-    untrustedStop(id)
-    broadcast(IPC.appNotice, `Stopped a session: ${why}.`)
+    broadcast(IPC.appNotice, `Stopping a session: ${why}.`)
+    untrustedStop(id, `${why}.`)
   }
   // Mod versions whose changed copy couldn't be moved aside: the watchdog doesn't respawn their sessions (pass 5, H-1).
   const stuckVersions = new Set<string>()
@@ -334,8 +363,42 @@ async function start(): Promise<void> {
    * unless the folder is the recorded copy and the settings file is its channel's. An unreadable file refuses too.
    */
   // The folder: the one recorded at launch, else the one the store keeps for the session (records before 1.0.1).
-  const savedRefusal = (id: string, rec: { mod: string; launch: NonNullable<SessionMeta['launch']> }) =>
-    savedOptionsRefusal(savedOptions(id), { modRoot, mod: rec.mod, settings: hub?.settingsPathOf(id) ?? null, launch: rec.launch, cwd: rec.launch.cwd ?? store.get().sessions[id]?.cwd ?? null })
+  // Where a session's saved --add-dir may point (gate pass 20, H-1; D-040): Claude Code's folder, the channel root, the
+  // mod copies and the app's data are refused, with ~/.claude too where Claude Code's folder is set elsewhere.
+  const channelRoot = resolveChannelRoot(process.env, DEFAULT_CHANNEL_ROOT)
+  const dirRules = {
+    home: homedir(),
+    claudeDir: claudeConfigDir(),
+    denied: [channelRoot, modRoot, app.getPath('userData'), join(homedir(), '.claude')],
+    real: (p: string) => realPath(p),
+    fold: pathFold(homedir()),
+  }
+  /** What Alex confirmed for a session. */
+  const confirmedOf = (id: string) => store.get().sessions[id]?.confirmed ?? {}
+  const savedCheck = (id: string, rec: { mod: string; launch: NonNullable<SessionMeta['launch']> }) =>
+    savedOptionsCheck(savedOptions(id), { modRoot, mod: rec.mod, settings: hub?.settingsPathOf(id) ?? null, launch: rec.launch, cwd: rec.launch.cwd ?? store.get().sessions[id]?.cwd ?? null, confirmed: confirmedOf(id) }, dirRules)
+  const savedRefusal = (id: string, rec: { mod: string; launch: NonNullable<SessionMeta['launch']> }) => {
+    const r = savedCheck(id, rec)
+    return r === null ? null : 'refused' in r ? r.refused : escalationText(r.confirm)
+  }
+  /** What the session's saved settings add over its launch, for Alex to confirm, or null (D-040). */
+  const escalationOf = (id: string): Escalation | null => {
+    const launch = store.get().sessions[id]?.launch
+    if (!launch?.mod) return null
+    const r = savedCheck(id, { mod: launch.mod, launch })
+    return r && 'confirm' in r ? r.confirm : null
+  }
+  // A refusal that's only settings to confirm offers "Resume with these settings"; anything else is a stuck copy.
+  /** The escalation each "Resume with these settings" was offered for; the button must send back its wording (gate pass 21, L-2). */
+  const offered = new Map<string, Escalation>()
+  /** What was confirmed before a confirmation under way, to put back if its restart fails (D-043 prototype). */
+  const priorConfirmed = new Map<string, { mode?: string; addDirs?: string[] } | undefined>()
+  const errorFor = (id: string, why: string): Error => {
+    const e = escalationOf(id)
+    if (!e || escalationText(e) !== why) return new ModStuck(why)
+    offered.set(id, e)
+    return new NeedsConfirm(id, why)
+  }
   // The versions verified by the latest completed round, and whether it left any unchecked (pass 7, H-1).
   let verifiedVersions = new Set<string>([basename(pluginDir)])
   let uncheckedVersions = 0
@@ -380,15 +443,44 @@ async function start(): Promise<void> {
       })().finally(() => (checking = false))
     }, 60_000).unref()
   }
-  // Whether a session may start again on its saved options: every restart path asks, at the moment of the restart,
-  // through `restarts` below (pass 7, H-1, L-4; pass 18, H-1).
-  const sessionModVerdict = (id: string): string | null =>
-    restartVerdict(id, {
-      meta: sid => store.get().sessions[sid],
-      mod: { packaged: modPackaged, stuck: stuckVersions, verified: verifiedVersions, unchecked: uncheckedVersions, launchBlocked: hub?.launchBlocked() ?? null },
-      packaged: modPackaged,
-      savedRefusal,
+  // An app-launched session with no record of its copy (an earlier build): the copy its saved options name is checked
+  // and recorded, so the verdict judges it like any other (MIP2-1504). Every restart path runs it (MIP2-1583).
+  const backfillMod = (id: string): string | null => {
+    const r = backfillVersion(savedOptions(id), {
+      modRoot,
+      current: pluginDir,
+      // The build's own mod, not the current copy, which may be the folder that was pruned (MIP2-1508).
+      source: modSource(DIST, app.isPackaged),
+      stuck: stuckVersions,
+      exists: existsSync,
+      isDir: p => {
+        try {
+          return lstatSync(p).isDirectory()
+        } catch {
+          return false
+        }
+      },
+      hash: modHash,
+      restore: (from, to) => void copyTo(from, to),
     })
+    if ('refused' in r) return r.refused
+    verifiedVersions.add(r.version)
+    store.recordMod(id, r.version)
+    return null
+  }
+  // Whether a session may start again on its saved options: every restart path asks, at the moment of the restart,
+  // through `restarts` below (pass 7, H-1, L-4; pass 18, H-1). An unrecorded session's copy is backfilled first.
+  const sessionModVerdict = withBackfill(
+    id =>
+      restartVerdict(id, {
+        meta: sid => store.get().sessions[sid],
+        mod: { packaged: modPackaged, stuck: stuckVersions, verified: verifiedVersions, unchecked: uncheckedVersions, launchBlocked: hub?.launchBlocked() ?? null },
+        packaged: modPackaged,
+        savedRefusal,
+      }),
+    unrecorded,
+    backfillMod,
+  )
   // Channels whose settings were brought up to date at recovery, for the self-check (pass 7, M-1).
   const migrated: string[] = []
   hub = new ChannelHub({
@@ -397,7 +489,7 @@ async function start(): Promise<void> {
     ...(modPackaged ? { modRoot: join(app.getPath('userData'), 'reporter-mod') } : {}),
     // The app's data folder, store included, so a session's Edit tool can't change it (pass 5, M-3).
     denyAlso: [app.getPath('userData')],
-    root: resolveChannelRoot(process.env, DEFAULT_CHANNEL_ROOT),
+    root: channelRoot,
     // Card summaries (MIP2-1422); set up below, once the store and key exist.
     onAnswer: (id, post) => (void summaries?.offer(id, post), void waits?.offer(id, post)),
     // Every connection must come from the session's own process (gate M-1).
@@ -413,8 +505,8 @@ async function start(): Promise<void> {
     onUntrusted: (id, why) => {
       if (!id) return
       store.markUntrusted(id, why)
-      untrustedStop(id)
-      broadcast(IPC.appNotice, `Stopped a session: ${why}. Resuming it from the app gives its channel a new secret first.`)
+      broadcast(IPC.appNotice, `Stopping a session: ${why}.`)
+      untrustedStop(id, `${why}. Resuming it from the app gives its channel a new secret first.`)
     },
   })
   // Refuses a channel folder, or its parent, that other users can open (D-005).
@@ -472,7 +564,16 @@ async function start(): Promise<void> {
   // One start for the host and the watchdog, at most one per 10 s, so they never start two at once (pass 9, L-5).
   const startDaemon = sharedSupervisorStart(() => spawnClaude(['daemon', 'run']))
   // Every restart the app starts is recorded first, so a process change it didn't start stands out (MIP2-1512).
-  const restartWatch = new RestartWatch()
+  // A first sighting is checked unless the store has verified a process started that late (gate pass 20, M-1).
+  const restartWatch = new RestartWatch(
+    Date.now,
+    id => store.get().sessions[id]?.verifiedStartedAt,
+    (id, at) => store.get().sessions[id]?.refusedStarts?.includes(at) === true,
+    id => store.get().sessions[id]?.legacyMark === true,
+  )
+  // Once, on this build's first start: the marks from before refused starts were kept (gate pass 30, M-2).
+  const legacyMarks = store.flagLegacyMarks(Date.now())
+  if (legacyMarks) void commandLog.note('legacy-marks', { flagged: legacyMarks })
   /** A session's current id, for the id it was launched under before a /clear (MIP2-1557). */
   const currentOfLaunch = (launchId: string) => store.launchIds().find(([, launch]) => launch === launchId)?.[0]
   /** No process runs the session, as the last poll saw it: an attach to it restarts it (MIP2-1565). */
@@ -482,7 +583,7 @@ async function start(): Promise<void> {
     return !s || s.pid.value === null || s.pid.stale
   }
   const clearWatch = new ClearWatch()
-  const host = recordRestarts(new SupervisorHost({
+  const host = new SupervisorHost({
     run,
     binary,
     channels,
@@ -500,13 +601,13 @@ async function start(): Promise<void> {
       selfCheck.addStrays(ids)
       broadcast(IPC.appNotice, `Claude Code started ${ids.length === 1 ? 'a session' : `${ids.length} sessions`} the app can't account for (${ids.map(i => i.slice(0, 8)).join(', ')}). Check the session list.`)
     },
-  }), restartWatch, noProcess, id => currentOfLaunch(id) ?? id)
+  })
   hostRef = host
   // The host every restart the app starts goes through: resume, the watchdog's respawn, the respawn before a prompt,
   // and an attach to a stopped session each ask the verdict at the moment of the restart (gate pass 18, H-1, M-2;
   // pass 19, H-1). The supervisor's own restart of a session that exits is the one the app doesn't start; the poll
   // below catches it after the fact (MIP2-1512).
-  const hosts = wireHosts(host, sessionModVerdict, noProcess)
+  const hosts = wireHosts(host, sessionModVerdict, noProcess, errorFor)
   for (const id of stopsWaiting.splice(0)) untrustedStop(id)
   poller = new FleetPoller({
     host,
@@ -607,30 +708,28 @@ async function start(): Promise<void> {
     modStuck: sessionModVerdict,
     // An app-launched session with no record of its copy (an earlier build): the copy its saved options name is
     // checked and recorded first, then it resumes on it as usual (MIP2-1504).
-    unrecorded,
-    backfill: id => {
-      const r = backfillVersion(savedOptions(id), {
-        modRoot,
-        current: pluginDir,
-        // The build's own mod, not the current copy, which may be the folder that was pruned (MIP2-1508).
-        source: modSource(DIST, app.isPackaged),
-        stuck: stuckVersions,
-        exists: existsSync,
-        isDir: p => {
-          try {
-            return lstatSync(p).isDirectory()
-          } catch {
-            return false
-          }
-        },
-        hash: modHash,
-        restore: (from, to) => void copyTo(from, to),
-      })
-      if ('refused' in r) return r.refused
-      verifiedVersions.add(r.version)
-      store.recordMod(id, r.version)
-      return null
+    errorFor,
+    // "Resume with these settings": recorded before the restart, only if they still read as shown, and put back as
+    // they were if it fails, so the poll's check of the new process passes on them too (D-043 prototype).
+    confirmSettings: {
+      begin: (id, settings) => {
+        const shown = offered.get(id)
+        const e = escalationOf(id)
+        if (!shown || !e || escalationText(shown) !== settings || escalationText(e) !== settings) return 'its saved settings changed since they were shown. Open it again to see them'
+        priorConfirmed.set(id, store.get().sessions[id]?.confirmed)
+        store.recordConfirmed(id, { mode: e.mode?.saved ?? null, dirs: e.dirs })
+        return null
+      },
+      commit: id => void (priorConfirmed.delete(id), offered.delete(id)),
+      abort: id =>
+        rollBackConfirmation(id, {
+          restore: sid => (store.restoreConfirmed(sid, priorConfirmed.get(sid)), priorConfirmed.delete(sid)),
+          clearVerifiedStart: sid => store.clearVerifiedStart(sid),
+          forget: sid => restartWatch.forget(sid),
+        }),
     },
+    unrecorded,
+    backfill: backfillMod,
     // A copy a resume started: a stray until it leaves the list, and listed as a session, not hidden as a
     // background contractor (MIP2-1467).
     onResumedAsCopy: (from, short) =>
@@ -841,11 +940,25 @@ async function start(): Promise<void> {
     // A process the app didn't start, on a background session it launched: the supervisor's own restart, checked as
     // every restart the app starts is. A refusal stops the session and marks it (MIP2-1512).
     const watched = snapshot.sessions.filter(s => s.kind.value === 'background' && store.get().sessions[s.sessionId]?.launch)
-    for (const id of restartWatch.observe(watched.map(s => ({ sessionId: s.sessionId, pid: s.pid.stale ? null : s.pid.value, startedAt: s.startedAt.value })))) {
-      const why = unexplainedRestart(id, sessionModVerdict)
-      void commandLog.note('unexplained-restart', { sessionId: id, refused: why })
-      if (why) markRestarted(id, why)
+    const processes = watched.map(s => ({ sessionId: s.sessionId, pid: s.pid.stale ? null : s.pid.value, startedAt: s.startedAt.value, stale: s.pid.stale }))
+    // Process changes the app didn't start, and processes no check covered: started while the app was closed, before
+    // its first poll, or after a long absence. Any refusal stops the session and marks it (restart-poll.ts).
+    const changed = restartWatch.observe(processes)
+    const step = restartPoll({ processes, changed, unverified: restartWatch.unverified, stillRefused: restartWatch.stillRefused }, { verdict: sessionModVerdict })
+    for (const s of step.stop) {
+      void commandLog.note(s.note, { sessionId: s.sessionId, refused: s.why, ...(s.error ? { error: s.error } : {}) })
+      const startedAt = restartWatch.refuse(s.sessionId)
+      const dropped = startedAt !== undefined ? store.recordRefusedStart(s.sessionId, startedAt) : undefined
+      if (dropped !== undefined) void commandLog.note('refused-start-dropped', { sessionId: s.sessionId, startedAt: dropped })
+      // The refusal's own stop starts now: the first retry waits for it (gate pass 29, L-3).
+      stopRetries.seed(s.sessionId)
+      markRestarted(s.sessionId, s.why)
     }
+    // A refused process its stop didn't end: stopped again, and never verified (gate pass 27, M-2).
+    for (const id of step.retry) retryStop(id)
+    stopRetries.keep(step.retry)
+    // Every other running process passed a check, or was started by the app, which checked it first.
+    store.recordVerifiedStarts(step.verified)
     // A control path the self-check failed is switched off; its sessions keep their dialog.
     channels.setControl(snapshot.selfCheck?.controlOff ?? [], snapshot.selfCheck?.controlOffFor ?? [])
     // New sessions take a category by folder before the renderer sees them (spec MIP2-1370 §7).

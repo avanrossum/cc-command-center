@@ -6,7 +6,8 @@
 // dropped; a bad optional field is dropped alone.
 
 import { emptyStore, SIDEBAR_WIDTH, SWITCHER_PINS_MAX, SWITCHER_RECENT_MAX, type AppSettings, type AppStore, type Category, type SessionMeta } from '../shared/store.ts'
-import { checkImportedSettings, FONT_NAME, isCategoryId, isSessionId } from './validate.ts'
+import { checkImportedSettings, FONT_NAME, isCategoryId, isSessionId, isWholeDisk } from './validate.ts'
+import { CONFIRMABLE_MODES, isMode } from './permission-modes.ts'
 
 type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -38,6 +39,8 @@ function category(v: unknown): Category | null {
 }
 
 const FLAGS = { model: 64, context: 16, effort: 16, mode: 32 } as const
+/** The refused starts kept per session (gate pass 29, M-1). */
+export const REFUSED_STARTS_MAX = 16
 
 function stringFields<K extends string>(v: unknown, limits: Record<K, number>): Partial<Record<K, string>> | undefined {
   if (!isObj(v)) return undefined
@@ -51,20 +54,28 @@ function session(v: unknown): SessionMeta | null {
   const categoryId = v.categoryId === null || isCategoryId(v.categoryId) ? (v.categoryId as string | null) : null
   const placedBy = oneOf(v.placedBy, ['hand', 'import', 'auto'] as const) ? v.placedBy : null
   const m: SessionMeta = { categoryId, placedBy: categoryId ? placedBy : null }
-  for (const k of ['autoSeen', 'neverRollOff', 'headlessChild', 'contractor', 'listed', 'parkedHidden'] as const) if (bool(v[k])) m[k] = v[k]
-  for (const k of ['archivedAt', 'rolledOffAt', 'activityAt', 'movedAt', 'removedAt'] as const) if (num(v[k])) m[k] = v[k]
+  for (const k of ['autoSeen', 'neverRollOff', 'headlessChild', 'contractor', 'listed', 'parkedHidden', 'legacyMark'] as const) if (bool(v[k])) m[k] = v[k]
+  for (const k of ['archivedAt', 'rolledOffAt', 'activityAt', 'movedAt', 'removedAt', 'verifiedStartedAt'] as const) if (num(v[k])) m[k] = v[k]
   for (const k of ['cwd', 'folderKey'] as const) if (absPath(v[k])) m[k] = v[k]
   for (const [k, max] of [['name', 80], ['alias', 120], ['theme', 64], ['untrusted', 300]] as const) if (str(v[k], max)) m[k] = v[k]
   for (const k of ['parentId', 'copyOf', 'fromSession', 'launchSessionId'] as const) if (isSessionId(v[k])) m[k] = v[k]
+  if (Array.isArray(v.refusedStarts)) m.refusedStarts = v.refusedStarts.filter(num).slice(-REFUSED_STARTS_MAX)
   if (oneOf(v.origin, ['app', 'import'] as const)) m.origin = v.origin
   if (oneOf(v.kindOverride, ['session', 'contractor'] as const)) m.kindOverride = v.kindOverride
   if (Array.isArray(v.tie)) m.tie = v.tie.filter(isCategoryId).slice(0, 8)
   const rf = stringFields(v.resumeFlags, FLAGS)
   if (rf) m.resumeFlags = rf
+  if (isObj(v.confirmed)) {
+    const c = v.confirmed
+    // Only a mode a confirmation can hold, never a launch-only one (gate pass 22, L-2).
+    m.confirmed = { ...(oneOf(c.mode, CONFIRMABLE_MODES) ? { mode: c.mode } : {}), ...(Array.isArray(c.addDirs) ? { addDirs: paths(c.addDirs) } : {}) }
+  }
   if (isObj(v.launch)) {
     const l = v.launch
     m.launch = {
-      ...stringFields(l, { model: 64, effort: 16, mode: 32 }),
+      ...stringFields(l, { model: 64, effort: 16 }),
+      // A known mode only, as for confirmed.mode (gate pass 27, L-4).
+      ...(typeof l.mode === 'string' && isMode(l.mode) ? { mode: l.mode } : {}),
       ...(typeof l.mod === 'string' && /^[0-9a-f]{16}(-r\d{1,16})?$/.test(l.mod) ? { mod: l.mod } : {}),
       ...(oneOf(l.isolation, ['none', 'worktree'] as const) ? { isolation: l.isolation } : {}),
       ...(bool(l.ultracode) ? { ultracode: l.ultracode } : {}),
@@ -142,6 +153,37 @@ function repairCategoryIds(raw: Obj): void {
   }
 }
 
+/**
+ * Copies recorded at "/" by 1.0.2-beta.5 and earlier (MIP2-1602; gate pass
+ * 39, L-1; pass 40, M-1; pass 41, L-1, L-2). A copy ran in its source's
+ * listed folder. It takes the source's launch folder, else the source's
+ * last polled folder; a copy of a legacy copy follows the chain to the
+ * first record that isn't "/". With none, it keeps "/", which the restart
+ * check refuses. It never takes the folder the copy itself reports. A
+ * source that moved since the copy started makes the check refuse, which
+ * fails closed.
+ */
+function migrateCopyFolders(sessions: Record<string, SessionMeta>): void {
+  const recorded = (id: string, seen: Set<string>): string | undefined => {
+    const s = sessions[id]
+    if (!s || seen.has(id)) return undefined
+    seen.add(id)
+    const c = s.launch?.cwd
+    if (c && !isWholeDisk(c)) return c
+    // A legacy copy at "/": its own source's folder.
+    if (c) return s.copyOf ? recorded(s.copyOf, seen) : undefined
+    return s.cwd && !isWholeDisk(s.cwd) ? s.cwd : undefined
+  }
+  const moved: [SessionMeta, string][] = []
+  for (const [id, m] of Object.entries(sessions)) {
+    if (!m.copyOf || !m.launch?.cwd || !isWholeDisk(m.launch.cwd)) continue
+    const folder = recorded(m.copyOf, new Set([id]))
+    if (folder) moved.push([m, folder])
+  }
+  // Applied after every chain is followed, so the order of the records doesn't matter.
+  for (const [m, folder] of moved) m.launch!.cwd = folder
+}
+
 /** The store as read from disk, every field checked; the empty store for anything that isn't version 1. */
 export function checkStore(raw: unknown): AppStore {
   const empty = emptyStore()
@@ -155,6 +197,7 @@ export function checkStore(raw: unknown): AppStore {
       if (m) sessions[id] = m
     }
   }
+  migrateCopyFolders(sessions)
   const channelVersions: Record<string, number> = {}
   if (isObj(raw.channelVersions)) {
     for (const [id, v] of Object.entries(raw.channelVersions)) if (/^[0-9a-f]{8}$/.test(id) && Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 99) channelVersions[id] = v as number
@@ -164,7 +207,7 @@ export function checkStore(raw: unknown): AppStore {
     q && Number.isInteger(q.closed) && (q.closed as number) >= 0 && bool(q.silent) && Array.isArray(q.failed)
       ? { closed: Math.min(q.closed as number, 1000), silent: q.silent as boolean, failed: q.failed.filter(n => str(n, 200)).slice(0, 50) as string[] }
       : null
-  return { version: 1, categories, sessions, settings: settings(raw.settings), importedAt: num(raw.importedAt) ? raw.importedAt : null, ...(Object.keys(channelVersions).length ? { channelVersions } : {}), ...(lastQuit ? { lastQuit } : {}) }
+  return { version: 1, categories, sessions, settings: settings(raw.settings), importedAt: num(raw.importedAt) ? raw.importedAt : null, ...(Object.keys(channelVersions).length ? { channelVersions } : {}), ...(lastQuit ? { lastQuit } : {}), ...(num(raw.refusedStartsSince) ? { refusedStartsSince: raw.refusedStartsSince } : {}) }
 }
 
 /** self-check.json as read from disk: per version, each check's state, detail and rule (gate L-3). */

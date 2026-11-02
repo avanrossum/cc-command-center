@@ -67,7 +67,7 @@ button { font: inherit; color: inherit; }
 .pace-dot.out { border: 2px solid var(--cc-meter-hot); box-shadow: 0 0 0 1px var(--cc-meter-hot); }
 .pace-dot.learning { border: 1.5px solid var(--cc-faint); }
 .pace-dot.stale, .pace-dot.reset { border: 1.5px dashed var(--cc-stale); }
-.pace-dot.never { border: 1.5px dashed var(--cc-faint); }
+.pace-dot.never, .pace-dot.absent { border: 1.5px dashed var(--cc-faint); }
 .pace-w { font: 600 10.5px var(--f-mono); }
 .pace-w.tight { color: var(--cc-meter-warm); }
 .pace-w.over, .pace-w.out { color: var(--cc-meter-hot); }

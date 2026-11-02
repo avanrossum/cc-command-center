@@ -11,6 +11,7 @@ import {
   type FleetSnapshot,
   type PendingRequest,
   type RateLimits,
+  type RateLimitWindow,
   type SessionSnapshot,
   type SourceHealth,
   type UsageLimit,
@@ -76,7 +77,10 @@ export class FleetPoller {
   private readonly readUsage: FleetPollerOptions['readUsage'] | null
   private usageFile: Field<RateLimits> | null = null
   /** The meter's last reading, held while no new one reads (MIP2-1520). */
-  private lastUsage: Field<RateLimits> | null = null
+  /** Each window as the meter last showed it, with when it was read and from where (MIP2-1591). */
+  /** When the last session list was read. */
+  private listedAt: number | undefined = undefined
+  private readonly lastWindow: Record<'fiveHour' | 'sevenDay', { w: RateLimitWindow; at: number; source: Field<RateLimits>['source'] } | null> = { fiveHour: null, sevenDay: null }
   private readonly usageFileOnly: boolean
   private readonly readReport: () => Field<RateLimits> | null
   private readonly readReportExtra: () => Field<UsageLimit[]> | null
@@ -148,6 +152,8 @@ export class FleetPoller {
   }
 
   async pollOnce(): Promise<FleetSnapshot> {
+    // Taken before the read, so a snapshot never claims a listing newer than it is (gate pass 25, M-1).
+    this.listedAt = this.now()
     try {
       const { sessions, rejected } = await this.host.list()
       this.sessions = sessions
@@ -242,33 +248,52 @@ export class FleetPoller {
   }
 
   /**
-   * Both windows for the meter (MIP2-1520, MIP2-1522). Claude Code's own
-   * `/usage` and the governor's files come first, the newer of the two: the
+   * Both windows for the meter (MIP2-1520, MIP2-1522), each chosen on its
+   * own (gate pass 24, M-5), in three tiers (pass 28, L-3; pass 29, L-4):
+   * the newest of Claude Code's own `/usage` and the governor's files that
+   * carries the window and hasn't reset, or whose reset time is unknown (the
    * report's time is when it was read, a file's mtime when its reading was
-   * taken. A mod's `rateLimits` carry
-   * its last contact, which an idle session renews every 25 s with an old
-   * reading, so they're used only when no file reads, and only with a window
-   * that hasn't reset. The meter never steps back to an older reading than
-   * the one it shows, and holds that one while nothing new reads; the pace
-   * line ages it.
+   * taken); then a mod's reading still in its window, since a mod's
+   * `rateLimits` carry its last contact, which an idle session renews every
+   * 25 s with an old reading; then the newest source past its reset, so the
+   * meter can say the window reset. A window never steps back to an
+   * older reading than the one shown, and holds that one while nothing new
+   * reads; the pace line ages it. A reading without one window leaves the
+   * other as it was. A window is shown as not reported only once its last
+   * reading has reset and no source carries it (MIP2-1590).
    */
   private usage(sessions: SessionSnapshot[]): Field<RateLimits> | null {
     if (this.usageFileOnly) return this.usageFile
-    const live = (f: Field<RateLimits> | null | undefined): f is Field<RateLimits> => !!f && !f.stale && f.value.fiveHour !== null
     const now = this.now()
-    const fromMod = () =>
-      sessions
-        .map(s => s.rateLimits)
-        .filter(live)
-        .filter(f => (f.value.fiveHour?.resetsAt ?? 0) * 1000 > now)
-        .sort((a, b) => b.observedAt - a.observedAt)[0] ?? null
-    // Claude Code's `/usage` and the files both carry when they were read; the newer wins (MIP2-1522).
-    const best = [this.readReport(), this.usageFile].filter(live).sort((a, b) => b.observedAt - a.observedAt)[0] ?? null
-    const pick = best ?? fromMod()
-    const last = this.lastUsage
-    // A file's reading replaces a mod's whatever their times, since the two times measure different things.
-    if (pick && (!last || pick.observedAt >= last.observedAt || (pick.source !== 'mod' && last.source === 'mod'))) this.lastUsage = pick
-    return this.lastUsage
+    const fresh = (f: Field<RateLimits> | null | undefined): f is Field<RateLimits> => !!f && !f.stale
+    const sources = [this.readReport(), this.usageFile].filter(fresh)
+    const mods = sessions.map(s => s.rateLimits).filter(fresh)
+    for (const key of ['fiveHour', 'sevenDay'] as const) {
+      const at = (f: Field<RateLimits>) => f.value[key]?.observedAt ?? f.observedAt
+      const newest = (list: Field<RateLimits>[]) => list.sort((a, b) => at(b) - at(a))[0] ?? null
+      const inWindow = (f: Field<RateLimits>) => (f.value[key]?.resetsAt ?? 0) * 1000 > now
+      const pick =
+        newest(sources.filter(f => f.value[key] && (f.value[key]!.resetsAt === null || inWindow(f)))) ??
+        newest(mods.filter(inWindow)) ??
+        newest(sources.filter(f => f.value[key]))
+      const last = this.lastWindow[key]
+      // A file's reading replaces a mod's whatever their times, since the two times measure different things. A held
+      // window that has reset gives way to a reading still in its own window, or, with none, goes (gate pass 25,
+      // L-3); never to an older reading from an earlier window (pass 26, L-1).
+      const reset = !!last && (last.w.resetsAt === null || last.w.resetsAt * 1000 <= now)
+      // A newer source whose reset time is unknown counts as current too (gate pass 30, L-3).
+      const later = !!pick && ((pick.value[key]?.resetsAt ?? 0) * 1000 > now || (pick.value[key]?.resetsAt === null && pick.source !== 'mod'))
+      // A held window still in its own window gives way only to a reading that is too: a newer file carrying an expired
+      // window, an idle session's re-render, doesn't replace it (gate pass 27, L-3).
+      const newer = !!pick && !!last && (at(pick) >= last.at || (pick.source !== 'mod' && last.source === 'mod'))
+      if (pick && (!last || (reset && later) || (newer && (later || reset)))) this.lastWindow[key] = { w: pick.value[key]!, at: at(pick), source: pick.source }
+      else if (!pick && reset) this.lastWindow[key] = null
+    }
+    const { fiveHour, sevenDay } = this.lastWindow
+    const shown = [fiveHour, sevenDay].filter(w => w !== null).sort((a, b) => b.at - a.at)[0]
+    if (!shown) return null
+    const out = (w: typeof fiveHour) => (w ? { ...w.w, observedAt: w.at, source: w.source } : null)
+    return { value: { fiveHour: out(fiveHour), sevenDay: out(sevenDay) }, source: shown.source, observedAt: shown.at, stale: false }
   }
 
   private publish(): FleetSnapshot {
@@ -276,6 +301,7 @@ export class FleetPoller {
     const snapshot: FleetSnapshot = {
       contractVersion: CONTRACT_VERSION,
       at: this.now(),
+      ...(this.listedAt !== undefined ? { listedAt: this.listedAt } : {}),
       sessions,
       usage: this.usage(sessions),
       ...(this.readReportExtra() ? { usageExtra: this.readReportExtra()! } : {}),

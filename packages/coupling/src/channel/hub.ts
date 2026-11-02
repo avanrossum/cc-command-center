@@ -89,6 +89,8 @@ class SessionChannel {
   answer: AnswerPost | null = null
   /** Why the channel can't be trusted any more (its socket was replaced); null while it can (gate M-1). */
   untrusted: string | null = null
+  /** The mark is the in-memory one for a reply key, which neither stops the session nor outlives the app (gate pass 27, L-1, L-2). */
+  untrustedTransient = false
   /**
    * A mark carried over a re-key until the resume finishes (pass 6, M-1).
    * The channel takes no card answers or relayed prompts while it's set,
@@ -179,8 +181,19 @@ export function memoryVersions(): SettingsVersions {
  * safeStorage; tests and a build without it keep them in memory. `set`
  * may throw.
  */
+/**
+ * A kept reply key as read (gate pass 20, M-2): none kept; kept but not
+ * readable, with why (a file that fails its checks, or one that won't
+ * decrypt, as with a locked Keychain); or the key.
+ */
+export type ReplyKeyRead = { state: 'missing' } | { state: 'unreadable'; why: string } | { state: 'ok'; der: Buffer }
+
 export interface ReplyKeys {
   get(channelId: string): Buffer | null
+  /** `get`, with a missing key told apart from one that can't be read. Without it, no key reads as missing. */
+  read?(channelId: string): ReplyKeyRead
+  /** Keys outlive the app, so a channel's missing key was removed, not lost with memory, and is marked, not replaced (gate pass 22, L-3). */
+  persistent?: boolean
   set(channelId: string, der: Buffer): void
   delete(channelId: string): void
 }
@@ -383,6 +396,7 @@ export class ChannelHub {
         // The file the session will read on its next start must be the one the app wrote (pass 4, H-1).
         ch.sessionId = await readSessionId(join(dir, SESSION_FILE))
         let altered = this.settingsAltered(settings.data, join(dir, SOCKET_FILE), SETTINGS_VERSION)
+        let keyMark: string | null = null
         // A file an older version wrote, with nothing else changed, is brought up to date in place: the same
         // secret, so a running session keeps its channel, and the new rules apply from its next start. Only a
         // channel the store recorded at that older version qualifies; one it has no version for, or anything
@@ -405,10 +419,20 @@ export class ChannelHub {
           // The key the session starts with must be the one the app holds (MIP2-1436 item 1).
           const filed = settings.data.pluginConfigs?.[PLUGIN_KEY]?.options?.replyKey
           const stored = this.storedKey(id)
-          if (stored && stored.publicHex === filed) ch.replyKey = stored
-          else if (stored) altered = 'its reply key'
-          else {
-            // None kept (a build without safeStorage, or a lost key): a new one, written in place. A session already
+          if ('key' in stored && stored.key.publicHex === filed) ch.replyKey = stored.key
+          else if ('key' in stored) altered = 'its reply key'
+          else if ('unreadable' in stored) {
+            // Kept but unreadable (gate pass 20, M-2): tampering, or a Keychain that refused or was locked. The file
+            // stays, and the channel signs nothing until a later start reads it or a resume from the app re-keys it.
+            // Decided on the read alone, whatever version the store has for the channel (pass 21, M-3).
+            keyMark = `its kept reply key can't be read (${stored.unreadable})`
+          } else if (this.replyKeys.persistent && typeof filed === 'string') {
+            // A store that keeps keys has none for a channel whose settings name one: the file was removed, which no
+            // later start undoes, so only a resume from the app clears it (pass 22, L-3; pass 23, L-3). Not stopped,
+            // as for an unreadable key: the channel signs nothing meanwhile.
+            keyMark = 'its reply key file was removed. Resume it from the app to give it a new one'
+          } else {
+            // None kept, in the in-memory store (no safeStorage): a new one, written in place. A session already
             // running holds the old public key and refuses every reply until it restarts; the band offers that.
             ch.replyKey = this.newKeyFor(id)
             await this.migrate(ch, settings.data, SETTINGS_VERSION)
@@ -425,6 +449,7 @@ export class ChannelHub {
         else if (squatted) this.markUntrusted(ch, 'another process was answering its channel while the app was closed')
         else if (altered) this.markUntrusted(ch, `its settings file was changed while the app was closed (${altered})`)
         else if (ch.sessionId && this.untrustedSessions.has(ch.sessionId)) this.markUntrusted(ch, this.untrustedSessions.get(ch.sessionId)!)
+        else if (keyMark) this.markUntrusted(ch, keyMark, { transient: true })
         recovered.push(id)
       } catch (err) {
         this.log(`channel: skipped ${id}: ${err instanceof Error ? err.message : String(err)}`)
@@ -464,8 +489,9 @@ export class ChannelHub {
     if (!ch || ch.sessionId) return
     ch.sessionId = sessionId
     void writeFile(join(ch.dir, SESSION_FILE), sessionId, { mode: 0o600 }).catch(() => {})
-    // A swap before the session was known is reported now, so its session is stopped (gate run 3, M-2).
-    if (ch.untrusted) {
+    // A swap before the session was known is reported now, so its session is stopped (gate run 3, M-2). A transient
+    // reply-key mark isn't one (gate pass 30, H-1).
+    if (ch.untrusted && !ch.untrustedTransient) {
       this.untrustedSessions.set(sessionId, ch.untrusted)
       this.onUntrusted(sessionId, ch.untrusted)
     }
@@ -602,9 +628,10 @@ export class ChannelHub {
   markSession(sessionId: string, why: string): void {
     const ch = [...this.channels.values()].find(c => c.sessionId === sessionId)
     if (!ch) return
-    // Already marked: it was stopped once, and something started it again, so it's stopped again.
-    if (ch.untrusted) this.onUntrusted(sessionId, ch.untrusted)
-    else this.markUntrusted(ch, why)
+    // Already marked: it was stopped once, and something started it again, so it's stopped again. A transient
+    // reply-key mark gives way to this reason, which is the one the session is stopped and marked for (gate pass 27, L-1).
+    if (ch.untrusted && !ch.untrustedTransient) return this.onUntrusted(sessionId, ch.untrusted)
+    this.markUntrusted(ch, why)
   }
 
   /** Closes the channel of a session that was removed. */
@@ -778,7 +805,8 @@ export class ChannelHub {
    */
   checkSockets(): void {
     for (const ch of this.channels.values()) {
-      if (ch.untrusted || !ch.server) continue
+      // A transient reply-key mark doesn't stop the watch: a swap after it is still tampering (gate pass 30, H-1).
+      if ((ch.untrusted && !ch.untrustedTransient) || !ch.server) continue
       const why = ch.server.socketChanged() ?? this.settingsChanged(ch)
       if (why) this.markUntrusted(ch, why)
     }
@@ -807,13 +835,16 @@ export class ChannelHub {
     }
   }
 
-  /** The reply key kept for a channel, or null when none is kept or it doesn't read as one. */
-  private storedKey(channelId: string): ReplyKey | null {
+  /** The reply key kept for a channel; none; or why the one kept can't be read (gate pass 20, M-2). */
+  private storedKey(channelId: string): { key: ReplyKey } | { missing: true } | { unreadable: string } {
     try {
-      const der = this.replyKeys.get(channelId)
-      return der ? importReplyKey(der) : null
+      const r: ReplyKeyRead = this.replyKeys.read?.(channelId) ?? ((der: Buffer | null) => (der ? { state: 'ok' as const, der } : { state: 'missing' as const }))(this.replyKeys.get(channelId))
+      if (r.state === 'missing') return { missing: true }
+      if (r.state === 'unreadable') return { unreadable: r.why }
+      const key = importReplyKey(r.der)
+      return key ? { key } : { unreadable: "it doesn't read as a reply key" }
     } catch {
-      return null
+      return { unreadable: "it doesn't read as a reply key" }
     }
   }
 
@@ -878,26 +909,40 @@ export class ChannelHub {
     return null
   }
 
-  /** Stops trusting a channel: no card answers or relayed prompts, waiting prompts back to the session's dialog. */
-  private markUntrusted(ch: SessionChannel, why: string): void {
-    if (ch.untrusted) return
+  /**
+   * Stops trusting a channel: no card answers or relayed prompts, waiting
+   * prompts back to the session's dialog. `transient`: kept in memory only,
+   * with no mark file and no call to onUntrusted, so the session isn't
+   * stopped, and the next start decides again: for a kept reply key that
+   * couldn't be read, which a locked Keychain causes too and a later start may
+   * read, or whose file was removed, which each start marks again until a
+   * resume re-keys it (gate pass 20, M-2; pass 23, L-3). The self-check still
+   * lists it.
+   */
+  private markUntrusted(ch: SessionChannel, why: string, { transient = false } = {}): void {
+    // A persistent mark replaces a transient one, so tampering found after a reply-key problem is still recorded, stops
+    // the session and outlives the app (gate pass 30, H-1); nothing replaces a persistent mark.
+    if (ch.untrusted && (!ch.untrustedTransient || transient)) return
     ch.untrusted = why
+    ch.untrustedTransient = transient
     ch.pendingClear = null
-    if (ch.sessionId) this.untrustedSessions.set(ch.sessionId, why)
     this.log(`channel ${ch.id}: untrusted: ${why}`)
-    try {
-      // Written beside it with `wx` and renamed over it, so a link left at the mark's name is replaced, not written through (pass 4, L-1).
-      const tmp = join(ch.dir, `${UNTRUSTED_FILE}.${process.pid}`)
-      rmSync(tmp, { force: true })
-      writeFileSync(tmp, why, { mode: 0o600, flag: 'wx' })
-      renameSync(tmp, join(ch.dir, UNTRUSTED_FILE))
-    } catch (err) {
-      this.log(`channel ${ch.id}: couldn't record the untrusted mark: ${err instanceof Error ? err.message : String(err)}`)
+    if (!transient) {
+      if (ch.sessionId) this.untrustedSessions.set(ch.sessionId, why)
+      try {
+        // Written beside it with `wx` and renamed over it, so a link left at the mark's name is replaced, not written through (pass 4, L-1).
+        const tmp = join(ch.dir, `${UNTRUSTED_FILE}.${process.pid}`)
+        rmSync(tmp, { force: true })
+        writeFileSync(tmp, why, { mode: 0o600, flag: 'wx' })
+        renameSync(tmp, join(ch.dir, UNTRUSTED_FILE))
+      } catch (err) {
+        this.log(`channel ${ch.id}: couldn't record the untrusted mark: ${err instanceof Error ? err.message : String(err)}`)
+      }
     }
     for (const p of ch.pending.values()) p.deliver?.({ status: 'cancel' })
     ch.pending.clear()
     for (const pr of ch.prompts) if (pr.state === 'queued') pr.state = 'delivered'
-    this.onUntrusted(ch.sessionId, why)
+    if (!transient) this.onUntrusted(ch.sessionId, why)
   }
 
   /**
@@ -919,7 +964,7 @@ export class ChannelHub {
     try {
       this.rootWatcher = watch(this.root, (event, name) => {
         for (const ch of this.channels.values()) {
-          if (ch.untrusted || !ch.server || (name !== null && name !== ch.id)) continue
+          if ((ch.untrusted && !ch.untrustedTransient) || !ch.server || (name !== null && name !== ch.id)) continue
           const changed = ch.server.socketChanged()
           if (changed) this.markUntrusted(ch, changed)
           else if (event === 'rename' && name === ch.id && this.now() - ch.watchedAt >= WATCH_GRACE_MS) this.markUntrusted(ch, 'its channel folder was moved or replaced')
@@ -936,7 +981,7 @@ export class ChannelHub {
     try {
       ch.watchedAt = this.now()
       ch.watcher = watch(ch.dir, (event, name) => {
-        if (ch.untrusted || !ch.server) return
+        if ((ch.untrusted && !ch.untrustedTransient) || !ch.server) return
         if (name === SETTINGS_FILE) {
           // A rename of the file outside the app's own re-key (which closes this watcher first) marks it, even if
           // the bytes are back by now (pass 5, M-2).
@@ -1027,7 +1072,8 @@ export class ChannelHub {
           const first = !ch.sessionId
           if (first) void writeFile(join(ch.dir, SESSION_FILE), file.sessionId, { mode: 0o600 }).catch(() => {})
           ch.sessionId = file.sessionId
-          if (first && ch.untrusted) {
+          // A transient mark stays transient: the first report neither stops the session nor saves the mark (gate pass 27, L-2).
+          if (first && ch.untrusted && !ch.untrustedTransient) {
             this.untrustedSessions.set(file.sessionId, ch.untrusted)
             this.onUntrusted(file.sessionId, ch.untrusted)
           }

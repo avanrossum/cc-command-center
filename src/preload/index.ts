@@ -23,6 +23,7 @@ const api: CccApi = {
 
   launch: req => ipcRenderer.invoke(IPC.launch, req),
   resume: id => ipcRenderer.invoke(IPC.resume, id),
+  confirmSettings: (id, settings) => ipcRenderer.invoke(IPC.confirmSettings, id, settings),
   startCopy: (id, req) => ipcRenderer.invoke(IPC.startCopy, id, req),
   moveIn: id => ipcRenderer.invoke(IPC.moveIn, id),
   stop: id => ipcRenderer.invoke(IPC.stop, id),

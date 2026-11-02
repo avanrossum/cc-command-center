@@ -49,7 +49,8 @@ export interface SessionHost {
   /** Resumes with the session's saved options; flags would start a copy (MIP2-1377 §1b). */
   resume(sessionId: string): Promise<void>
   /** A copy of the conversation under a new id, with new launch settings (MIP2-1387 §2.3). */
-  startCopy(sessionId: string, opts: Omit<LaunchOptions, 'cwd' | 'prompt'>): Promise<{ sessionId: string }>
+  /** Returns the copy's id and the folder it runs in, the session's own (MIP2-1602). */
+  startCopy(sessionId: string, opts: Omit<LaunchOptions, 'cwd' | 'prompt'>): Promise<{ sessionId: string; cwd: string }>
   /** Moves a session whose 0.24 process has exited into the app: resumed in place with the app's flags (MIP2-1425). */
   moveIn(sessionId: string, opts: Omit<LaunchOptions, 'prompt' | 'extraArgs' | 'ultracode'>): Promise<{ sessionId: string; sameId: boolean }>
   /** The command to run in a terminal view. The view's process is the attach; exiting it detaches. */
