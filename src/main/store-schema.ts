@@ -54,11 +54,13 @@ function session(v: unknown): SessionMeta | null {
   const categoryId = v.categoryId === null || isCategoryId(v.categoryId) ? (v.categoryId as string | null) : null
   const placedBy = oneOf(v.placedBy, ['hand', 'import', 'auto'] as const) ? v.placedBy : null
   const m: SessionMeta = { categoryId, placedBy: categoryId ? placedBy : null }
-  for (const k of ['autoSeen', 'neverRollOff', 'headlessChild', 'contractor', 'listed', 'parkedHidden', 'legacyMark'] as const) if (bool(v[k])) m[k] = v[k]
+  for (const k of ['autoSeen', 'neverRollOff', 'headlessChild', 'contractor', 'listed', 'parkedHidden', 'refuseNextProcess'] as const) if (bool(v[k])) m[k] = v[k]
   for (const k of ['archivedAt', 'rolledOffAt', 'activityAt', 'movedAt', 'removedAt', 'verifiedStartedAt'] as const) if (num(v[k])) m[k] = v[k]
   for (const k of ['cwd', 'folderKey'] as const) if (absPath(v[k])) m[k] = v[k]
   for (const [k, max] of [['name', 80], ['alias', 120], ['theme', 64], ['untrusted', 300]] as const) if (str(v[k], max)) m[k] = v[k]
   for (const k of ['parentId', 'copyOf', 'fromSession', 'launchSessionId'] as const) if (isSessionId(v[k])) m[k] = v[k]
+  // 1.0.2-beta.5 saved this flag as `legacyMark` (gate pass 35, L-3).
+  if (v.refuseNextProcess === undefined && v.legacyMark === true) m.refuseNextProcess = true
   if (Array.isArray(v.refusedStarts)) m.refusedStarts = v.refusedStarts.filter(num).slice(-REFUSED_STARTS_MAX)
   if (oneOf(v.origin, ['app', 'import'] as const)) m.origin = v.origin
   if (oneOf(v.kindOverride, ['session', 'contractor'] as const)) m.kindOverride = v.kindOverride

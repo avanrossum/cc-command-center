@@ -427,10 +427,11 @@ export class ChannelHub {
             // Decided on the read alone, whatever version the store has for the channel (pass 21, M-3).
             keyMark = `its kept reply key can't be read (${stored.unreadable})`
           } else if (this.replyKeys.persistent && typeof filed === 'string') {
-            // A store that keeps keys has none for a channel whose settings name one: the file was removed, which no
-            // later start undoes, so only a resume from the app clears it (pass 22, L-3; pass 23, L-3). Not stopped,
-            // as for an unreadable key: the channel signs nothing meanwhile.
-            keyMark = 'its reply key file was removed. Resume it from the app to give it a new one'
+            // A store that keeps keys has none for a channel whose settings name one: removed, or never kept (a failed
+            // write, or a run without safeStorage), so the wording claims neither. No later start finds it, so only a
+            // resume from the app clears it (pass 22, L-3; pass 23, L-3; pass 31, L-2). Not stopped, as for an
+            // unreadable key: the channel signs nothing meanwhile.
+            keyMark = 'no kept reply key was found for it. Resume it from the app to give it a new one'
           } else {
             // None kept, in the in-memory store (no safeStorage): a new one, written in place. A session already
             // running holds the old public key and refuses every reply until it restarts; the band offers that.
@@ -624,14 +625,20 @@ export class ChannelHub {
     }
   }
 
-  /** Marks a session's channel untrusted from outside the channel: a restart the app refused (MIP2-1512). */
-  markSession(sessionId: string, why: string): void {
+  /**
+   * Marks a session's channel untrusted from outside the channel: a restart
+   * the app refused (MIP2-1512). Returns whether the session has a channel,
+   * and so whether onUntrusted was called for it; with none, the caller
+   * marks and stops the session itself (gate pass 34, M-1).
+   */
+  markSession(sessionId: string, why: string): boolean {
     const ch = [...this.channels.values()].find(c => c.sessionId === sessionId)
-    if (!ch) return
+    if (!ch) return false
     // Already marked: it was stopped once, and something started it again, so it's stopped again. A transient
     // reply-key mark gives way to this reason, which is the one the session is stopped and marked for (gate pass 27, L-1).
-    if (ch.untrusted && !ch.untrustedTransient) return this.onUntrusted(sessionId, ch.untrusted)
-    this.markUntrusted(ch, why)
+    if (ch.untrusted && !ch.untrustedTransient) this.onUntrusted(sessionId, ch.untrusted)
+    else this.markUntrusted(ch, why)
+    return true
   }
 
   /** Closes the channel of a session that was removed. */

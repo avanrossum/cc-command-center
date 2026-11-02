@@ -1,9 +1,9 @@
 // One poll's restart checks (gate pass 20, M-1; pass 21, L-4; pass 22, D-042): every refusal stops, settings to confirm included.
 
 import { describe, expect, it } from 'vitest'
-import { restartPoll, StopRetries } from '../src/main/restart-poll.ts'
+import { bookRefusal, restartPoll, StopRetries } from '../src/main/restart-poll.ts'
 import { ABSENT_KEEP_MS, RestartWatch, type ProcessSeen } from '../src/main/restart-watch.ts'
-import { rollBackConfirmation } from '../src/main/resume.ts'
+import { confirmationFor, LiftedRefusals, rollBackConfirmation } from '../src/main/resume.ts'
 
 const A = 'c0ffee01-0000-4000-8000-000000000001'
 const B = 'c0ffee02-0000-4000-8000-000000000002'
@@ -197,13 +197,13 @@ describe('a refusal lasts as long as the refused process (gate pass 28, M-1; pas
     expect(watch.observe([{ sessionId: A, pid: 100, startedAt: 2 }])).toEqual([A])
   })
 
-  it('refuses the first process seen of a session an earlier build marked without a refused start, unless the app verified it (gate pass 29, L-1)', () => {
+  it('refuses the first process seen of a session flagged for it, a start verified before included (gate pass 29, L-1; pass 31, M-1)', () => {
     const watch = new RestartWatch(() => 0, () => 100, undefined, () => true)
     watch.observe([{ sessionId: A, pid: 200, startedAt: 200 }])
     expect(watch.stillRefused).toEqual([A])
     const verifiedOne = new RestartWatch(() => 0, () => 100, undefined, () => true)
     verifiedOne.observe([{ sessionId: A, pid: 100, startedAt: 100 }])
-    expect(verifiedOne.stillRefused).toEqual([])
+    expect(verifiedOne.stillRefused).toEqual([A])
   })
 
   it('sees the process again as new once the watch forgets the session, as after a failed confirmed resume (gate pass 28, L-1)', () => {
@@ -275,3 +275,177 @@ describe('StopRetries (gate pass 28, L-2; pass 29, L-2, L-3)', () => {
     expect(r.start(A)).toBe(true)
   })
 })
+
+describe('a channel tamper mark is booked as a refusal (gate pass 31, M-2)', () => {
+  const book = (watch: RestartWatch, calls: string[], dropped?: number) => ({
+    refuse: (id: string) => watch.refuse(id),
+    forget: (id: string) => (calls.push(`forget ${id}`), watch.forget(id)),
+    recordRefusedStart: (id: string, at: number) => (calls.push(`record ${id} ${at}`), dropped),
+    seed: (id: string) => void calls.push(`seed ${id}`),
+    refuseNextSighting: (id: string) => void calls.push(`next ${id}`),
+    dropLift: () => {},
+    note: (what: string) => void calls.push(what),
+  })
+
+  it('keeps a hub-marked process refused and retries it when its stop fails', () => {
+    const watch = new RestartWatch(() => 0, () => 200)
+    watch.observe([{ sessionId: A, pid: 200, startedAt: 200 }])
+    const calls: string[] = []
+    // The hub marks the channel (a socket swap) and the stop fails: the process is still listed next poll.
+    bookRefusal(A, book(watch, calls))
+    expect(calls).toEqual([`record ${A} 200`, `seed ${A}`])
+    const processes: ProcessSeen[] = [{ sessionId: A, pid: 200, startedAt: 200 }]
+    const changed = watch.observe(processes)
+    expect(restartPoll({ processes, changed, unverified: watch.unverified, stillRefused: watch.stillRefused }, { verdict: () => null })).toMatchObject({ retry: [A], verified: [] })
+  })
+
+  it("refuses the next first sighting when the watch hasn't seen the process, as for a mark raised while channels recover", () => {
+    const calls: string[] = []
+    bookRefusal(A, book(new RestartWatch(() => 0), calls))
+    expect(calls).toEqual([`forget ${A}`, `next ${A}`, `seed ${A}`])
+  })
+
+  it('refuses the next process when the mark comes after the process stopped, not the stopped one (gate pass 33, M-1)', () => {
+    let flagged = false
+    const watch = new RestartWatch(() => 0, () => 200, undefined, () => flagged)
+    watch.observe([{ sessionId: A, pid: 200, startedAt: 200 }])
+    watch.observe([{ sessionId: A, pid: null, startedAt: 0 }])
+    const calls: string[] = []
+    bookRefusal(A, { ...book(watch, calls), refuseNextSighting: () => void (flagged = true) })
+    expect(calls).toEqual([`forget ${A}`, `seed ${A}`])
+    watch.observe([{ sessionId: A, pid: 300, startedAt: 300 }])
+    expect(watch.stillRefused).toEqual([A])
+  })
+
+  it('withdraws a resume\'s lift, so a mark raised during the resume refuses the process it starts (gate pass 36, M-1)', () => {
+    const lifted = new LiftedRefusals()
+    let flagged = true
+    const watch = new RestartWatch(() => 0, () => undefined, undefined, id => !lifted.has(id) && flagged)
+    lifted.lift(A)
+    bookRefusal(A, { ...book(watch, []), refuseNextSighting: () => void (flagged = true), dropLift: id => lifted.drop(id) })
+    expect(lifted.has(A)).toBe(false)
+    watch.observe([{ sessionId: A, pid: 300, startedAt: 300 }])
+    expect(watch.stillRefused).toEqual([A])
+  })
+
+  it('refuses nothing by pid for a process that left the list', () => {
+    const watch = new RestartWatch(() => 0)
+    watch.observe([{ sessionId: A, pid: 200, startedAt: 200 }])
+    watch.observe([])
+    expect(watch.refuse(A)).toBeUndefined()
+  })
+
+  it('notes a refused start dropped from the list', () => {
+    const watch = new RestartWatch(() => 0)
+    watch.observe([{ sessionId: A, pid: 200, startedAt: 200 }])
+    const calls: string[] = []
+    bookRefusal(A, book(watch, calls, 5))
+    expect(calls).toContain('refused-start-dropped')
+  })
+})
+
+describe('confirmationFor (gate pass 31, L-1, L-4)', () => {
+  function confirm() {
+    let recorded: string | undefined = 'acceptEdits'
+    const calls: string[] = []
+    const offered = new Map([[A, 'auto']])
+    const c = confirmationFor<string, string>({
+      offered,
+      escalationOf: () => 'auto',
+      text: e => `Saved settings: ${e}.`,
+      recordedOf: () => recorded,
+      record: (_id, e) => void (recorded = e),
+      restore: (_id, r) => void (recorded = r),
+      clearVerifiedStart: id => void calls.push(`clear ${id}`),
+      forget: id => void calls.push(`forget ${id}`),
+    })
+    return { c, calls, offered, recorded: () => recorded }
+  }
+
+  it('records the settings shown, and puts the earlier record back when the restart fails', () => {
+    const h = confirm()
+    expect(h.c.begin(A, 'Saved settings: auto.')).toBeNull()
+    expect(h.recorded()).toBe('auto')
+    h.c.abort(A)
+    expect(h.recorded()).toBe('acceptEdits')
+    expect(h.calls).toEqual([`clear ${A}`, `forget ${A}`])
+  })
+
+  it('refuses a second confirmation while one is under way, so a failure puts back the record from before both', () => {
+    const h = confirm()
+    expect(h.c.begin(A, 'Saved settings: auto.')).toBeNull()
+    expect(h.c.begin(A, 'Saved settings: auto.')).toBe('a confirmation for it is already under way')
+    h.c.abort(A)
+    expect(h.recorded()).toBe('acceptEdits')
+    // And once it's done, another may start.
+    expect(h.c.begin(A, 'Saved settings: auto.')).toBeNull()
+    h.c.commit(A)
+    expect(h.offered.has(A)).toBe(false)
+  })
+
+  it('puts the record back and leaves nothing under way when the record fails to save (gate pass 32, L-2)', () => {
+    let recorded: string | undefined = 'acceptEdits'
+    let fail = true
+    const c = confirmationFor<string, string>({
+      offered: new Map([[A, 'auto']]),
+      escalationOf: () => 'auto',
+      text: e => `Saved settings: ${e}.`,
+      recordedOf: () => recorded,
+      record: (_id, e) => {
+        recorded = e
+        if (fail) throw new Error('disk full')
+      },
+      restore: (_id, r) => void (recorded = r),
+      clearVerifiedStart: () => {},
+      forget: () => {},
+    })
+    expect(() => c.begin(A, 'Saved settings: auto.')).toThrow('disk full')
+    expect(recorded).toBe('acceptEdits')
+    fail = false
+    expect(c.begin(A, 'Saved settings: auto.')).toBeNull()
+    expect(recorded).toBe('auto')
+  })
+
+  it('reports the save error when putting the record back fails too (gate pass 34, L-3)', () => {
+    const c = confirmationFor<string, string>({
+      offered: new Map([[A, 'auto']]),
+      escalationOf: () => 'auto',
+      text: e => `Saved settings: ${e}.`,
+      recordedOf: () => undefined,
+      record: () => {
+        throw new Error('disk full')
+      },
+      restore: () => {
+        throw new Error('still full')
+      },
+      clearVerifiedStart: () => {},
+      forget: () => {},
+    })
+    expect(() => c.begin(A, 'Saved settings: auto.')).toThrow('disk full')
+  })
+
+  it('sees the process afresh and leaves nothing under way even when putting the record back fails (gate pass 33, L-2)', () => {
+    const calls: string[] = []
+    const c = confirmationFor<string, string>({
+      offered: new Map([[A, 'auto']]),
+      escalationOf: () => 'auto',
+      text: e => `Saved settings: ${e}.`,
+      recordedOf: () => undefined,
+      record: () => {},
+      restore: () => {
+        throw new Error('disk full')
+      },
+      clearVerifiedStart: id => void calls.push(`clear ${id}`),
+      forget: id => void calls.push(`forget ${id}`),
+    })
+    expect(c.begin(A, 'Saved settings: auto.')).toBeNull()
+    expect(() => c.abort(A)).toThrow('disk full')
+    expect(calls).toEqual([`clear ${A}`, `forget ${A}`])
+    expect(c.begin(A, 'Saved settings: auto.')).toBeNull()
+  })
+
+  it('refuses settings that no longer read as shown', () => {
+    expect(confirm().c.begin(A, 'Saved settings: plan.')).toMatch(/changed since they were shown/)
+  })
+})
+

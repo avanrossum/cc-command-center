@@ -133,6 +133,9 @@ export type Result<T = object> =
   | ({ ok: true } & T)
   | { ok: false; error: string; kind?: 'untrusted' | 'copy' | 'mod-stuck' | 'terminal' | 'confirm'; variant?: 'trust' | 'home' | 'missing'; settings?: string }
 
+/** A copy's request: the launch settings it may change, with nothing only a launch takes (MIP2-1603 L-1, L-2). */
+export type CopyRequest = Omit<LaunchRequest, 'cwd' | 'prompt' | 'resume' | 'fromSession'>
+
 export interface LaunchRequest {
   cwd: string
   name?: string
@@ -194,7 +197,8 @@ export interface CccApi {
   /** Records the saved settings shown, if they still read the same, then resumes (D-040). */
   confirmSettings(sessionId: string, settings: string): Promise<Result>
   /** Launch settings… and Resume with different settings: a copy under a new id (MIP2-1387 §2.3). `req.cwd` is ignored; the session's own folder is used. */
-  startCopy(sessionId: string, req: LaunchRequest): Promise<Result<{ sessionId: string }>>
+  /** A copy runs in its session's own folder (MIP2-1602, MIP2-1603 L-1). */
+  startCopy(sessionId: string, req: CopyRequest): Promise<Result<{ sessionId: string }>>
   /** Moves a session from CC Command Center 0.24 once its process there has exited (MIP2-1425). `sameId` false means it came back under a new id. */
   moveIn(sessionId: string): Promise<Result<{ sessionId: string; sameId: boolean }>>
   stop(sessionId: string): Promise<Result>

@@ -323,11 +323,11 @@ export class AppStoreService {
   /** Its channel was re-keyed by a resume from the app. */
   clearUntrusted(sessionId: string): void {
     const m = this.data.sessions[sessionId]
-    if (!m?.untrusted && m?.refusedStarts === undefined && !m?.legacyMark) return
+    if (!m?.untrusted && m?.refusedStarts === undefined && !m?.refuseNextProcess) return
     delete m!.untrusted
     // The refused processes ended with the resume that re-keyed it (gate pass 28, M-1).
     delete m!.refusedStarts
-    delete m!.legacyMark
+    delete m!.refuseNextProcess
     this.save()
   }
 
@@ -341,8 +341,23 @@ export class AppStoreService {
     if (!m || m.refusedStarts?.includes(startedAt)) return undefined
     const all = [...(m.refusedStarts ?? []), startedAt]
     m.refusedStarts = all.slice(-REFUSED_STARTS_MAX)
+    // A dropped start's process, if it still runs, is refused at its next first sighting instead (gate pass 31, L-3).
+    if (all.length > REFUSED_STARTS_MAX) m.refuseNextProcess = true
     this.save()
     return all.length > REFUSED_STARTS_MAX ? all[0] : undefined
+  }
+
+  /**
+   * The session's next process first seen is refused, whatever start was
+   * verified before (gate pass 31, M-1, M-2): a refusal whose process the
+   * watch hadn't seen.
+   */
+  refuseNextSighting(sessionId: string): void {
+    const m = this.data.sessions[sessionId]
+    if (!m || (m.refuseNextProcess && m.verifiedStartedAt === undefined)) return
+    m.refuseNextProcess = true
+    delete m.verifiedStartedAt
+    this.save()
   }
 
   /**
@@ -356,7 +371,9 @@ export class AppStoreService {
     let n = 0
     for (const m of Object.values(this.data.sessions)) {
       if (!m.untrusted || m.refusedStarts?.length) continue
-      m.legacyMark = true
+      m.refuseNextProcess = true
+      // A verified start from a build that recorded refused processes as verified isn't evidence (gate pass 31, M-1).
+      delete m.verifiedStartedAt
       n++
     }
     this.data.refusedStartsSince = now
@@ -703,10 +720,21 @@ export class AppStoreService {
 
   private save(): void {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
-    writeFileSync(`${this.path}.tmp`, JSON.stringify(this.data), { mode: 0o600 })
+    writeFileSync(`${this.path}.tmp`, JSON.stringify(forDisk(this.data)), { mode: 0o600 })
     renameSync(`${this.path}.tmp`, this.path)
     for (const fn of this.listeners) fn(this.data)
   }
+}
+
+/**
+ * The store as saved: each refuseNextProcess is also written under its
+ * 1.0.2-beta.5 name, legacyMark, so a downgrade to that build keeps the
+ * refusal (gate pass 36, L-3). Only refuseNextProcess is held in memory, so
+ * clearing it clears both on the next save.
+ */
+function forDisk(data: AppStore): AppStore {
+  const sessions = Object.fromEntries(Object.entries(data.sessions).map(([id, m]) => [id, m.refuseNextProcess ? { ...m, legacyMark: true } : m]))
+  return { ...data, sessions }
 }
 
 export function registryPresent(folder: string): boolean {

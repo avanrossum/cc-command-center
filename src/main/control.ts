@@ -21,7 +21,8 @@ import { IPC, type LaunchRequest, type Result } from '../shared/ipc.ts'
 import { lookup as dnsLookup } from 'node:dns/promises'
 import { openTerminalLink, type LinkResult } from './policy.ts'
 import { isTrustedSender } from './security.ts'
-import { checkAnswer, checkCopy, checkLaunch, droppedPaths, isSessionId, isSize, isText } from './validate.ts'
+import { checkAnswer, checkCopy, checkLaunch, droppedPaths, isSessionId, isSize, isText, isWholeDisk } from './validate.ts'
+import { realPath } from './mod-backfill.ts'
 
 function fail(err: unknown): Result {
   if (err instanceof WorkspaceNotTrusted) return { ok: false, error: err.message, kind: 'untrusted', variant: err.variant }
@@ -33,6 +34,17 @@ function fail(err: unknown): Result {
 
 /** Channels that act on sessions: refused while the app is read-only. */
 const WRITES = new Set<string>([IPC.launch, IPC.startCopy, IPC.moveIn, IPC.resume, IPC.confirmSettings, IPC.stop, IPC.answer, IPC.sendPrompt, IPC.focusOpen, IPC.trustStart])
+
+const WHOLE_DISK = 'Choose a folder other than the whole disk.'
+
+/**
+ * A folder that is the disk root, or a link to it (MIP2-1603 M-1): the
+ * restart check refuses a session recorded there at its first sighting, so
+ * it isn't launched.
+ */
+export function onWholeDisk(cwd: string, real: (p: string) => string = realPath): boolean {
+  return isWholeDisk(cwd) || real(cwd) === '/'
+}
 
 export interface ControlDeps {
   host: SessionHost
@@ -62,6 +74,7 @@ export interface ControlDeps {
   launchedHere?: (sessionId: string) => boolean
   /** A resume from the app re-keyed its channel: the app's copy of the untrusted mark is cleared (pass 4, M-2). */
   onRekeyed?: (sessionId: string) => void
+  onRekeying?: (sessionId: string) => (() => void) | void
   /** Why the session's mod copy can't be resumed on, or null (pass 6, H-1). */
   modStuck?: (sessionId: string) => string | null
   /** App-launched with no record of its mod copy: found from its saved options and checked first (MIP2-1504). */
@@ -99,6 +112,7 @@ export function registerControl({
   metaOf = () => undefined,
   launchedHere = () => false,
   onRekeyed = () => {},
+  onRekeying = () => {},
   modStuck = () => null,
   unrecorded = () => false,
   backfill = () => null,
@@ -125,6 +139,7 @@ export function registerControl({
   invoke(IPC.launch, async (req: unknown) => {
     const r = checkLaunch(req)
     if (!r) return { ok: false, error: 'bad launch request' }
+    if (onWholeDisk(r.cwd)) return { ok: false, error: WHOLE_DISK }
     try {
       const { fromSession, ...opts } = r
       const launched = await host.launch(opts)
@@ -142,11 +157,10 @@ export function registerControl({
     const why = copyRefusal(snapshotOf(id), launchedHere(id))
     if (why) return { ok: false, error: why }
     try {
-      const { prompt: _prompt, fromSession: _from, ...opts } = r
-      const copy = await host.startCopy(id, opts)
+      const copy = await host.startCopy(id, r)
       // Recorded with the folder the host started it in, the session's own: the restart check compares it with Claude
       // Code's saved folder (MIP2-1602).
-      onLaunched(copy.sessionId, { ...opts, cwd: copy.cwd }, { copyOf: id })
+      onLaunched(copy.sessionId, { ...r, cwd: copy.cwd }, { copyOf: id })
       return { ok: true, sessionId: copy.sessionId }
     } catch (err) {
       return fail(err)
@@ -185,7 +199,7 @@ export function registerControl({
     // second job beside it (QA MIP2-1559, r8). Opening it attaches, where Alex answers (MIP2-1558).
     if (snapshotOf(id)?.jobNeeds) throw new Error("it's waiting on something in the session. Open it to answer there; resuming would start a copy beside it")
     await resumes
-      .run(id, () => resumeFromApp(id, { host, hub, onRekeyed, modStuck, unrecorded, backfill, errorFor }), { fresh })
+      .run(id, () => resumeFromApp(id, { host, hub, onRekeyed, onRekeying, modStuck, unrecorded, backfill, errorFor }), { fresh })
       .catch(err => {
         if (err instanceof ResumedAsCopy) onResumedAsCopy(id, err.copyId)
         throw err
@@ -321,6 +335,7 @@ export function registerControl({
     const target = r0.resume ? moveTarget(r0.resume) : null
     if (r0.resume && !target) return { ok: false, error: "the app doesn't know this session's folder" }
     const r = target ? { ...target, resume: r0.resume } : r0
+    if (onWholeDisk(r.cwd)) return { ok: false, error: WHOLE_DISK }
     try {
       return { ok: true, runId: await trust.start(r, cols, rows) }
     } catch (err) {

@@ -21,6 +21,7 @@ function deps(o: { running: boolean; channel: boolean; untrusted?: string | null
         clearMark: async () => (steps.push('clear-mark'), true),
       },
       onRekeyed: () => void steps.push('cleared'),
+      onRekeying: (): (() => void) | void => void steps.push('rekeyed'),
     },
   }
 }
@@ -30,7 +31,7 @@ describe('a session with no record of its mod copy (MIP2-1504)', () => {
     const { steps, d } = deps({ running: false, channel: true })
     let recorded = false
     await resumeFromApp(SID, { ...d, unrecorded: () => true, backfill: () => ((recorded = true), null), modStuck: () => (recorded ? null : 'unrecorded') })
-    expect(steps).toEqual(['not-running', 'rekey-keep', 'resume', 'clear-mark', 'cleared'])
+    expect(steps).toEqual(['not-running', 'rekey-keep', 'rekeyed', 'resume', 'clear-mark', 'cleared'])
   })
 
   it('refuses with the reason, before anything else, when the copy can\'t be found or checked', async () => {
@@ -47,13 +48,13 @@ describe('resumeFromApp', () => {
   it('stops a running session before the re-key, so no process keeps the old secret', async () => {
     const { steps, d } = deps({ running: true, channel: true })
     await resumeFromApp(SID, d)
-    expect(steps).toEqual(['stop', 'rekey-keep', 'resume', 'clear-mark', 'cleared'])
+    expect(steps).toEqual(['stop', 'rekey-keep', 'rekeyed', 'resume', 'clear-mark', 'cleared'])
   })
 
   it('re-keys and resumes a stopped session', async () => {
     const { steps, d } = deps({ running: false, channel: true })
     await resumeFromApp(SID, d)
-    expect(steps).toEqual(['not-running', 'rekey-keep', 'resume', 'clear-mark', 'cleared'])
+    expect(steps).toEqual(['not-running', 'rekey-keep', 'rekeyed', 'resume', 'clear-mark', 'cleared'])
   })
 
   it('resumes a session with no channel as it is, and refuses an untrusted one whose channel is gone', async () => {
@@ -71,7 +72,39 @@ describe('resumeFromApp', () => {
       throw new Error('trust refused')
     }
     await expect(resumeFromApp(SID, d)).rejects.toThrow('trust refused')
-    expect(steps).toEqual(['not-running', 'rekey-keep'])
+    expect(steps).toEqual(['not-running', 'rekey-keep', 'rekeyed'])
+  })
+
+  it('puts back the refusal of the next process when the resume fails (gate pass 33, L-3)', async () => {
+    const { steps, d } = deps({ running: false, channel: true })
+    d.onRekeying = () => (steps.push('lifted'), () => void steps.push('rearmed'))
+    d.host.resume = async () => {
+      throw new Error('trust refused')
+    }
+    await expect(resumeFromApp(SID, d)).rejects.toThrow('trust refused')
+    expect(steps).toEqual(['not-running', 'rekey-keep', 'lifted', 'rearmed'])
+    const ok = deps({ running: false, channel: true })
+    ok.d.onRekeying = () => (ok.steps.push('lifted'), () => void ok.steps.push('rearmed'))
+    await resumeFromApp(SID, ok.d)
+    expect(ok.steps).not.toContain('rearmed')
+  })
+
+  it('puts back the lift when clearing the mark throws (gate pass 36, L-1)', async () => {
+    const { steps, d } = deps({ running: false, channel: true })
+    d.onRekeying = () => (steps.push('lifted'), () => void steps.push('rearmed'))
+    d.hub.clearMark = async () => {
+      throw new Error('rm failed')
+    }
+    await expect(resumeFromApp(SID, d)).rejects.toThrow('rm failed')
+    expect(steps).toEqual(['not-running', 'rekey-keep', 'lifted', 'resume', 'rearmed'])
+  })
+
+  it('puts back the refusal of the next process when the mark stays after the resume (gate pass 34, L-1)', async () => {
+    const { steps, d } = deps({ running: false, channel: true })
+    d.onRekeying = () => (steps.push('lifted'), () => void steps.push('rearmed'))
+    d.hub.clearMark = async () => (steps.push('mark-kept'), false)
+    await resumeFromApp(SID, d)
+    expect(steps).toEqual(['not-running', 'rekey-keep', 'lifted', 'resume', 'mark-kept', 'rearmed'])
   })
 
   it("doesn't resume or clear the mark when the stop or the re-key fails", async () => {
@@ -100,7 +133,7 @@ describe('resumeFromApp', () => {
     const { steps, d } = deps({ running: false, channel: true })
     d.hub.clearMark = async () => (steps.push('kept'), false)
     await resumeFromApp(SID, d)
-    expect(steps).toEqual(['not-running', 'rekey-keep', 'resume', 'kept'])
+    expect(steps).toEqual(['not-running', 'rekey-keep', 'rekeyed', 'resume', 'kept'])
   })
 })
 

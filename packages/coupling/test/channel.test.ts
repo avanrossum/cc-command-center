@@ -471,7 +471,9 @@ describe('ChannelHub', () => {
       const second = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, versions, replyKeys: unreadable, onUntrusted: (id, why) => void stopped.push([id, why]) })
       await second.recover()
       expect(stopped).toEqual([])
-      second.markSession(A_ID, 'Claude Code restarted it by itself, and its saved options hold flags the app never passed')
+      expect(second.markSession(A_ID, 'Claude Code restarted it by itself, and its saved options hold flags the app never passed')).toBe(true)
+      // With no channel for it, the caller marks and stops it (gate pass 34, M-1).
+      expect(second.markSession('c0ffee09-0000-4000-8000-000000000009', 'x')).toBe(false)
       expect(stopped).toEqual([[A_ID, 'Claude Code restarted it by itself, and its saved options hold flags the app never passed']])
       expect(existsSync(join(root, l.channelId, 'untrusted'))).toBe(true)
       await second.closeAll()
@@ -526,7 +528,7 @@ describe('ChannelHub', () => {
       const gone: ReplyKeys = { ...kept, persistent: true, read: () => ({ state: 'missing' }), set: id => void sets.push(id) }
       const second = new ChannelHub({ modDir: '/mod', root, longPollMs: 300, log: () => {}, versions, replyKeys: gone })
       await second.recover()
-      expect(second.untrustedReason(A_ID)).toBe('its reply key file was removed. Resume it from the app to give it a new one')
+      expect(second.untrustedReason(A_ID)).toBe('no kept reply key was found for it. Resume it from the app to give it a new one')
       expect(sets).toEqual([])
       expect(readFileSync(l.settingsPath, 'utf8')).toBe(before)
       await second.closeAll()

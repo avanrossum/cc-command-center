@@ -33,7 +33,7 @@ Releases are published at [Releases](https://github.com/avanrossum/cc-command-ce
 
 - **Categories.** Sessions sort themselves into categories by folder. You can also place them by hand.
 - **Launch, resume, stop.** Sessions run as Claude Code background sessions, so they keep running when the app quits.
-- **Security checks.** Each session talks to the app over its own private channel. The app watches that channel and its reporter mod for changes, and shows an alert you can't dismiss when something it relies on was changed.
+- **Security checks.** Each session talks to the app over its own private channel. The app watches that channel and its reporter mod for changes, and shows an alert you can't dismiss when something it relies on was changed. One known limit: a program running as you could change a session's saved settings, restart it from the command line, and put the settings back before the app's next check, and the app wouldn't notice.
 
 ## How it differs from 0.24
 

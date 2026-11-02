@@ -109,6 +109,11 @@ describe('control checks', async () => {
     [{ cwd: '/w', extraArgs: ['--plugin-dir=/evil'] }],
     [{ cwd: '/w', extraArgs: ['--', 'prompt'] }],
     [{ cwd: '/w', extraArgs: '--verbose' }],
+    // Malformed, without a throw (gate pass 43, L-1).
+    [{ cwd: '/w', extraArgs: null }],
+    [{ cwd: '/w', extraArgs: {} }],
+    [{ cwd: '/w', extraArgs: 3 }],
+    [{ cwd: '/w', extraArgs: true }],
     [{ cwd: '/w', ultracode: 'yes' }],
     [null],
   ])('refuses %o', req => expect(checkLaunch(req)).toBeNull())

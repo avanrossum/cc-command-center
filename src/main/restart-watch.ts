@@ -60,25 +60,28 @@ export class RestartWatch {
    * across app starts until a resume from the app clears it: that process,
    * first seen after a restart of the app, is still refused, with no new
    * verdict to pass on options rewritten meanwhile (gate pass 28, M-1).
-   * `markedWithoutStart`: the session was marked untrusted by a build before
-   * refused starts were kept, as the store flags once (gate pass 29, L-1;
-   * pass 30, M-2); a mark made since isn't one.
+   * `refusesNextProcess`: the store flagged the session's next first
+   * sighting as refused (refuseNextProcess): a mark from before refused starts were
+   * kept, a refusal the watch couldn't place, or a dropped refused start
+   * (gate pass 29, L-1; pass 30, M-2; pass 31).
    */
   constructor(
     private readonly now: () => number = Date.now,
     private readonly verifiedStart?: (sessionId: string) => number | undefined,
     private readonly isRefusedStart?: (sessionId: string, startedAt: number) => boolean,
-    private readonly markedWithoutStart?: (sessionId: string) => boolean,
+    private readonly refusesNextProcess?: (sessionId: string) => boolean,
   ) {}
 
   /**
    * The check refused the session's current process; it's kept refused while
    * that pid is listed (gate pass 27, M-2). Returns its `startedAt`, for the
-   * store to keep.
+   * store to keep; undefined when the watch has no live process for it, never
+   * seen, stopped or gone, so the refusal falls on the next one instead
+   * (gate pass 33, M-1).
    */
   refuse(sessionId: string): number | undefined {
     const last = this.seen.get(sessionId)
-    if (!last) return undefined
+    if (!last || last.stopped || last.goneAt !== undefined) return undefined
     this.refusedPid.set(sessionId, last.pid)
     return last.startedAt
   }
@@ -139,9 +142,9 @@ export class RestartWatch {
       this.refusedPid.delete(s.sessionId)
       // The same process: the same pid and start. A reused pid with another start is a new process (gate pass 30, L-1).
       if (before?.pid === s.pid && before.startedAt === s.startedAt) continue
-      // Marked untrusted by a build that kept no refused start: its first process seen is refused until a resume from the
-      // app clears the mark, unless it's the one the app verified (gate pass 29, L-1).
-      if (!before && this.markedWithoutStart?.(s.sessionId) && s.startedAt !== this.verifiedStart?.(s.sessionId)) {
+      // Flagged for it (the store's refuseNextProcess): its first process seen is refused until a resume from the app clears the
+      // mark, with no exemption for a start verified before (gate pass 29, L-1; pass 31, M-1).
+      if (!before && this.refusesNextProcess?.(s.sessionId)) {
         this.refusedPid.set(s.sessionId, s.pid)
         this.stillRefused.push(s.sessionId)
         continue

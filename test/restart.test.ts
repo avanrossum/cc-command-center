@@ -183,5 +183,16 @@ describe('ResumeGate (gate pass 30, L-2)', () => {
     await gate.run(SID, async () => void runs++, { fresh: true })
     expect(runs).toBe(2)
   })
+
+  it('joins a resume in flight, a confirmed one too (gate pass 31, L-4)', async () => {
+    const gate = new ResumeGate(() => 0)
+    let runs = 0
+    let release = () => {}
+    const first = gate.run(SID, () => new Promise<void>(r => ((runs++), (release = r))))
+    const confirmed = gate.run(SID, async () => void runs++, { fresh: true })
+    release()
+    await Promise.all([first, confirmed])
+    expect(runs).toBe(1)
+  })
 })
 

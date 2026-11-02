@@ -153,19 +153,22 @@ export function NewSession({
     source?.kind === 'settings' ? `Launch settings · ${srcName}` : source?.kind === 'resume' ? `Resume ${srcName} with different settings` : source?.kind === 'from' ? `Start a session from ${srcName}` : 'New session'
 
   const start = async () => {
-    if (!request.cwd.startsWith('/')) return setError({ text: 'Choose a folder.', variant: null })
+    // A copy runs in its session's own folder, so only a launch needs one (MIP2-1603 L-1).
+    if (!copy && !request.cwd.startsWith('/')) return setError({ text: 'Choose a folder.', variant: null })
     if (!flags.ok) return setError({ text: flags.error, variant: null })
     if (choice === 'custom' && !customModel.trim()) return setError({ text: 'Enter a model name, or choose one from the menu.', variant: null })
     setBusy(true)
     setError(null)
-    const r = copy ? await window.ccc.startCopy(source!.entry.session.sessionId, request) : await window.ccc.launch(request)
+    const { cwd: _cwd, prompt: _prompt, fromSession: _from, resume: _resume, ...copyRequest } = request
+    const r = copy ? await window.ccc.startCopy(source!.entry.session.sessionId, copyRequest) : await window.ccc.launch(request)
     setBusy(false)
     if (!r.ok) return setError({ text: r.error, variant: r.kind === 'untrusted' ? (r.variant ?? 'trust') : null })
     started(r.sessionId)
   }
 
   const started = (sessionId: string) => {
-    window.ccc.rememberLaunch(request.cwd, { model, effort, mode })
+    // A copy's folder isn't one Alex chose, so it isn't remembered as a recent launch (MIP2-1603 L-1).
+    if (!copy) window.ccc.rememberLaunch(request.cwd, { model, effort, mode })
     // `Auto` leaves the session to auto-assign; anything else is Alex's choice.
     if (category !== 'auto') void window.ccc.place(sessionId, chosenId)
     onStarted(sessionId)

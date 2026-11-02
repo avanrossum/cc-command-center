@@ -76,10 +76,9 @@ export class FleetPoller {
   private readonly readPending: FleetPollerOptions['readPending'] | null
   private readonly readUsage: FleetPollerOptions['readUsage'] | null
   private usageFile: Field<RateLimits> | null = null
-  /** The meter's last reading, held while no new one reads (MIP2-1520). */
-  /** Each window as the meter last showed it, with when it was read and from where (MIP2-1591). */
   /** When the last session list was read. */
   private listedAt: number | undefined = undefined
+  /** Each window as the meter last showed it, with when it was read and from where (MIP2-1591). */
   private readonly lastWindow: Record<'fiveHour' | 'sevenDay', { w: RateLimitWindow; at: number; source: Field<RateLimits>['source'] } | null> = { fiveHour: null, sevenDay: null }
   private readonly usageFileOnly: boolean
   private readonly readReport: () => Field<RateLimits> | null

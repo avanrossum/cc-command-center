@@ -14,6 +14,17 @@ export interface ResumeDeps {
   /** The re-key finished: the app's copy of the untrusted mark is cleared (pass 4, M-2). */
   onRekeyed: (sessionId: string) => void
   /**
+   * The channel has its new secret and the old process is stopped, before
+   * the restart (gate pass 32, M-1): the store's refusal of the session's
+   * next process first seen is lifted in memory (LiftedRefusals), so the
+   * process this resume starts
+   * gets the restart verdict instead. Any process first seen before the
+   * mark is cleared gets the verdict too, including one another path
+   * started in this window. Returns how to put the refusal back, called if
+   * the resume fails or the mark stays (gate pass 33, L-3; pass 34, L-1).
+   */
+  onRekeying?: (sessionId: string) => (() => void) | void
+  /**
    * Why the session can't be resumed on its own mod copy, or null (pass 6,
    * H-1): its copy was changed and couldn't be moved aside, or launches are
    * paused. A resume keeps the session's saved `--plugin-dir`, so it would
@@ -62,7 +73,7 @@ export class ModStuck extends Error {
 
 export async function resumeFromApp(
   sessionId: string,
-  { host, hub, onRekeyed, modStuck = () => null, unrecorded = () => false, backfill = () => 'the app has no record of which reporter mod copy this session uses', errorFor = stuckError }: ResumeDeps,
+  { host, hub, onRekeyed, onRekeying = () => {}, modStuck = () => null, unrecorded = () => false, backfill = () => 'the app has no record of which reporter mod copy this session uses', errorFor = stuckError }: ResumeDeps,
 ): Promise<void> {
   // First the copy is found and recorded, so the usual check below judges it like any other (MIP2-1504).
   if (unrecorded(sessionId)) {
@@ -72,15 +83,31 @@ export async function resumeFromApp(
   const stuck = modStuck(sessionId)
   if (stuck) throw errorFor(sessionId, stuck)
   const channel = hub.channelOf(sessionId) !== null
+  let rearm: (() => void) | undefined
   if (channel) {
     await host.stopIfRunning(sessionId)
     await hub.rekey(sessionId, { keepMark: true })
+    rearm = onRekeying(sessionId) ?? undefined
   } else if (hub.untrustedReason(sessionId)) {
     throw new Error(`its channel can't be trusted (${hub.untrustedReason(sessionId)}) and is gone, so it can't be given a new secret. Start a new session.`)
   }
-  await host.resume(sessionId)
-  // A channel changed during the resume stays marked, and so does the store's copy (pass 6, M-1).
-  if (channel && (await hub.clearMark(sessionId))) onRekeyed(sessionId)
+  try {
+    await host.resume(sessionId)
+  } catch (err) {
+    rearm?.()
+    throw err
+  }
+  // A channel changed during the resume stays marked, and so does the store's copy (pass 6, M-1), with the refusal of
+  // the next process first seen put back (gate pass 34, L-1).
+  if (!channel) return
+  // The lift never outlives the resume, even when clearing the mark throws (gate pass 36, L-1).
+  let cleared = false
+  try {
+    cleared = await hub.clearMark(sessionId)
+  } finally {
+    if (cleared) onRekeyed(sessionId)
+    else rearm?.()
+  }
 }
 
 /** How long after a resume finishes another resume of the same session is taken as a repeat (MIP2-1467). */
@@ -161,8 +188,93 @@ export function rollBackConfirmation(
   sessionId: string,
   d: { restore: (sessionId: string) => void; clearVerifiedStart: (sessionId: string) => void; forget: (sessionId: string) => void },
 ): void {
-  d.restore(sessionId)
-  d.clearVerifiedStart(sessionId)
-  d.forget(sessionId)
+  // Its process is seen afresh even if putting the record back fails (gate pass 33, L-2).
+  try {
+    d.restore(sessionId)
+  } finally {
+    d.clearVerifiedStart(sessionId)
+    d.forget(sessionId)
+  }
 }
 
+/**
+ * "Resume with these settings" for main (D-043; gate pass 31, L-1, L-4): the
+ * settings shown are recorded before the restart, only if the escalation
+ * offered and the current one both still read as shown, and only one
+ * confirmation per session at a time, so a second click can't take the
+ * first's widened record for the one to put back. A failed restart rolls
+ * back (rollBackConfirmation).
+ */
+export function confirmationFor<E, C>(d: {
+  /** The escalation each "Resume with these settings" was offered for. */
+  offered: Map<string, E>
+  escalationOf: (sessionId: string) => E | null
+  text: (e: E) => string
+  recordedOf: (sessionId: string) => C | undefined
+  record: (sessionId: string, e: E) => void
+  restore: (sessionId: string, recorded: C | undefined) => void
+  clearVerifiedStart: (sessionId: string) => void
+  forget: (sessionId: string) => void
+}): Confirmation {
+  const prior = new Map<string, C | undefined>()
+  return {
+    begin: (id, settings) => {
+      if (prior.has(id)) return 'a confirmation for it is already under way'
+      const shown = d.offered.get(id)
+      const e = d.escalationOf(id)
+      if (!shown || !e || d.text(shown) !== settings || d.text(e) !== settings) return 'its saved settings changed since they were shown. Open it again to see them'
+      const before = d.recordedOf(id)
+      // A record that fails to save is put back, and no confirmation is left under way (gate pass 32, L-2).
+      try {
+        d.record(id, e)
+      } catch (err) {
+        // The save's error is the one reported; a failure putting the record back is logged (gate pass 34, L-3).
+        try {
+          d.restore(id, before)
+        } catch (restoreErr) {
+          console.warn(`putting back the confirmed settings of ${id.slice(0, 8)}: ${String(restoreErr)}`)
+        }
+        throw err
+      }
+      prior.set(id, before)
+      return null
+    },
+    commit: id => void (prior.delete(id), d.offered.delete(id)),
+    abort: id =>
+      rollBackConfirmation(id, {
+        restore: sid => {
+          try {
+            d.restore(sid, prior.get(sid))
+          } finally {
+            prior.delete(sid)
+          }
+        },
+        clearVerifiedStart: d.clearVerifiedStart,
+        forget: d.forget,
+      }),
+  }
+}
+
+/**
+ * Sessions whose refusal of the next process first seen a resume from the
+ * app has lifted, in memory only (gate pass 32, M-1; pass 35, M-1): the
+ * store keeps the flag until the resume clears the session's mark
+ * (clearUntrusted), so an app exit mid-resume leaves it refusing.
+ */
+export class LiftedRefusals {
+  private readonly ids = new Set<string>()
+
+  /** Lifts it; returns how to put it back. */
+  lift(sessionId: string): () => void {
+    this.ids.add(sessionId)
+    return () => this.drop(sessionId)
+  }
+
+  drop(sessionId: string): void {
+    this.ids.delete(sessionId)
+  }
+
+  has(sessionId: string): boolean {
+    return this.ids.has(sessionId)
+  }
+}

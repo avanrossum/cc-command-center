@@ -1,11 +1,13 @@
 // A /clear keeps the job and process and changes the sessionId (MIP2-1557, Research MIP2-1556).
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AppStoreService } from '../src/main/app-store.ts'
 import { ClearWatch } from '../src/shared/clear.ts'
+import { RestartWatch } from '../src/main/restart-watch.ts'
+import { LiftedRefusals } from '../src/main/resume.ts'
 
 const OLD = 'c0ffee01-0000-4000-8000-000000000001'
 const NEW = 'b55a99a6-0000-4000-8000-000000000002'
@@ -78,25 +80,90 @@ describe('AppStoreService.renameSession', () => {
     store.markUntrusted(OTHER, 'its saved options hold flags the app never passed')
     store.recordRefusedStart(OTHER, 200)
     expect(store.flagLegacyMarks(10)).toBe(1)
-    expect(store.get().sessions[OLD]?.legacyMark).toBe(true)
-    expect(store.get().sessions[OTHER]?.legacyMark).toBeUndefined()
+    expect(store.get().sessions[OLD]?.refuseNextProcess).toBe(true)
+    expect(store.get().sessions[OTHER]?.refuseNextProcess).toBeUndefined()
     // A mark made since is never flagged.
     const LATER = 'd00dfeed-0000-4000-8000-000000000004'
     store.recordLaunch(LATER, { cwd: '/w' }, {}, 20)
     store.markUntrusted(LATER, 'the socket file was replaced')
     expect(store.flagLegacyMarks(30)).toBe(0)
-    expect(store.get().sessions[LATER]?.legacyMark).toBeUndefined()
-    expect(new AppStoreService(join(dir, 'store.json'), '/Users/x', () => false).get()).toMatchObject({ refusedStartsSince: 10, sessions: { [OLD]: { legacyMark: true } } })
+    expect(store.get().sessions[LATER]?.refuseNextProcess).toBeUndefined()
+    expect(new AppStoreService(join(dir, 'store.json'), '/Users/x', () => false).get()).toMatchObject({ refusedStartsSince: 10, sessions: { [OLD]: { refuseNextProcess: true } } })
     store.clearUntrusted(OLD)
-    expect(store.get().sessions[OLD]?.legacyMark).toBeUndefined()
+    expect(store.get().sessions[OLD]?.refuseNextProcess).toBeUndefined()
+  })
+
+  it('lets a resume from the app start the process a refusal at recovery would refuse, lifted in memory only (gate pass 32, M-1; pass 35, M-1)', () => {
+    const store = new AppStoreService(join(dir, 'store.json'), '/Users/x', () => false)
+    store.recordLaunch(OLD, { cwd: '/w' }, {}, 1)
+    store.markUntrusted(OLD, 'the socket file was replaced')
+    // Recovery marks the channel before any process is seen, so the refusal falls on the next first sighting.
+    store.refuseNextSighting(OLD)
+    const lifted = new LiftedRefusals()
+    const watch = (s: AppStoreService) => new RestartWatch(() => 0, () => undefined, undefined, id => !lifted.has(id) && s.get().sessions[id]?.refuseNextProcess === true)
+    const before = watch(store)
+    before.observe([{ sessionId: OLD, pid: 300, startedAt: 300 }])
+    expect(before.stillRefused).toEqual([OLD])
+    // The resume re-keys, then lifts it before the restart; the poll may land before the mark itself is cleared.
+    const rearm = lifted.lift(OLD)
+    const after = watch(store)
+    after.observe([{ sessionId: OLD, pid: 300, startedAt: 300 }])
+    expect(after.stillRefused).toEqual([])
+    expect(after.unverified).toEqual([OLD])
+    // The app exits mid-resume: the saved flag still refuses the next process first seen.
+    const reopened = new AppStoreService(join(dir, 'store.json'), '/Users/x', () => false)
+    const fresh = new RestartWatch(() => 0, () => undefined, undefined, id => reopened.get().sessions[id]?.refuseNextProcess === true)
+    fresh.observe([{ sessionId: OLD, pid: 300, startedAt: 300 }])
+    expect(fresh.stillRefused).toEqual([OLD])
+    // A failed resume puts the lift back in this run too.
+    rearm()
+    const again = watch(store)
+    again.observe([{ sessionId: OLD, pid: 300, startedAt: 300 }])
+    expect(again.stillRefused).toEqual([OLD])
+  })
+
+  it('also saves the flag as legacyMark, for a downgrade to 1.0.2-beta.5, and clears both together (gate pass 36, L-3)', () => {
+    const store = new AppStoreService(join(dir, 'store.json'), '/Users/x', () => false)
+    store.recordLaunch(OLD, { cwd: '/w' }, {}, 1)
+    store.markUntrusted(OLD, 'the socket file was replaced')
+    store.refuseNextSighting(OLD)
+    const saved = () => JSON.parse(readFileSync(join(dir, 'store.json'), 'utf8')).sessions[OLD]
+    expect(saved()).toMatchObject({ refuseNextProcess: true, legacyMark: true })
+    expect(store.get().sessions[OLD]).not.toHaveProperty('legacyMark')
+    store.clearUntrusted(OLD)
+    expect(saved()).not.toHaveProperty('refuseNextProcess')
+    expect(saved()).not.toHaveProperty('legacyMark')
+  })
+
+  it('reads the flag 1.0.2-beta.5 saved as legacyMark (gate pass 35, L-3)', () => {
+    writeFileSync(join(dir, 'store.json'), JSON.stringify({ version: 1, sessions: { [OLD]: { categoryId: null, placedBy: null, untrusted: 'x', legacyMark: true } } }))
+    const store = new AppStoreService(join(dir, 'store.json'), '/Users/x', () => false)
+    expect(store.get().sessions[OLD]?.refuseNextProcess).toBe(true)
+  })
+
+  it('refuses the next first sighting, dropping a verified start, when flagging marks or booking a refusal it could not place (gate pass 31, M-1, M-2)', () => {
+    const store = new AppStoreService(join(dir, 'store.json'), '/Users/x', () => false)
+    store.recordLaunch(OLD, { cwd: '/w' }, {}, 1)
+    store.recordLaunch(OTHER, { cwd: '/w' }, {}, 1)
+    store.recordVerifiedStarts([[OLD, 200], [OTHER, 300]])
+    store.markUntrusted(OLD, 'the socket file was replaced')
+    expect(store.flagLegacyMarks(10)).toBe(1)
+    expect(store.get().sessions[OLD]).toMatchObject({ refuseNextProcess: true })
+    expect(store.get().sessions[OLD]?.verifiedStartedAt).toBeUndefined()
+    store.refuseNextSighting(OTHER)
+    expect(store.get().sessions[OTHER]).toMatchObject({ refuseNextProcess: true })
+    expect(store.get().sessions[OTHER]?.verifiedStartedAt).toBeUndefined()
   })
 
   it('says which refused start it dropped to keep the latest 16 (gate pass 30, L-4)', () => {
     const store = new AppStoreService(join(dir, 'store.json'), '/Users/x', () => false)
     store.recordLaunch(OLD, { cwd: '/w' }, {}, 1)
     for (let i = 1; i <= 16; i++) expect(store.recordRefusedStart(OLD, i)).toBeUndefined()
+    expect(store.get().sessions[OLD]?.refuseNextProcess).toBeUndefined()
     expect(store.recordRefusedStart(OLD, 17)).toBe(1)
     expect(store.get().sessions[OLD]?.refusedStarts).toHaveLength(16)
+    // Its process, if it still runs, is refused at its next first sighting (gate pass 31, L-3).
+    expect(store.get().sessions[OLD]?.refuseNextProcess).toBe(true)
   })
 
   it('puts confirmed settings back as they were when a confirmation does not go through (D-043 prototype)', () => {

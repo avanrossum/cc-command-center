@@ -98,8 +98,14 @@ export interface SessionMeta {
   verifiedStartedAt?: number
   /** The `startedAt` of each process the restart check refused, the latest 16, kept until a resume from the app clears the mark (gate pass 28, M-1; pass 29, M-1). */
   refusedStarts?: number[]
-  /** Marked untrusted before this build kept refused starts: its first process seen is refused until a resume from the app (gate pass 29, L-1; pass 30, M-2). */
-  legacyMark?: boolean
+  /**
+   * Its next process first seen is refused, until a resume from the app: set
+   * for a mark from before this build kept refused starts, a refusal raised
+   * before the watch saw the process, and a refused start dropped from the
+   * list (gate pass 29, L-1; pass 30, M-2; pass 31, M-1, M-2, L-3).
+   * Saved as `legacyMark` by 1.0.2-beta.5 and read from either name.
+   */
+  refuseNextProcess?: boolean
   /** Started as a copy of this session, with new settings: the card reads "copy of <name>". */
   copyOf?: string
   /** Started from this session (D-014): the card reads "from <name>". */

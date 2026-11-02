@@ -2,7 +2,7 @@
 // they're tested without Electron. The renderer is treated as able to send
 // anything.
 
-import type { AnswerRequest, LaunchRequest } from '../shared/ipc.ts'
+import type { AnswerRequest, CopyRequest, LaunchRequest } from '../shared/ipc.ts'
 import { checkFlags } from '../shared/flags.ts'
 import { SIDEBAR_WIDTH, type Category } from '../shared/store.ts'
 import { resolve } from 'node:path'
@@ -32,47 +32,21 @@ export function isWholeDisk(cwd: string): boolean {
   return resolve(cwd) === '/'
 }
 
-/** A launch request with only known fields and values; null if anything is off. */
+/**
+ * A launch request with only known fields and values; null if anything is
+ * off, including a folder that is the whole disk, which the restart check
+ * would refuse at the session's first sighting (MIP2-1603 M-1).
+ */
 export function checkLaunch(v: unknown): LaunchRequest | null {
   if (typeof v !== 'object' || v === null) return null
   const r = v as Record<string, unknown>
-  if (typeof r.cwd !== 'string' || !r.cwd.startsWith('/') || r.cwd.length > 4096 || r.cwd.includes('\0')) return null
-  const rest = checkCopy(v)
-  return rest && { cwd: r.cwd, ...rest }
-}
-
-/**
- * A copy's request: a launch's settings without a folder, which any `cwd`
- * sent is ignored for, since a copy runs in its session's own folder
- * (MIP2-1602).
- */
-export function checkCopy(v: unknown): Omit<LaunchRequest, 'cwd'> | null {
-  if (typeof v !== 'object' || v === null) return null
-  const r = v as Record<string, unknown>
-  const out: Omit<LaunchRequest, 'cwd'> = {}
-  if (r.name !== undefined) {
-    if (typeof r.name !== 'string' || !NAME.test(r.name)) return null
-    out.name = r.name
-  }
-  if (r.model !== undefined) {
-    if (typeof r.model !== 'string' || !MODEL.test(r.model)) return null
-    out.model = r.model
-  }
-  if (r.effort !== undefined) {
-    if (typeof r.effort !== 'string' || !EFFORTS.has(r.effort)) return null
-    out.effort = r.effort
-  }
-  if (r.permissionMode !== undefined) {
-    if (typeof r.permissionMode !== 'string' || !MODES.has(r.permissionMode)) return null
-    out.permissionMode = r.permissionMode
-  }
+  if (typeof r.cwd !== 'string' || !r.cwd.startsWith('/') || r.cwd.length > 4096 || r.cwd.includes('\0') || isWholeDisk(r.cwd)) return null
+  // Checked before anything is built from it: settingsOf assumes well-formed settings (gate pass 43, L-1).
+  if (!settingsOk(r)) return null
+  const out: LaunchRequest = { cwd: r.cwd, ...settingsOf(r) }
   if (r.prompt !== undefined) {
     if (!isText(r.prompt)) return null
     out.prompt = r.prompt
-  }
-  if (r.isolation !== undefined) {
-    if (r.isolation !== 'none' && r.isolation !== 'worktree') return null
-    out.isolation = r.isolation
   }
   if (r.resume !== undefined) {
     if (!isSessionId(r.resume)) return null
@@ -82,15 +56,47 @@ export function checkCopy(v: unknown): Omit<LaunchRequest, 'cwd'> | null {
     if (!isSessionId(r.fromSession)) return null
     out.fromSession = r.fromSession
   }
-  if (r.ultracode !== undefined) {
-    if (typeof r.ultracode !== 'boolean') return null
-    out.ultracode = r.ultracode
-  }
-  if (r.extraArgs !== undefined) {
-    // The app's own flags are refused here too, whatever the window sent.
-    const f = Array.isArray(r.extraArgs) ? checkFlags(r.extraArgs) : null
-    if (!f?.ok) return null
-    out.extraArgs = f.args
+  return out
+}
+
+/**
+ * A copy's request (MIP2-1602; MIP2-1603 L-2): a launch's settings, with no
+ * folder (a copy runs in its session's own; any `cwd` sent is ignored), and
+ * refused when it carries a prompt, a resume or a source session, which
+ * only a launch takes.
+ */
+export function checkCopy(v: unknown): CopyRequest | null {
+  if (typeof v !== 'object' || v === null) return null
+  const r = v as Record<string, unknown>
+  if (r.prompt !== undefined || r.resume !== undefined || r.fromSession !== undefined) return null
+  return settingsOk(r) ? settingsOf(r) : null
+}
+
+/** Whether every launch setting present is well formed. */
+function settingsOk(r: Record<string, unknown>): boolean {
+  if (r.name !== undefined && (typeof r.name !== 'string' || !NAME.test(r.name))) return false
+  if (r.model !== undefined && (typeof r.model !== 'string' || !MODEL.test(r.model))) return false
+  if (r.effort !== undefined && (typeof r.effort !== 'string' || !EFFORTS.has(r.effort))) return false
+  if (r.permissionMode !== undefined && (typeof r.permissionMode !== 'string' || !MODES.has(r.permissionMode))) return false
+  if (r.isolation !== undefined && r.isolation !== 'none' && r.isolation !== 'worktree') return false
+  if (r.ultracode !== undefined && typeof r.ultracode !== 'boolean') return false
+  // The app's own flags are refused here too, whatever the window sent.
+  if (r.extraArgs !== undefined && !(Array.isArray(r.extraArgs) && checkFlags(r.extraArgs).ok)) return false
+  return true
+}
+
+/** The launch settings present, once settingsOk passed. */
+function settingsOf(r: Record<string, unknown>): CopyRequest {
+  const out: CopyRequest = {}
+  if (r.name !== undefined) out.name = r.name as string
+  if (r.model !== undefined) out.model = r.model as string
+  if (r.effort !== undefined) out.effort = r.effort as string
+  if (r.permissionMode !== undefined) out.permissionMode = r.permissionMode as string
+  if (r.isolation !== undefined) out.isolation = r.isolation as 'none' | 'worktree'
+  if (r.ultracode !== undefined) out.ultracode = r.ultracode as boolean
+  if (Array.isArray(r.extraArgs)) {
+    const f = checkFlags(r.extraArgs)
+    if (f.ok) out.extraArgs = f.args
   }
   return out
 }
