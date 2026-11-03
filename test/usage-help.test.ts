@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { field, type SessionSnapshot } from '@ccc/contract'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ArbiterLog } from '../src/main/arbiter.ts'
-import { checkTipFacts, keptTips, tipsPrompt, UsageTips, type TipsCall } from '../src/main/usage-tips.ts'
+import { ArbiterLog, callBoundUsd, MAX_TOKENS } from '../src/main/arbiter.ts'
+import { checkTipFacts, keptTips, tipsPrompt, TIPS_SYSTEM, UsageTips, type TipsCall } from '../src/main/usage-tips.ts'
 import { ABSENT, paceOf, type Reading } from '../src/renderer/model/pace.ts'
 import { noteBaselines, plainHelp, sharesOf, statusLine, tipFacts } from '../src/renderer/model/usage-help.ts'
 
@@ -115,6 +115,35 @@ describe('the Arbiter tips (MIP2-1498 §4.5 item 3)', () => {
     tick(10 * 60_000)
     await t.get(facts)
     expect(calls).toBe(2)
+  })
+
+  it('asks again when the windows change, not only after 10 minutes (gate pass 46, L-1)', async () => {
+    let calls = 0
+    const { t } = make(async () => (calls++, { tips: [], usage: { input_tokens: 1, output_tokens: 1 } }))
+    await t.get(facts)
+    await t.get(facts)
+    expect(calls).toBe(1)
+    await t.get({ ...facts, windows: facts.windows.filter(w => w.kind === '7d'), fiveHour: 'not reported' })
+    expect(calls).toBe(2)
+  })
+
+  it('shares a call in flight only with a request about the same windows (gate pass 47, L-2)', async () => {
+    let calls = 0
+    const { t } = make(async () => (calls++, { tips: [], usage: { input_tokens: 1, output_tokens: 1 } }))
+    const weekOnly = { ...facts, windows: facts.windows.filter(w => w.kind === '7d'), fiveHour: 'not reported' as const }
+    await Promise.all([t.get(facts), t.get(facts), t.get(weekOnly)])
+    expect(calls).toBe(2)
+  })
+
+  it('waits for a call about other windows before checking the cap, so its cost counts (gate pass 48, L-3)', async () => {
+    let calls = 0
+    // Each call costs the whole cap, and the cap holds one call's bound, not two (gate pass 53, L-2).
+    const { t } = make(async () => (calls++, { tips: [], usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 } }), callBoundUsd(TIPS_SYSTEM, tipsPrompt(facts), MAX_TOKENS.tips) * 1.5)
+    const weekOnly = { ...facts, windows: facts.windows.filter(w => w.kind === '7d'), fiveHour: 'not reported' as const }
+    const [first, second] = await Promise.all([t.get(facts), t.get(weekOnly)])
+    expect(calls).toBe(1)
+    expect(first.ok).toBe(true)
+    expect(second).toMatchObject({ ok: false, reason: 'capped' })
   })
 
   it('stops at the cap, and reports off or a failure', async () => {

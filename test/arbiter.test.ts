@@ -7,7 +7,9 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { Arbiter, ArbiterLog, checkRanking, costUsd, SYSTEM_PROMPT, userPrompt, waitingItems, type Ask, type Ranking } from '../src/main/arbiter.ts'
+import { Arbiter, ArbiterLog, callBoundUsd, CALL_RESERVE_USD, MAX_TOKENS, checkRanking, costUsd, SYSTEM_PROMPT, userPrompt, waitingItems, type Ask, type Ranking } from '../src/main/arbiter.ts'
+import { UsageTips } from '../src/main/usage-tips.ts'
+import { Summaries } from '../src/main/summaries.ts'
 import { emptyStore, type AppStore } from '../src/shared/store.ts'
 
 const T = 1_793_000_000_000
@@ -169,7 +171,75 @@ describe('Arbiter', () => {
     const a = new Arbiter({ ask: counted, log, capUsd: () => cap, enabled: () => true, now: () => now })
     return { a, calls: () => calls }
   }
+  const rankBound = () => callBoundUsd(SYSTEM_PROMPT, userPrompt(two(), now), MAX_TOKENS.rank)
   const answer: Ask = async () => ({ ranking: { order: [{ key: 's1', reason: 'r' }, { key: 's2', reason: '' }], start: null }, usage })
+
+  it('shares one reservation with the usage tips, so a ranking and a tips call never pass the cap together (gate pass 50, L-2)', async () => {
+    let release: () => void = () => {}
+    const slow: Ask = () => new Promise(r => (release = () => r({ ranking: { order: [{ key: 's1', reason: 'r' }, { key: 's2', reason: '' }], start: null }, usage })))
+    // Room for the ranking's bound, not for the tips call's beside it (gate pass 53, L-2).
+    const cap = rankBound() * 1.01
+    const { a } = arbiter(slow, cap)
+    let tipsCalls = 0
+    const tips = new UsageTips({ call: async () => (tipsCalls++, { tips: [], usage }), log, capUsd: () => cap, enabled: () => true, now: () => now })
+    const ranking = a.consider(two())
+    const facts = { windows: [], sessions: [] }
+    // The tips call waits for the ranking in flight, then finds the cap spent by it (gate pass 51, L-1).
+    const pending = tips.get(facts)
+    await new Promise(r => setTimeout(r, 0))
+    expect(tipsCalls).toBe(0)
+    release()
+    expect((await ranking)?.status).toBe('ranked')
+    expect(await pending).toMatchObject({ ok: false, reason: 'capped' })
+    expect(tipsCalls).toBe(0)
+  })
+
+  it('waits for a call in flight below the cap, then makes its own, with nothing marked capped (gate pass 51, L-1/L-4)', async () => {
+    let release: () => void = () => {}
+    const cheap = { input_tokens: 10, output_tokens: 10 }
+    const slow: Ask = () => new Promise(r => (release = () => r({ ranking: { order: [{ key: 's1', reason: 'r' }, { key: 's2', reason: '' }], start: null }, usage: cheap })))
+    const { a } = arbiter(slow, CALL_RESERVE_USD * 1.5)
+    let tipsCalls = 0
+    const tips = new UsageTips({ call: async () => (tipsCalls++, { tips: [], usage: cheap }), log, capUsd: () => CALL_RESERVE_USD * 1.5, enabled: () => true, now: () => now })
+    const ranking = a.consider(two())
+    const pending = tips.get({ windows: [], sessions: [] })
+    release()
+    expect((await ranking)?.status).toBe('ranked')
+    expect(await pending).toMatchObject({ ok: true })
+    expect(tipsCalls).toBe(1)
+    expect(log.entries().some(e => e.kind === 'capped')).toBe(false)
+  })
+
+  it('makes a card summary wait for a ranking in flight, and refuses it once that spends the cap (gate pass 51, M-1)', async () => {
+    let release: () => void = () => {}
+    const slow: Ask = () => new Promise(r => (release = () => r({ ranking: { order: [{ key: 's1', reason: 'r' }, { key: 's2', reason: '' }], start: null }, usage })))
+    const cap = rankBound() * 1.01
+    const { a } = arbiter(slow, cap)
+    let summaries = 0
+    const s = new Summaries({ summarize: async () => (summaries++, { summary: 'x', usage }), log, capUsd: () => cap, enabled: () => true, optedIn: () => true, onChange: () => {}, now: () => now })
+    const ranking = a.consider(two())
+    const offered = s.offer('a', { at: 1, text: 'Fixed it.' })
+    release()
+    await ranking
+    await offered
+    expect(summaries).toBe(0)
+  })
+
+  it("reserves each call's upper bound, so two calls in flight can't overshoot the cap together (gate pass 53, L-2)", async () => {
+    const bound = callBoundUsd('s'.repeat(100), 'u'.repeat(1000), MAX_TOKENS.summary)
+    expect(bound).toBeCloseTo(((1100 + 1000) * 0.1 + 256 * 0.5) / 1_000_000, 10)
+    // By UTF-8 bytes: an emoji is four (gate pass 54, L-1).
+    expect(callBoundUsd('', '\u{1F600}', 0)).toBeCloseTo(((4 + 1000) * 0.1) / 1_000_000, 12)
+    const order: string[] = []
+    let release: () => void = () => {}
+    const first = log.withReservation(() => now, () => bound * 1.5, () => new Promise<void>(r => (release = () => (order.push('first'), r()))), bound)
+    const second = log.withReservation(() => now, () => bound * 1.5, async () => void order.push('second'), bound)
+    await new Promise(r => setTimeout(r, 0))
+    expect(order).toEqual([])
+    release()
+    await Promise.all([first, second])
+    expect(order).toEqual(['first', 'second'])
+  })
 
   it('is off without a key, and makes no call for fewer than two waiting', async () => {
     expect((await arbiter(null).a.consider(two()))?.status ?? 'off').toBe('off')

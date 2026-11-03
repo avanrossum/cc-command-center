@@ -20,6 +20,7 @@ import { reporterFields, type ReporterFields, type ReporterRead } from './report
 import type { ReporterFile } from '../../../mod/hooks/wire.ts'
 import type { ChannelHealth, SelfCheck } from './self-check.ts'
 import type { SessionHost } from './session-host.ts'
+import { REPORT_FRESH_MS } from './usage-report.ts'
 
 /** A mod that hasn't been heard from this long has its fields marked stale (spec MIP2-1370 §4, Stale). */
 export const MOD_SILENCE_MS = 60_000
@@ -295,6 +296,13 @@ export class FleetPoller {
     return { value: { fiveHour: out(fiveHour), sevenDay: out(sevenDay) }, source: shown.source, observedAt: shown.at, stale: false }
   }
 
+  /** Which windows the last good `/usage` reading listed, stale once it's older than REPORT_FRESH_MS (MIP2-1613). */
+  private reported(): { usageReported?: FleetSnapshot['usageReported'] } {
+    const r = this.readReport()
+    if (!r) return {}
+    return { usageReported: { value: { fiveHour: r.value.fiveHour !== null, sevenDay: r.value.sevenDay !== null }, source: r.source, observedAt: r.observedAt, stale: this.now() - r.observedAt > REPORT_FRESH_MS } }
+  }
+
   private publish(): FleetSnapshot {
     const sessions = this.sessions.map(s => this.withModFields(s))
     const snapshot: FleetSnapshot = {
@@ -304,6 +312,7 @@ export class FleetPoller {
       sessions,
       usage: this.usage(sessions),
       ...(this.readReportExtra() ? { usageExtra: this.readReportExtra()! } : {}),
+      ...this.reported(),
       selfCheck: this.selfCheck?.report() ?? null,
       sources: this.readReporter ? [this.health, this.modHealth] : [this.health],
     }

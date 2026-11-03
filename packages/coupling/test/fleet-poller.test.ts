@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { FleetPoller } from '../src/fleet-poller.ts'
 import { SupervisorHost } from '../src/supervisor-host.ts'
+import { REPORT_FRESH_MS } from '../src/usage-report.ts'
 
 const FIXTURE = readFileSync(new URL('./fixtures/agents-json-2.1.311.json', import.meta.url), 'utf8')
 
@@ -156,6 +157,22 @@ describe('FleetPoller', () => {
       // Each window says where its own reading came from (gate pass 25, L-3).
       expect(u?.value.fiveHour).toEqual({ usedPercent: 40, resetsAt: 2_000_000_000, observedAt: 9000, source: 'usage-report' })
       expect(u?.value.sevenDay).toEqual({ usedPercent: 11, resetsAt: 2_000_000_000, observedAt: 9500, source: 'statusline' })
+    })
+
+    it("says which windows /usage itself listed, and goes stale with its reading, apart from the merged meter (MIP2-1613)", async () => {
+      const { host } = hostWith([FIXTURE])
+      let t = 1_800_000_000_000
+      const report = { value: { fiveHour: null, sevenDay: { usedPercent: 12, resetsAt: t / 1000 + 86_400 } }, source: 'usage-report', observedAt: t, stale: false }
+      // A statusline file still carries a 5h: the meter shows it, and the report's own word is kept apart.
+      const file = { value: { fiveHour: { usedPercent: 30, resetsAt: t / 1000 + 3600 }, sevenDay: null }, source: 'statusline', observedAt: t, stale: false }
+      const p = new FleetPoller({ host, readUsage: async () => file as never, readReport: () => report as never, now: () => t })
+      const snap = await p.pollOnce()
+      expect(snap.usage?.value.fiveHour?.usedPercent).toBe(30)
+      expect(snap.usageReported).toEqual({ value: { fiveHour: false, sevenDay: true }, source: 'usage-report', observedAt: report.observedAt, stale: false })
+      t += REPORT_FRESH_MS + 1
+      expect((await p.pollOnce()).usageReported?.stale).toBe(true)
+      const none = new FleetPoller({ host, readUsage: async () => null })
+      expect(await none.pollOnce()).not.toHaveProperty('usageReported')
     })
 
     it('shows a window as not reported once its last reading has reset and no source carries it (MIP2-1590)', async () => {

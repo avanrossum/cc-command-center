@@ -1,8 +1,11 @@
 // The supervisor host's lifecycle commands (MIP2-1396), against a fake runner.
 
+import { mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ClaudeCommandError } from '../src/claude-cli.ts'
-import { JOB_NO_PID_GRACE_MS, ResumedAsCopy, resumedCopy, StraySessions, SupervisorHost, WorkspaceNotTrusted, type HostChannels } from '../src/supervisor-host.ts'
+import { NoFolderKnown, JOB_NO_PID_GRACE_MS, ResumedAsCopy, resumedCopy, StraySessions, SupervisorHost, WorkspaceNotTrusted, type HostChannels } from '../src/supervisor-host.ts'
 
 const SID = 'c0ffee01-0000-4000-8000-000000000001'
 const LISTED = JSON.stringify([{ pid: 1, id: 'c0ffee01', cwd: '/w', kind: 'background', startedAt: 1, sessionId: SID, status: 'idle', state: 'done' }])
@@ -348,6 +351,36 @@ describe('SupervisorHost lifecycle', () => {
     const run = calls.find(c => c.args[0] === '--resume')!
     expect(run).toEqual({ args: ['--resume', SID, '--bg', '--model', 'opus', '--effort', 'high', '--plugin-dir', '/mod', '--settings', '/s.json'], cwd: '/w' })
     expect(bound).toEqual([['ch-none', COPY]])
+  })
+
+  it('refuses a copy at the whole disk itself, and one whose folder it does not know, before anything runs (gate pass 51, I-2/L-6)', async () => {
+    const listed = JSON.stringify([{ pid: 1, id: 'c0ffee01', cwd: '/', kind: 'background', startedAt: 1, sessionId: SID, status: 'idle', state: 'done' }])
+    const { host, calls } = fake({ agents: listed })
+    await expect(host.startCopy(SID, { model: 'opus' })).rejects.toThrow('Choose a folder other than the whole disk.')
+    const unknown = fake({ agents: '[]' })
+    await expect(unknown.host.startCopy(SID, { model: 'opus' })).rejects.toBeInstanceOf(NoFolderKnown)
+    expect([...calls, ...unknown.calls].find(c => c.args[0] === '--resume')).toBeUndefined()
+  })
+
+  it('refuses a copy whose folder is a link to the whole disk, before anything runs (gate pass 53, L-5)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ccc-copy-link-'))
+    try {
+      symlinkSync('/', join(dir, 'root'))
+      const listed = JSON.stringify([{ pid: 1, id: 'c0ffee01', cwd: join(dir, 'root'), kind: 'background', startedAt: 1, sessionId: SID, status: 'idle', state: 'done' }])
+      const { host, calls } = fake({ agents: listed })
+      await expect(host.startCopy(SID, { model: 'opus' })).rejects.toThrow('Choose a folder other than the whole disk.')
+      expect(calls.find(c => c.args[0] === '--resume')).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a move whose folder is the whole disk, before anything runs (gate pass 54, L-3)', async () => {
+    const { host, calls } = fake({ agents: '[]' })
+    await expect(host.moveIn(SID, { cwd: '/System/Volumes/Data' })).rejects.toThrow('Choose a folder other than the whole disk.')
+    expect(calls).toEqual([])
+    await expect(host.moveIn(SID, { cwd: '/.nofollow/' })).rejects.toThrow('Choose a folder other than the whole disk.')
+    expect(calls).toEqual([])
   })
 
   it('moves an exited 0.24 session in place with the app\'s flags, and checks the id (MIP2-1425)', async () => {

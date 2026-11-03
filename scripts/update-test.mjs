@@ -30,6 +30,10 @@ const OFFERED = '1.0.1'
 const TEST_APP_ID = 'com.mipyip.cc-command-center-app.dryrun'
 const TEST_NAME = 'CC Command Center Dry Run'
 const APP = `${TEST_NAME}.app`
+// The package name, which names the updater's cache folder (<name>-updater in ~/Library/Caches): the dry run's own, so
+// it never reads or replaces the release app's pending download (MIP2-1608).
+const TEST_PACKAGE = 'cc-command-center-app-dryrun'
+const TEST_CACHE = `${TEST_PACKAGE}-updater`
 
 const fail = why => {
   console.error(`update-test: ${why}`)
@@ -62,6 +66,7 @@ for (const version of [RUNS, OFFERED]) {
     'electron-builder', '--mac', 'zip', '--arm64', '--publish', 'never',
     `-c.directories.output=${join(out, `build-${version}`)}`,
     `-c.extraMetadata.version=${version}`,
+    `-c.extraMetadata.name=${TEST_PACKAGE}`,
     `-c.appId=${TEST_APP_ID}`,
     `-c.productName=${TEST_NAME}`,
     `-c.mac.identity=${identity}`,
@@ -79,6 +84,8 @@ const built = v => join(out, `build-${v}`)
 for (const v of [RUNS, OFFERED]) {
   const id = execFileSync('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleIdentifier', join(built(v), 'mac-arm64', APP, 'Contents', 'Info.plist')], { encoding: 'utf8' }).trim()
   if (id !== TEST_APP_ID) fail(`the ${v} build's bundle identifier is ${id}, not ${TEST_APP_ID}`)
+  const cache = /^updaterCacheDirName: (.+)$/m.exec(readFileSync(join(built(v), 'mac-arm64', APP, 'Contents', 'Resources', 'app-update.yml'), 'utf8'))?.[1]?.trim()
+  if (cache !== TEST_CACHE) fail(`the ${v} build's updater cache is ${cache}, not ${TEST_CACHE}`)
 }
 const teams = [RUNS, OFFERED].map(v => teamOf(signature(join(built(v), 'mac-arm64', APP))))
 if (!teams[0] || teams[0] !== teams[1]) fail(`both apps must carry one Team ID, got ${teams.join(' and ')}`)

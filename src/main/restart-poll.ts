@@ -126,6 +126,11 @@ export class StopRetries {
     return r.delay
   }
 
+  /** Whether a retry is queued for the session: its refusal seeded one, and it hasn't been let go (gate pass 51, L-1). */
+  tracking(sessionId: string): boolean {
+    return this.state.has(sessionId)
+  }
+
   /** A re-key of the session's channel finished. */
   rekeyed(sessionId: string): void {
     const r = this.state.get(sessionId)
@@ -161,21 +166,44 @@ export interface RefusalBook {
 }
 
 /**
- * Books a refusal before its stop, the restart check's and a channel tamper
+ * Books a refusal around its stop, the restart check's and a channel tamper
  * mark's alike (gate pass 31, M-2): the process is kept refused by pid and by
  * start, so a failed stop is retried and an app restart doesn't admit it,
- * and the retries wait for this stop.
+ * and the retries wait for this stop. The bookings in memory come first,
+ * then `stop`, then the store's: a store that can't save never keeps the
+ * stop from being issued (gate pass 54, H-1). Returns the store saves that
+ * failed, each noted as `refusal-not-saved`.
  */
-export function bookRefusal(sessionId: string, d: RefusalBook): void {
+export function bookRefusal(sessionId: string, d: RefusalBook, stop: () => void = () => {}): string[] {
   d.dropLift(sessionId)
   const startedAt = d.refuse(sessionId)
   // A mark raised with no live process seen, as while the hub recovers channels or after the process stopped: the
   // session's next process is refused at its first sighting, whatever start the store verified before the mark. The
   // watch forgets the stopped one, so that next process is a first sighting (gate pass 33, M-1).
-  if (startedAt === undefined) (d.forget(sessionId), d.refuseNextSighting(sessionId))
-  const dropped = startedAt !== undefined ? d.recordRefusedStart(sessionId, startedAt) : undefined
-  if (dropped !== undefined) d.note('refused-start-dropped', { sessionId, startedAt: dropped })
+  if (startedAt === undefined) d.forget(sessionId)
   d.seed(sessionId)
+  stop()
+  const failed: string[] = []
+  const save = (what: string, write: () => void) => {
+    try {
+      write()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      failed.push(message)
+      try {
+        d.note('refusal-not-saved', { sessionId, what, error: message.slice(0, 300) })
+      } catch {
+        // The failure is still returned and shown.
+      }
+    }
+  }
+  if (startedAt === undefined) save('next-sighting', () => d.refuseNextSighting(sessionId))
+  else
+    save('refused-start', () => {
+      const dropped = d.recordRefusedStart(sessionId, startedAt)
+      if (dropped !== undefined) d.note('refused-start-dropped', { sessionId, startedAt: dropped })
+    })
+  return failed
 }
 
 /** The refusal paths main wires (gate pass 34, M-1). */
@@ -203,25 +231,41 @@ export function refusals(d: {
   markStore: (sessionId: string, why: string) => void
   notice: (text: string) => void
   markChannel: (sessionId: string, why: string) => boolean
+  /**
+   * A session with no channel, marked here: the hub keeps the mark too, so a
+   * resume from the app is refused in this run as after a restart (gate pass
+   * 43, L-2; ChannelHub.restoreMarks).
+   */
+  markChannelless?: (sessionId: string, why: string) => void
 }): Refusals {
   // One stop at a time: a refusal booked while a stop is running is recorded and logged, and that stop, or the retries
   // after it, covers it (gate pass 35, L-1; pass 36, L-2). Returns whether it started a stop.
   const refuseAndStop = (id: string, told: string): boolean => {
     const running = d.stopRunning(id)
-    bookRefusal(id, running ? { ...d.book, seed: () => {} } : d.book)
+    // The stop is issued before any store write (gate pass 54, H-1).
+    const failed = bookRefusal(id, running ? { ...d.book, seed: () => {} } : d.book, running ? undefined : () => d.stop(id, told))
     if (running) d.book.note('refusal-coalesced', { sessionId: id })
-    else d.stop(id, told)
+    if (failed.length) d.notice(`The app couldn't save a session's refusal, so it may not outlast a restart of the app: ${failed[0]!.slice(0, 200)}`)
     return !running
   }
   const markHere = (id: string, why: string, told: string) => {
-    d.markStore(id, why)
+    // The stop first; a mark that fails to save afterwards is logged and shown (gate pass 53, M-1; pass 54, H-1).
     const started = refuseAndStop(id, told)
+    try {
+      d.markStore(id, why)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      d.book.note('mark-not-saved', { sessionId: id, error: message.slice(0, 300) })
+      d.notice(`The app couldn't save that a session is untrusted, so the mark may not outlast a restart of the app: ${message.slice(0, 200)}`)
+    }
     d.notice(started ? `Stopping a session: ${why}.` : `A session is already being stopped, and the app keeps trying: ${why}.`)
   }
   return {
     refuseAndStop: (id, told) => void refuseAndStop(id, told),
     markRestarted: (id, why) => {
-      if (!d.markChannel(id, why)) markHere(id, why, `${why}.`)
+      if (d.markChannel(id, why)) return
+      d.markChannelless?.(id, why)
+      markHere(id, why, `${why}.`)
     },
     // A channel with no session bound has no session to stop or book.
     onUntrusted: (id, why) => {
@@ -232,32 +276,40 @@ export function refusals(d: {
 
 /**
  * The stops queued while channels recovered, run once the host exists
- * (gate pass 33, L-1; pass 34, L-2; pass 35, L-2; pass 37, L-1). Each
- * session's stop starts at once, and its end finishes the retry entry its
- * refusal seeded. The list is read alongside, only for the notices: a
- * session listed with a process is told whether it stopped. A list that
- * can't be read sends none.
+ * (gate pass 33, L-1; pass 34, L-2; pass 35, L-2; pass 37, L-1; pass 38;
+ * pass 48, L-2; pass 50, L-1). Every stop starts at once. Each one's end
+ * finishes the retry entry its refusal seeded, and a stop queued with a
+ * notice reports its own outcome, stopped or still being tried. Nothing
+ * waits on the session list, so a fast stop can't drop its notice.
  */
-export function runQueuedStops(
+export async function runQueuedStops(
   queued: readonly { id: string; told?: string }[],
   d: {
-    running: () => Promise<ReadonlySet<string>>
     stop: (sessionId: string) => Promise<boolean>
     finish: (sessionId: string, stopped: boolean) => void
-    notice: (told: string, stopped: boolean) => void
+    notice: (sessionId: string, told: string, stopped: boolean) => void
   },
 ): Promise<void> {
-  if (!queued.length) return Promise.resolve()
   // Once per session, with the first notice queued for it.
   const ids = new Set<string>()
   const once = queued.filter(q => !ids.has(q.id) && !!ids.add(q.id))
-  const listed = d.running().catch(() => new Set<string>())
-  return Promise.all(
-    once.map(({ id, told }) =>
-      d.stop(id).then(stopped => {
-        d.finish(id, stopped)
-        if (told) void listed.then(running => running.has(id) && d.notice(told, stopped))
-      }),
-    ),
-  ).then(() => {})
+  await Promise.all(
+    once.map(async ({ id, told }) => {
+      const stopped = await d.stop(id)
+      d.finish(id, stopped)
+      if (told) d.notice(id, told, stopped)
+    }),
+  )
+}
+
+/**
+ * What a refusal's stop says once its command is done (gate pass 38; pass
+ * 51, L-1): only what its exit status shows. An exit of 0 means the stop was
+ * sent, whether or not a process was running. A failure says the app keeps
+ * trying only when a retry is queued for the session.
+ */
+export function stopNotice(sessionId: string, told: string, sent: boolean, retrying: boolean): string {
+  const name = `session ${sessionId.slice(0, 8)}`
+  if (sent) return `Stop sent to ${name}: ${told}`
+  return retrying ? `Couldn't stop ${name} yet, and the app keeps trying: ${told}` : `Couldn't stop ${name}: ${told}`
 }

@@ -43,6 +43,7 @@ export {
 } from './session-host.ts'
 export {
   backgroundedId,
+  NoFolderKnown,
   ResumedAsCopy,
   StraySessions,
   SupervisorHost,
@@ -60,3 +61,4 @@ export { CommandLog, COMMAND_LOG_MAX_BYTES, COMMAND_LOG_STREAM_BYTES, redactArgs
 export { checkSupervisorPath, daemonPid, processStartedAt, pathFromPs, sharedSupervisorStart, supervisorState, type SupervisorPath } from './supervisor-env.ts'
 export { terminalHostOf, terminalName } from './process-host.ts'
 export { claudeConfigDir, readSavedOptions, readStateFile, STATE_MAX_BYTES, type SavedOptions } from './job-state.ts'
+export { DATA_VOLUME, isAliasPath, isWholeDisk, WHOLE_DISK_MESSAGE, wholeDiskPath, wholeDiskReason, type DiskIo } from './whole-disk.ts'

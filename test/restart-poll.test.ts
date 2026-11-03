@@ -293,7 +293,7 @@ describe('a channel tamper mark is booked as a refusal (gate pass 31, M-2)', () 
     const calls: string[] = []
     // The hub marks the channel (a socket swap) and the stop fails: the process is still listed next poll.
     bookRefusal(A, book(watch, calls))
-    expect(calls).toEqual([`record ${A} 200`, `seed ${A}`])
+    expect(calls).toEqual([`seed ${A}`, `record ${A} 200`])
     const processes: ProcessSeen[] = [{ sessionId: A, pid: 200, startedAt: 200 }]
     const changed = watch.observe(processes)
     expect(restartPoll({ processes, changed, unverified: watch.unverified, stillRefused: watch.stillRefused }, { verdict: () => null })).toMatchObject({ retry: [A], verified: [] })
@@ -302,7 +302,7 @@ describe('a channel tamper mark is booked as a refusal (gate pass 31, M-2)', () 
   it("refuses the next first sighting when the watch hasn't seen the process, as for a mark raised while channels recover", () => {
     const calls: string[] = []
     bookRefusal(A, book(new RestartWatch(() => 0), calls))
-    expect(calls).toEqual([`forget ${A}`, `next ${A}`, `seed ${A}`])
+    expect(calls).toEqual([`forget ${A}`, `seed ${A}`, `next ${A}`])
   })
 
   it('refuses the next process when the mark comes after the process stopped, not the stopped one (gate pass 33, M-1)', () => {

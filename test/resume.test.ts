@@ -1,7 +1,7 @@
 // A resume from the app re-keys the channel, and stops a running session first (MIP2-1441 live run).
 
 import { describe, expect, it } from 'vitest'
-import { ModStuck, RESUME_REPEAT_MS, ResumeGate, resumeFromApp } from '../src/main/resume.ts'
+import { LiftedRefusals, ModStuck, rekeyedFor, RESUME_REPEAT_MS, ResumeGate, resumeFromApp } from '../src/main/resume.ts'
 
 const SID = 'c0ffee01-0000-4000-8000-000000000001'
 
@@ -172,5 +172,24 @@ describe('ResumeGate (MIP2-1467)', () => {
     await gate.run(SID, async () => void runs++)
     await gate.run('other-0000-4000-8000-000000000000', async () => void runs++)
     expect(runs).toBe(3)
+  })
+})
+
+describe('rekeyedFor (gate pass 43, INFO-3; pass 44, L-2, INFO-2)', () => {
+  it('drops the lift first, and reports a store that fails to save instead of throwing', () => {
+    const lifted = new LiftedRefusals()
+    lifted.lift(SID)
+    const notices: string[] = []
+    const rekeyed = rekeyedFor({ lifted, clearUntrusted: () => { throw new Error('disk full') }, notice: t => void notices.push(t) })
+    expect(() => rekeyed(SID)).not.toThrow()
+    expect(lifted.has(SID)).toBe(false)
+    expect(notices).toEqual([expect.stringMatching(/couldn't save that its alert is cleared.*disk full$/)])
+  })
+
+  it('clears the mark with no notice when the store saves', () => {
+    const cleared: string[] = []
+    const notices: string[] = []
+    rekeyedFor({ lifted: new LiftedRefusals(), clearUntrusted: id => void cleared.push(id), notice: t => void notices.push(t) })(SID)
+    expect([cleared, notices]).toEqual([[SID], []])
   })
 })

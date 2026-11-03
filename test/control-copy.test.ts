@@ -15,19 +15,26 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../src/main/security.ts', () => ({ isTrustedSender: () => true }))
 
-const { onWholeDisk, registerControl } = await import('../src/main/control.ts')
+const { registerControl } = await import('../src/main/control.ts')
 const { IPC } = await import('../src/shared/ipc.ts')
+const { isWholeDisk, NoFolderKnown, WHOLE_DISK_MESSAGE } = await import('@ccc/coupling')
 type Deps = Parameters<typeof registerControl>[0]
 
 const SRC = 'c0ffee01-0000-4000-8000-000000000001'
 const COPY = 'c0ffee0a-0000-4000-8000-00000000000a'
 
-function setup() {
+function setup(folder = '/w') {
   handlers.clear()
   const launched: [string, unknown, unknown][] = []
   const asked: unknown[] = []
   const host = {
-    startCopy: async (_id: string, opts: unknown) => (asked.push(opts), { sessionId: COPY, cwd: '/w' }),
+    // As the host does: no known folder, or the whole disk, is refused before anything starts.
+    startCopy: async (_id: string, opts: unknown) => {
+      if (!folder) throw new NoFolderKnown()
+      if (isWholeDisk(folder)) throw new Error(WHOLE_DISK_MESSAGE)
+      asked.push(opts)
+      return { sessionId: COPY, cwd: folder }
+    },
     launch: async (opts: unknown) => (asked.push(opts), { sessionId: COPY }),
   }
   registerControl({
@@ -38,7 +45,7 @@ function setup() {
     trust: {},
     readOnly: () => null,
     onLaunched: (id: string, req: unknown, source: unknown) => void launched.push([id, req, source]),
-    snapshotOf: () => ({ sessionId: SRC, name: { value: 'source' }, awaitingFirstPrompt: { value: false }, activity: { value: 'idle' } }),
+    snapshotOf: () => ({ sessionId: SRC, name: { value: 'source' }, awaitingFirstPrompt: { value: false }, activity: { value: 'idle' }, cwd: { value: folder } }),
     launchedHere: () => true,
   } as unknown as Deps)
   const startCopy = (id: unknown, req: unknown) => handlers.get(IPC.startCopy)!({}, id, req)
@@ -73,10 +80,40 @@ describe('Start a copy (MIP2-1602)', () => {
 })
 
 describe('a launch at the whole disk (MIP2-1603 M-1)', () => {
+  it('refuses a copy of a session whose folder is the whole disk, before it starts (gate pass 43, L-3)', async () => {
+    const { asked, launched, startCopy } = setup('/')
+    expect(await startCopy(SRC, { model: 'haiku' })).toEqual({ ok: false, error: 'Choose a folder other than the whole disk.' })
+    expect([asked, launched]).toEqual([[], []])
+  })
+
+  it('refuses a copy whose folder is a link to the whole disk (gate pass 53, L-5)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ccc-copy-link-'))
+    try {
+      symlinkSync('/', join(dir, 'root'))
+      const { asked, launched, startCopy } = setup(join(dir, 'root'))
+      expect(await startCopy(SRC, { model: 'haiku' })).toEqual({ ok: false, error: 'Choose a folder other than the whole disk.' })
+      expect([asked, launched]).toEqual([[], []])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("refuses a copy while its session's folder isn't known yet (gate pass 48, I-2)", async () => {
+    const { asked, startCopy } = setup('')
+    expect(await startCopy(SRC, { model: 'haiku' })).toEqual({ ok: false, error: 'Wait a moment for the session to report its folder, then try again.' })
+    expect(asked).toEqual([])
+  })
+
+  it('refuses a copy carrying a malformed extraArgs, without a throw (gate pass 44, L-2)', async () => {
+    const { asked, startCopy } = setup()
+    for (const extraArgs of [null, {}, 3, true]) expect(await startCopy(SRC, { model: 'haiku', extraArgs })).toEqual({ ok: false, error: 'bad request' })
+    expect(asked).toEqual([])
+  })
+
   it('is refused, by its path or through a link to it, before anything starts', async () => {
     const { asked, launch } = setup()
-    expect(await launch({ cwd: '/' })).toEqual({ ok: false, error: 'bad launch request' })
-    expect(await launch({ cwd: '/./' })).toEqual({ ok: false, error: 'bad launch request' })
+    expect(await launch({ cwd: '/' })).toEqual({ ok: false, error: 'Choose a folder other than the whole disk.' })
+    expect(await launch({ cwd: '/./' })).toEqual({ ok: false, error: 'Choose a folder other than the whole disk.' })
     const dir = mkdtempSync(join(tmpdir(), 'ccc-root-link-'))
     try {
       symlinkSync('/', join(dir, 'root'))
@@ -88,8 +125,9 @@ describe('a launch at the whole disk (MIP2-1603 M-1)', () => {
     }
   })
 
-  it('onWholeDisk reads the real path', () => {
-    expect(onWholeDisk('/w/root', p => (p === '/w/root' ? '/' : p))).toBe(true)
-    expect(onWholeDisk('/w/app', p => p)).toBe(false)
+  it('refuses a launch at the data volume or a mounted disk too (gate pass 53, L-1)', async () => {
+    const { asked, launch } = setup()
+    expect(await launch({ cwd: '/System/Volumes/Data' })).toEqual({ ok: false, error: 'Choose a folder other than the whole disk.' })
+    expect(asked).toEqual([])
   })
 })

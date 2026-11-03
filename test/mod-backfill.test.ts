@@ -223,6 +223,28 @@ describe('savedOptionsRefusal, on every restart (gate pass 17, M-1; pass 18, M-1
     expect(check('--add-dir', '/Users/x/.ccc/ch/1')).toEqual({ refused: 'its saved options add a folder the app keeps sessions out of' })
     // In another letter case or Unicode form, as a case-insensitive volume allows (gate pass 21, H-2).
     expect(check('--add-dir', '/USERS/X/.CLAUDE')).toEqual({ refused: "its saved options add Claude Code's own folder" })
+    // Through the data volume, the same folders (gate pass 54, M-2).
+    expect(check('--add-dir', '/System/Volumes/Data/Users/x/.claude')).toEqual({ refused: "its saved options add Claude Code's own folder" })
+    expect(check('--add-dir', '/system/volumes/data/Users/x/Library/App')).toEqual({ refused: 'its saved options add a folder the app keeps sessions out of' })
+    expect(check('--add-dir', '/System/Volumes/Data/Users')).toEqual({ refused: 'its saved options add your home folder or a folder above it' })
+    expect(check('--add-dir', '/System/Volumes/Data')).toEqual({ refused: 'its saved options add the whole disk as a folder' })
+    expect(check('--add-dir', '/System/Volumes/Data/')).toEqual({ refused: 'its saved options add the whole disk as a folder' })
+    // The folders that hold the data volume, and the alias prefixes (gate pass 55, M-2).
+    for (const d of ['/System', '/System/Volumes', '/system/volumes/', '/SYSTEM']) expect(check('--add-dir', d), d).toEqual({ refused: 'its saved options add your home folder or a folder above it' })
+    for (const d of ['/.vol', '/.vol/', '/.resolve', '/.nofollow/', '/.nofollow/Users/x/.claude', '/.vol/16777234/2', '/.vol/16777234/12345', '/.resolve/1/2'])
+      expect(check('--add-dir', d), d).toEqual({ refused: 'its saved options add a folder by a special path (/.vol, /.nofollow or /.resolve)' })
+    expect(check('--add-dir', '/System/Library')).toEqual({ confirm: { mode: null, dirs: ['/System/Library'] } })
+    expect(check('--add-dir', '/.nofollowx')).toEqual({ confirm: { mode: null, dirs: ['/.nofollowx'] } })
+    // Not written normally: `<cwd>/l/..` is checked as `<cwd>` while `l` may lead to `/` (gate pass 57, H-1).
+    const toRoot: Omit<DirRules, 'cwd'> = { ...rules, real: p => (p === '/w/app/l' ? '/' : rules.real(p)) }
+    for (const d of ['/w/app/l/..', '/w/app/./docs', '/w/app//docs', '/w/app/..', '/w/app/docs/.'])
+      expect(savedOptionsCheck(saved(flags('--add-dir', d)), rec, toRoot), d).toEqual({ refused: 'its saved options add a folder written with `.` or `..`' })
+    expect(savedOptionsCheck(saved(flags('--add-dir', '/w/app/l')), rec, toRoot)).toEqual({ refused: 'its saved options add the whole disk as a folder' })
+    expect(check('--add-dir', '/w/app/docs/')).toBeNull()
+    // The whole-disk check reads identities itself, not through rules.real, which falls back and never throws (gate pass 56, L-1).
+    const disk = { real: () => { throw new Error('ENOENT') }, id: (p: string) => (p === '/' ? '1:2' : p === '/odd/7/2' ? '1:2' : null) }
+    expect(savedOptionsCheck(saved(flags('--add-dir', '/odd/7/2')), rec, { ...rules, disk })).toEqual({ refused: 'its saved options add the whole disk as a folder' })
+    expect(savedOptionsCheck(saved(flags('--add-dir', '/odd/7/3')), rec, { ...rules, disk: { ...disk, id: (p: string) => (p === '/' ? '1:2' : p === '/odd/7/3' ? '1:3' : null) } })).toEqual({ refused: "its saved options add a folder whose real path can't be read" })
     expect(check('--add-dir', '/users/x')).toEqual({ refused: 'its saved options add your home folder or a folder above it' })
     expect(check('--add-dir', '/Users/X/Library/APP/store.json')).toEqual({ refused: 'its saved options add a folder the app keeps sessions out of' })
     // The session's own folder is a pass check: another case is another folder there (gate pass 22, M-2).
@@ -262,7 +284,9 @@ describe('savedOptionsRefusal, on every restart (gate pass 17, M-1; pass 18, M-1
     expect(savedFlagsRefusal([...flags(), '--add-dir', `/${'a'.repeat(4096)}`], launch)).toMatch(/plain absolute path/)
     expect(savedFlagsRefusal([...flags(), '--add-dir', '--dangerously-skip-permissions'], launch)).toMatch(/leave out a value/)
     expect(savedFlagsRefusal([...flags(), '--add-dir'], launch)).toMatch(/leave out a value/)
-    for (const root of ['/', '//', '/.', '/tmp/..']) expect(savedFlagsRefusal([...flags(), '--add-dir', root], launch)).toMatch(/whole disk/)
+    for (const root of ['/', '//']) expect(savedFlagsRefusal([...flags(), '--add-dir', root], launch)).toMatch(/whole disk/)
+    // Spellings of the root that aren't written normally are refused for that first (gate pass 57, H-1).
+    for (const root of ['/.', '/tmp/..', '//tmp/..']) expect(savedFlagsRefusal([...flags(), '--add-dir', root], launch)).toMatch(/written with `\.` or `\.\.`/)
     // Two paths after one --add-dir: the second is a flag the app never passed.
     expect(savedFlagsRefusal([...flags(), '--add-dir', '/a', '/b'], launch)).toMatch(/never passed/)
   })

@@ -67,6 +67,8 @@ await Promise.all([
     target: 'node22',
     // node-pty is a native module; it stays in node_modules.
     external: ['electron', 'node-pty'],
+    // main.cjs isn't minified: the release check reads the mod hash from it as `BUILT_MOD_HASH = … "<hash>"`
+    // (release-lib.mjs embeddedModHash), and a minified name would hide it (gate pass 48, I-1).
     define: { __CCC_BUILD__: JSON.stringify(BUILD), __CCC_MOD_HASH__: JSON.stringify(MOD_HASH), __CCC_UPDATE_TEST_FEED__: JSON.stringify(UPDATE_TEST_FEED) },
   }),
   build({

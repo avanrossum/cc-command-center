@@ -116,8 +116,10 @@ export function paceOf(kind: WindowKind, list: readonly Reading[], now: number, 
 /** A window the latest reading doesn't carry: Claude Code isn't reporting it now, which isn't an error (MIP2-1590). */
 export const ABSENT: Pace = { state: 'absent', used: null, resetsAt: null, projected: null, outAt: null, age: null }
 
-const clock = (ms: number) => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-const dayClock = (ms: number) => `${new Date(ms).toLocaleDateString('en-US', { weekday: 'short' })} ${clock(ms)}`
+/** `9:14 AM`. */
+export const clock = (ms: number) => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+/** `Tue 9:14 AM`. */
+export const dayClock = (ms: number) => `${new Date(ms).toLocaleDateString('en-US', { weekday: 'short' })} ${clock(ms)}`
 /** A reset time as the row says it: `3:45 PM` for 5h, `Sat 3:00 PM` for 7d. */
 export const resetText = (kind: WindowKind, resetsAtSec: number) => (kind === '5h' ? clock(resetsAtSec * 1000) : dayClock(resetsAtSec * 1000))
 /** A duration as `1h 40m`, `9m`, `4d 3h`. */
@@ -137,7 +139,7 @@ export function paceWords(kind: WindowKind, p: Pace, now: number): { word: strin
 const ago = (ms: number) => (ms < 60_000 ? 'just now' : `${span(ms)} ago`)
 
 /** The row's hover (§4.3, §4.4). */
-export function paceHover(kind: WindowKind, p: Pace): string {
+export function paceHover(kind: WindowKind, p: Pace, label: string = kind): string {
   const learn = kind === '5h' ? '30 min' : '6 h'
   switch (p.state) {
     case 'never':
@@ -149,7 +151,7 @@ export function paceHover(kind: WindowKind, p: Pace): string {
     case 'stale':
       return `Reading from ${ago(p.age!)}. It updates when a session here sends a request. Use on claude.ai or other devices isn't shown until then.`
     default: {
-      const head = `${kind} · ${Math.round(p.used!)}% used · resets ${resetText(kind, p.resetsAt!)}.`
+      const head = `${label} · ${Math.round(p.used!)}% used · resets ${resetText(kind, p.resetsAt!)}.`
       const pace = p.state === 'learning' ? ` Pace shows after ${learn} of use in this window.` : p.state === 'out' ? '' : p.projected !== null ? ` At your recent rate, ~${Math.round(Math.min(p.projected, 999))}% at reset.` : ''
       return `${head}${pace} Reading from ${ago(p.age!)}.`
     }

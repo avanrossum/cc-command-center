@@ -21,9 +21,10 @@ describe('extra limits (§9.2)', () => {
     expect(limitLabel({ kind: 'monthly_new', label: 'Code review', usedPercent: 1, resetsAt: null })).toBe('Code review')
   })
 
-  it('reads as percent and reset on pace, with the pace word and projection when Tight, and plainly for a kind with no pace', () => {
+  it('reads with its pace word, percent and reset, the projection when Tight, and plainly for a kind with no pace (MIP2-1610 UX review)', () => {
     const resets = new Date(SAT * 1000).toLocaleDateString('en-US', { weekday: 'short' })
-    expect(extraStatusLine({ key: 'k', limit: fable, pace: pace({}) })).toMatch(new RegExp(`^Fable week · 40% used · resets ${resets}`))
+    expect(extraStatusLine({ key: 'k', limit: fable, pace: pace({}) })).toMatch(new RegExp(`^Fable week · On pace · 40% used · resets ${resets}`))
+    expect(extraStatusLine({ key: 'k', limit: fable, pace: pace({ state: 'learning' }) })).toMatch(/^Fable week · Learning · 40% used · resets /)
     expect(extraStatusLine({ key: 'k', limit: { ...fable, usedPercent: 71 }, pace: pace({ state: 'tight', used: 71, projected: 94 }) })).toMatch(/^Fable week · Tight · 71% used · ~94% by /)
     expect(extraStatusLine({ key: 'k', limit: { kind: 'odd', label: null, usedPercent: 12, resetsAt: null }, pace: null })).toBe('Other limit · 12% used')
   })

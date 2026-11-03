@@ -485,6 +485,9 @@ button.arb { width: 100%; background: none; border: 0; border-top: 1px solid var
 .set-nav button:hover { color: var(--cc-text); }
 .set-nav button.on { color: var(--cc-text); background: var(--cc-sel); }
 .set-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 18px; overflow-y: auto; }
+/* Every control in a sheet keeps its height and the sheet scrolls: a flex column would otherwise squeeze an item with
+   overflow hidden, such as .seg, down to its border (MIP2-1624). */
+.set-body > *, .sheet:not(.settings) > * { flex-shrink: 0; }
 .set-body .sheet-acts { margin-top: auto; }
 .set-body p { margin: 0; font-size: 13px; }
 .set-preview { padding: 10px 12px; border-radius: 6px; background: var(--cc-term-bg); color: var(--cc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

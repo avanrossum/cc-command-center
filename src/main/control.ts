@@ -4,6 +4,9 @@
 
 import { BrowserWindow, clipboard, dialog, ipcMain, shell, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import {
+  isWholeDisk,
+  NoFolderKnown,
+  WHOLE_DISK_MESSAGE,
   quotePath,
   ResumedAsCopy,
   WorkspaceNotTrusted,
@@ -21,8 +24,7 @@ import { IPC, type LaunchRequest, type Result } from '../shared/ipc.ts'
 import { lookup as dnsLookup } from 'node:dns/promises'
 import { openTerminalLink, type LinkResult } from './policy.ts'
 import { isTrustedSender } from './security.ts'
-import { checkAnswer, checkCopy, checkLaunch, droppedPaths, isSessionId, isSize, isText, isWholeDisk } from './validate.ts'
-import { realPath } from './mod-backfill.ts'
+import { checkAnswer, checkCopy, droppedPaths, parseLaunch, isSessionId, isSize, isText } from './validate.ts'
 
 function fail(err: unknown): Result {
   if (err instanceof WorkspaceNotTrusted) return { ok: false, error: err.message, kind: 'untrusted', variant: err.variant }
@@ -35,16 +37,6 @@ function fail(err: unknown): Result {
 /** Channels that act on sessions: refused while the app is read-only. */
 const WRITES = new Set<string>([IPC.launch, IPC.startCopy, IPC.moveIn, IPC.resume, IPC.confirmSettings, IPC.stop, IPC.answer, IPC.sendPrompt, IPC.focusOpen, IPC.trustStart])
 
-const WHOLE_DISK = 'Choose a folder other than the whole disk.'
-
-/**
- * A folder that is the disk root, or a link to it (MIP2-1603 M-1): the
- * restart check refuses a session recorded there at its first sighting, so
- * it isn't launched.
- */
-export function onWholeDisk(cwd: string, real: (p: string) => string = realPath): boolean {
-  return isWholeDisk(cwd) || real(cwd) === '/'
-}
 
 export interface ControlDeps {
   host: SessionHost
@@ -137,9 +129,9 @@ export function registerControl({
   const untrusted: Result = { ok: false, error: 'untrusted sender' }
 
   invoke(IPC.launch, async (req: unknown) => {
-    const r = checkLaunch(req)
-    if (!r) return { ok: false, error: 'bad launch request' }
-    if (onWholeDisk(r.cwd)) return { ok: false, error: WHOLE_DISK }
+    // One check, and its reason as the error (gate pass 54, L-2).
+    const r = parseLaunch(req)
+    if (typeof r === 'string') return { ok: false, error: r }
     try {
       const { fromSession, ...opts } = r
       const launched = await host.launch(opts)
@@ -157,12 +149,15 @@ export function registerControl({
     const why = copyRefusal(snapshotOf(id), launchedHere(id))
     if (why) return { ok: false, error: why }
     try {
+      // A copy runs in its session's folder; the host refuses the whole disk, and a folder it doesn't know yet (gate pass 43,
+      // L-3; pass 48, I-2; pass 50, L-3; pass 51, I-2/I-3/L-6).
       const copy = await host.startCopy(id, r)
       // Recorded with the folder the host started it in, the session's own: the restart check compares it with Claude
       // Code's saved folder (MIP2-1602).
       onLaunched(copy.sessionId, { ...r, cwd: copy.cwd }, { copyOf: id })
       return { ok: true, sessionId: copy.sessionId }
     } catch (err) {
+      if (err instanceof NoFolderKnown) return { ok: false, error: 'Wait a moment for the session to report its folder, then try again.' }
       return fail(err)
     }
   }, untrusted)
@@ -176,6 +171,7 @@ export function registerControl({
     if (refused) return { ok: false, error: refused }
     const target = moveTarget(id)
     if (!target) return { ok: false, error: "the app doesn't know this session's folder" }
+    if (isWholeDisk(target.cwd)) return { ok: false, error: WHOLE_DISK_MESSAGE }
     try {
       const { cwd, name, model, effort, permissionMode, isolation } = target
       const moved = await host.moveIn(id, { cwd, name, model, effort, permissionMode, isolation })
@@ -327,15 +323,16 @@ export function registerControl({
 
   // The trust step: the same launch, in a terminal view, on Alex's click (MIP2-1388).
   invoke(IPC.trustStart, async (req: unknown, cols: unknown, rows: unknown) => {
-    const r0 = checkLaunch(req)
-    if (!r0 || !isSize(cols) || !isSize(rows)) return { ok: false, error: 'bad request' }
+    const r0 = parseLaunch(req)
+    if (r0 === WHOLE_DISK_MESSAGE) return { ok: false, error: r0 }
+    if (typeof r0 === 'string' || !isSize(cols) || !isSize(rows)) return { ok: false, error: 'bad request' }
     // A resume's trust run is a move: the same preflight, and the move's own request (MIP2-1461; pass 8, M-2).
     const refused = r0.resume ? preflight(r0.resume) : null
     if (refused) return { ok: false, error: refused }
     const target = r0.resume ? moveTarget(r0.resume) : null
     if (r0.resume && !target) return { ok: false, error: "the app doesn't know this session's folder" }
     const r = target ? { ...target, resume: r0.resume } : r0
-    if (onWholeDisk(r.cwd)) return { ok: false, error: WHOLE_DISK }
+    if (isWholeDisk(r.cwd)) return { ok: false, error: WHOLE_DISK_MESSAGE }
     try {
       return { ok: true, runId: await trust.start(r, cols, rows) }
     } catch (err) {

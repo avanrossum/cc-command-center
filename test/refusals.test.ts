@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ChannelHub, memoryReplyKeys } from '@ccc/coupling'
-import { refusals, restartPoll, runQueuedStops, StopRetries, type Refusals } from '../src/main/restart-poll.ts'
+import { refusals, restartPoll, runQueuedStops, stopNotice, StopRetries, type Refusals } from '../src/main/restart-poll.ts'
+import { resumeFromApp } from '../src/main/resume.ts'
 import { RestartWatch } from '../src/main/restart-watch.ts'
 
 const A = 'c0ffee01-0000-4000-8000-000000000001'
@@ -17,7 +18,7 @@ let base: string
 beforeEach(() => void (base = realpathSync(mkdtempSync(join(tmpdir(), 'ccc-refusals-')))))
 afterEach(() => rmSync(base, { recursive: true, force: true }))
 
-function wire(markChannel: (r: Refusals) => (id: string, why: string) => boolean) {
+function wire(markChannel: (r: Refusals) => (id: string, why: string) => boolean, markChannelless?: (id: string, why: string) => void) {
   const watch = new RestartWatch(() => 0, () => undefined)
   const retries = new StopRetries(2_000, 60_000, () => 0)
   const stops: [string, string][] = []
@@ -41,6 +42,7 @@ function wire(markChannel: (r: Refusals) => (id: string, why: string) => boolean
     markStore: (id, why) => void marked.push([id, why]),
     notice: text => void notices.push(text),
     markChannel: (id, why) => markChannel(r)(id, why),
+    ...(markChannelless ? { markChannelless } : {}),
   })
   return { r, watch, retries, stops, marked, notices, notes, refusedStarts }
 }
@@ -107,6 +109,87 @@ describe('a refusal with no channel to go through (gate pass 34, M-1)', () => {
     expect(w.notices[0]).toMatch(/^Stopping a session: Claude Code started it/)
   })
 
+  it('keeps the mark in the hub too, so a resume from the app is refused in the same run (gate pass 43, L-2)', async () => {
+    const hub = new ChannelHub({ modDir: '/mod', root: join(base, 'ch3'), longPollMs: 300, log: () => {}, replyKeys: memoryReplyKeys() })
+    const w = wire(() => (id, why) => hub.markSession(id, why), (id, why) => hub.restoreMarks([[id, why]]))
+    poll(w, 200)
+    expect(hub.untrustedReason(A)).toMatch(/started it while the app wasn't checking/)
+    const resumed: string[] = []
+    await expect(
+      resumeFromApp(A, { host: { stopIfRunning: async () => false, resume: async id => void resumed.push(id) }, hub, onRekeyed: () => {} }),
+    ).rejects.toThrow(/can't be trusted/)
+    expect(resumed).toEqual([])
+    await hub.closeAll()
+  })
+
+  it('stops the session though its mark fails to save, and says so (gate pass 53, M-1)', () => {
+    const stops: string[] = []
+    const notes: string[] = []
+    const notices: string[] = []
+    const r = refusals({
+      book: { refuse: () => 200, forget: () => {}, recordRefusedStart: () => undefined, seed: () => {}, refuseNextSighting: () => {}, dropLift: () => {}, note: what => void notes.push(what) },
+      stop: id => void stops.push(id),
+      stopRunning: () => false,
+      markStore: () => {
+        throw new Error('disk full')
+      },
+      notice: t => void notices.push(t),
+      markChannel: () => false,
+    })
+    r.markRestarted(A, 'its saved options hold flags the app never passed')
+    expect(stops).toEqual([A])
+    expect(notes).toContain('mark-not-saved')
+    expect(notices.some(t => /couldn't save that a session is untrusted.*disk full/.test(t))).toBe(true)
+  })
+
+  it.each([
+    ['a live process', 200],
+    ['no live process', undefined],
+  ])('stops the session, with %s, though every store write throws, before any of them (gate pass 54, H-1)', (_, startedAt) => {
+    const order: string[] = []
+    const notes: string[] = []
+    const notices: string[] = []
+    const fail = (what: string) => () => {
+      order.push(what)
+      throw new Error('disk full')
+    }
+    const r = refusals({
+      book: {
+        refuse: () => startedAt,
+        forget: () => {},
+        recordRefusedStart: fail('record'),
+        seed: () => {},
+        refuseNextSighting: fail('next'),
+        dropLift: () => {},
+        note: what => void notes.push(what),
+      },
+      stop: id => void order.push(`stop ${id}`),
+      stopRunning: () => false,
+      markStore: fail('mark'),
+      notice: t => void notices.push(t),
+      markChannel: () => false,
+    })
+    expect(() => r.markRestarted(A, WHY)).not.toThrow()
+    expect(order).toEqual([`stop ${A}`, startedAt === undefined ? 'next' : 'record', 'mark'])
+    expect(notes).toEqual(expect.arrayContaining(['refusal-not-saved', 'mark-not-saved']))
+    expect(notices.some(t => /couldn't save a session's refusal.*disk full/.test(t))).toBe(true)
+    expect(notices.at(-1)).toBe(`Stopping a session: ${WHY}.`)
+  })
+
+  it('stops a channel-marked session though every store write throws (gate pass 54, H-1)', () => {
+    const stops: string[] = []
+    const r = refusals({
+      book: { refuse: () => 200, forget: () => {}, recordRefusedStart: () => { throw new Error('x') }, seed: () => {}, refuseNextSighting: () => {}, dropLift: () => {}, note: () => {} },
+      stop: id => void stops.push(id),
+      stopRunning: () => false,
+      markStore: () => { throw new Error('x') },
+      notice: () => {},
+      markChannel: () => false,
+    })
+    r.onUntrusted(A, 'the socket file was replaced')
+    expect(stops).toEqual([A])
+  })
+
   it('books nothing for a channel with no session bound', () => {
     const w = wire(() => () => true)
     w.r.onUntrusted(null, 'the socket file was replaced')
@@ -114,46 +197,48 @@ describe('a refusal with no channel to go through (gate pass 34, M-1)', () => {
   })
 })
 
-describe('stops queued while channels recover (gate pass 33, L-1; pass 34, L-2; pass 37, L-1)', () => {
-  const run = (queued: { id: string; told?: string }[], running: () => Promise<ReadonlySet<string>>, stopped = true) => {
+describe('stops queued while channels recover (gate pass 33, L-1; pass 34, L-2; pass 37, L-1; pass 48, L-2; pass 50, L-1)', () => {
+  const run = (queued: { id: string; told?: string }[], stopped: (id: string) => boolean) => {
     const calls: string[] = []
     const done = runQueuedStops(queued, {
-      running,
-      stop: async id => (calls.push(`stop ${id}`), stopped),
+      stop: async id => (calls.push(`stop ${id}`), stopped(id)),
       finish: (id, s) => void calls.push(`finish ${id} ${s}`),
-      notice: (told, s) => void calls.push(`notice ${told} ${s}`),
+      notice: (_id, told, s) => void calls.push(`notice ${told} ${s}`),
     })
     return { calls, done }
   }
-  const settle = () => new Promise(r => setTimeout(r, 0))
 
-  it('tells only a session that is running whether it stopped, and finishes every seed', async () => {
-    const { calls, done } = run([{ id: A, told: 'A changed.' }, { id: B, told: 'B changed.' }], async () => new Set([A]))
+  it('starts every stop at once, and each queued with a notice reports its own outcome, a fast one too', async () => {
+    const { calls, done } = run([{ id: A, told: 'A changed.' }, { id: B, told: 'B changed.' }, { id: 'c0ffee03-0000-4000-8000-000000000003' }], id => id !== B)
     await done
-    await settle()
-    expect(calls).toEqual([`stop ${A}`, `stop ${B}`, `finish ${A} true`, `finish ${B} true`, 'notice A changed. true'])
-  })
-
-  it("starts and finishes every stop while the list hasn't come back", async () => {
-    const { calls, done } = run([{ id: A, told: 'A changed.' }], () => new Promise(() => {}), false)
-    await done
-    await settle()
-    expect(calls).toEqual([`stop ${A}`, `finish ${A} false`])
+    expect(calls).toEqual([
+      `stop ${A}`,
+      `stop ${B}`,
+      'stop c0ffee03-0000-4000-8000-000000000003',
+      `finish ${A} true`,
+      'notice A changed. true',
+      `finish ${B} false`,
+      'notice B changed. false',
+      'finish c0ffee03-0000-4000-8000-000000000003 true',
+    ])
   })
 
   it('stops each session once, with the first notice queued for it (gate pass 35, L-2)', async () => {
-    const { calls, done } = run([{ id: A, told: 'first.' }, { id: A, told: 'second.' }], async () => new Set([A]))
+    const { calls, done } = run([{ id: A, told: 'first.' }, { id: A, told: 'second.' }], () => true)
     await done
-    await settle()
     expect(calls).toEqual([`stop ${A}`, `finish ${A} true`, 'notice first. true'])
   })
+})
 
-  it("sends no notice when the list can't be read", async () => {
-    const { calls, done } = run([{ id: A, told: 'A changed.' }], async () => {
-      throw new Error('supervisor down')
-    }, false)
-    await done
-    await settle()
-    expect(calls).toEqual([`stop ${A}`, `finish ${A} false`])
+describe('stopNotice says only what the stop command showed (gate pass 51, L-1)', () => {
+  it('reads a stop that exited 0 as sent, for a session the host does not list too, and says "keeps trying" only with a retry queued', () => {
+    const UNLISTED = 'c0ffee09-0000-4000-8000-000000000009'
+    expect(stopNotice(UNLISTED, 'its channel changed.', true, false)).toBe('Stop sent to session c0ffee09: its channel changed.')
+    expect(stopNotice(A, 'x.', false, true)).toBe(`Couldn't stop session ${A.slice(0, 8)} yet, and the app keeps trying: x.`)
+    expect(stopNotice(A, 'x.', false, false)).toBe(`Couldn't stop session ${A.slice(0, 8)}: x.`)
+    const retries = new StopRetries()
+    expect(retries.tracking(A)).toBe(false)
+    retries.seed(A)
+    expect(retries.tracking(A)).toBe(true)
   })
 })

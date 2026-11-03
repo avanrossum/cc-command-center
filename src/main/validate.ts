@@ -2,10 +2,10 @@
 // they're tested without Electron. The renderer is treated as able to send
 // anything.
 
+import { isWholeDisk, WHOLE_DISK_MESSAGE } from '@ccc/coupling'
 import type { AnswerRequest, CopyRequest, LaunchRequest } from '../shared/ipc.ts'
 import { checkFlags } from '../shared/flags.ts'
 import { SIDEBAR_WIDTH, type Category } from '../shared/store.ts'
-import { resolve } from 'node:path'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** The largest single input, paste or prompt accepted from the renderer. */
@@ -27,23 +27,39 @@ export function isSize(v: unknown): v is number {
   return Number.isInteger(v) && (v as number) > 0 && (v as number) <= 2000
 }
 
-/** A folder that resolves to the disk root, which no session's record may hold (MIP2-1602 gate pass 39, M-2; pass 40, L-2). */
-export function isWholeDisk(cwd: string): boolean {
-  return resolve(cwd) === '/'
+/** The one whole-disk rule, from the coupling package (gate pass 53, M-2). */
+export { isWholeDisk } from '@ccc/coupling'
+
+/**
+ * A launch request, or why it's refused (gate pass 54, L-2): 'bad launch
+ * request' when anything is off, and the whole-disk message for a folder
+ * that is the whole disk, which the restart check would refuse at the
+ * session's first sighting (MIP2-1603 M-1).
+ */
+export function parseLaunch(v: unknown): LaunchRequest | string {
+  const r = launchShape(v)
+  if (!r) return 'bad launch request'
+  return isWholeDisk(r.cwd) ? WHOLE_DISK_MESSAGE : r
+}
+
+/** A launch request with only known fields and values; null if anything is off, the whole disk included. */
+export function checkLaunch(v: unknown): LaunchRequest | null {
+  const r = parseLaunch(v)
+  return typeof r === 'string' ? null : r
 }
 
 /**
- * A launch request with only known fields and values; null if anything is
- * off, including a folder that is the whole disk, which the restart check
- * would refuse at the session's first sighting (MIP2-1603 M-1).
+ * A launch request's fields and values, with no look at the file system: a
+ * move checks its folder against the whole disk where it runs (gate pass
+ * 54, L-3).
  */
-export function checkLaunch(v: unknown): LaunchRequest | null {
+export function launchShape(v: unknown): LaunchRequest | null {
   if (typeof v !== 'object' || v === null) return null
   const r = v as Record<string, unknown>
-  if (typeof r.cwd !== 'string' || !r.cwd.startsWith('/') || r.cwd.length > 4096 || r.cwd.includes('\0') || isWholeDisk(r.cwd)) return null
-  // Checked before anything is built from it: settingsOf assumes well-formed settings (gate pass 43, L-1).
-  if (!settingsOk(r)) return null
-  const out: LaunchRequest = { cwd: r.cwd, ...settingsOf(r) }
+  if (typeof r.cwd !== 'string' || !r.cwd.startsWith('/') || r.cwd.length > 4096 || r.cwd.includes('\0')) return null
+  const settings = launchSettings(r)
+  if (!settings) return null
+  const out: LaunchRequest = { cwd: r.cwd, ...settings }
   if (r.prompt !== undefined) {
     if (!isText(r.prompt)) return null
     out.prompt = r.prompt
@@ -69,34 +85,44 @@ export function checkCopy(v: unknown): CopyRequest | null {
   if (typeof v !== 'object' || v === null) return null
   const r = v as Record<string, unknown>
   if (r.prompt !== undefined || r.resume !== undefined || r.fromSession !== undefined) return null
-  return settingsOk(r) ? settingsOf(r) : null
+  return launchSettings(r)
 }
 
-/** Whether every launch setting present is well formed. */
-function settingsOk(r: Record<string, unknown>): boolean {
-  if (r.name !== undefined && (typeof r.name !== 'string' || !NAME.test(r.name))) return false
-  if (r.model !== undefined && (typeof r.model !== 'string' || !MODEL.test(r.model))) return false
-  if (r.effort !== undefined && (typeof r.effort !== 'string' || !EFFORTS.has(r.effort))) return false
-  if (r.permissionMode !== undefined && (typeof r.permissionMode !== 'string' || !MODES.has(r.permissionMode))) return false
-  if (r.isolation !== undefined && r.isolation !== 'none' && r.isolation !== 'worktree') return false
-  if (r.ultracode !== undefined && typeof r.ultracode !== 'boolean') return false
-  // The app's own flags are refused here too, whatever the window sent.
-  if (r.extraArgs !== undefined && !(Array.isArray(r.extraArgs) && checkFlags(r.extraArgs).ok)) return false
-  return true
-}
-
-/** The launch settings present, once settingsOk passed. */
-function settingsOf(r: Record<string, unknown>): CopyRequest {
+/**
+ * The launch settings present, each checked as it's taken, or null if any is
+ * off (gate pass 44, L-1): nothing is built from a value that wasn't checked.
+ */
+function launchSettings(r: Record<string, unknown>): CopyRequest | null {
   const out: CopyRequest = {}
-  if (r.name !== undefined) out.name = r.name as string
-  if (r.model !== undefined) out.model = r.model as string
-  if (r.effort !== undefined) out.effort = r.effort as string
-  if (r.permissionMode !== undefined) out.permissionMode = r.permissionMode as string
-  if (r.isolation !== undefined) out.isolation = r.isolation as 'none' | 'worktree'
-  if (r.ultracode !== undefined) out.ultracode = r.ultracode as boolean
-  if (Array.isArray(r.extraArgs)) {
-    const f = checkFlags(r.extraArgs)
-    if (f.ok) out.extraArgs = f.args
+  if (r.name !== undefined) {
+    if (typeof r.name !== 'string' || !NAME.test(r.name)) return null
+    out.name = r.name
+  }
+  if (r.model !== undefined) {
+    if (typeof r.model !== 'string' || !MODEL.test(r.model)) return null
+    out.model = r.model
+  }
+  if (r.effort !== undefined) {
+    if (typeof r.effort !== 'string' || !EFFORTS.has(r.effort)) return null
+    out.effort = r.effort
+  }
+  if (r.permissionMode !== undefined) {
+    if (typeof r.permissionMode !== 'string' || !MODES.has(r.permissionMode)) return null
+    out.permissionMode = r.permissionMode
+  }
+  if (r.isolation !== undefined) {
+    if (r.isolation !== 'none' && r.isolation !== 'worktree') return null
+    out.isolation = r.isolation
+  }
+  if (r.ultracode !== undefined) {
+    if (typeof r.ultracode !== 'boolean') return null
+    out.ultracode = r.ultracode
+  }
+  if (r.extraArgs !== undefined) {
+    // The app's own flags are refused here too, whatever the window sent.
+    const f = Array.isArray(r.extraArgs) ? checkFlags(r.extraArgs) : null
+    if (!f?.ok) return null
+    out.extraArgs = f.args
   }
   return out
 }

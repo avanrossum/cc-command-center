@@ -357,6 +357,19 @@ describe('ChannelHub', () => {
     expect(() => hub.relayPrompt(NEW, 'hi')).not.toThrow()
   })
 
+  it('writes the session file in the order asked, so the last rebind wins (gate pass 48, L-4)', async () => {
+    const { id } = await launch()
+    hub.bind(id, A_ID)
+    const ids = ['b55a99a6-0000-4000-8000-000000000003', 'b55a99a6-0000-4000-8000-000000000004', 'b55a99a6-0000-4000-8000-000000000005']
+    hub.rebind(A_ID, ids[0]!)
+    hub.rebind(ids[0]!, ids[1]!)
+    hub.rebind(ids[1]!, ids[2]!)
+    const file = join(hub.root, id, 'session')
+    for (let i = 0; i < 50 && (!existsSync(file) || readFileSync(file, 'utf8') !== ids[2]); i++) await new Promise(r => setTimeout(r, 10))
+    expect(readFileSync(file, 'utf8')).toBe(ids[2])
+    expect(readdirSync(join(hub.root, id)).filter(n => n.startsWith('session.'))).toEqual([])
+  })
+
   describe('reply signatures (MIP2-1436 item 1)', () => {
     it('writes the public reply key in the settings, never the private one', async () => {
       const l = await hub.prepareLaunch()

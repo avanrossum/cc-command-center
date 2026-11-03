@@ -89,10 +89,21 @@ export function latestFalseRefusal(args) {
 }
 
 /**
- * Why the packaged reporter mod isn't the one the build hashed, or null
- * (MIP2-1560): the hash built into main.cjs is taken from dist/mod, and the
- * app refuses to start when the unpacked copy hashes differently. beta.2
- * shipped with a file electron-builder had left out.
+ * The reporter mod hash built into the packaged main.cjs, read from the
+ * app.asar text (asar stores files uncompressed), or why it can't be
+ * (gate pass 20, L-5): exactly one hash, as `BUILT_MOD_HASH = … "<16 hex>"`.
+ */
+export function embeddedModHash(asarText) {
+  const found = [...new Set([...asarText.matchAll(/BUILT_MOD_HASH = (?:true \? )?"([0-9a-f]{16})"/g)].map(m => m[1]))]
+  return found.length === 1 ? found[0] : found.length ? `more than one hash (${found.join(', ')})` : 'no hash in main.cjs'
+}
+
+/**
+ * Why the packaged reporter mod isn't the one the packaged app checks for,
+ * or null (MIP2-1560; gate pass 20, L-5): `built` is the hash built into
+ * the packaged main.cjs (embeddedModHash), and the app refuses to start
+ * when the unpacked copy hashes differently. beta.2 shipped with a file
+ * electron-builder had left out.
  */
 export function modPackRefusal(built, packaged) {
   if (!/^[0-9a-f]{16}$/.test(built)) return `the built reporter mod can't be hashed (${built})`
@@ -250,6 +261,8 @@ export function builderConfig({ identity, adhoc, repo }) {
     // npm run setup already rebuilt node-pty under the allowlisted environment; electron-builder's own
     // rebuild would run node-gyp with the signing credentials if its skip marker ever missed (pass 13, M-1).
     '-c.npmRebuild=false',
+    // The packaged mod is checked against the app's own hash before signing and notarization (gate pass 20, L-5).
+    '-c.afterPack=scripts/release-after-pack.cjs',
   ]
 }
 

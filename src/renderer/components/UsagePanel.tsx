@@ -6,14 +6,15 @@
 
 import { useEffect, useRef, useState } from 'react'
 import type { Pace, Reading, WindowKind } from '../model/pace.ts'
-import { extraStatusLine, plainHelp, scopedRisk, scopedTodo, statusLine, tipFacts, type ExtraLimit, type SessionShare } from '../model/usage-help.ts'
+import { calmLine, extraStatusLine, NO_FIVE_HOUR_NOTE, plainHelp, scopedRisk, scopedTodo, severity, sharesSinceText, statusLine, tipFacts, type ExtraLimit, type SessionShare } from '../model/usage-help.ts'
 import type { CreditsSpend } from '../../shared/spend.ts'
 import type { TipsResult } from '../../shared/usage.ts'
 
 const clockText = (ms: number) => new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 
-/** The window whose pace matters more: the more severe, else 5h. */
+/** The window whose pace matters more: the more severe, else 5h; 7d when 5h isn't reported (MIP2-1609 §4). */
 function worse(paces: Record<WindowKind, Pace>): WindowKind {
+  if (paces['5h'].state === 'absent') return '7d'
   const rank = (p: Pace) => ['out', 'over', 'tight'].indexOf(p.state)
   const r5 = rank(paces['5h'])
   const r7 = rank(paces['7d'])
@@ -27,6 +28,8 @@ export function UsagePanel({
   credits = null,
   shares,
   sharesSince = null,
+  base = '5h',
+  weekly = false,
   arbiterOn,
   now,
   onOpen,
@@ -39,8 +42,12 @@ export function UsagePanel({
   /** Usage credits, when Claude Code reports them, for the risk line (§9.1). */
   credits?: CreditsSpend | null
   shares: readonly SessionShare[]
-  /** When the shares start: the later of the 5h window's start and when the app began counting it. */
+  /** When the shares start: the later of the base window's start and when the app began counting it. */
   sharesSince?: number | null
+  /** The window the shares are counted over: 5h, or 7d when there's no 5-hour window (MIP2-1609 §5). */
+  base?: WindowKind
+  /** No 5-hour window, on the word of Claude Code's own /usage (MIP2-1609; gate pass 45, M-1). */
+  weekly?: boolean
   arbiterOn: boolean
   now: number
   onOpen: (sessionId: string) => void
@@ -52,7 +59,7 @@ export function UsagePanel({
   useEffect(() => {
     if (!arbiterOn) return
     let live = true
-    void window.ccc.usageTips(tipFacts(paces, lists, shares, now)).then(r => live && setTips(r))
+    void window.ccc.usageTips(tipFacts(paces, lists, shares, now, weekly)).then(r => live && setTips(r))
     return () => void (live = false)
   }, [])
   useEffect(() => {
@@ -71,29 +78,34 @@ export function UsagePanel({
 
   const kind = worse(paces)
   const plain = plainHelp(kind, paces[kind], lists[kind], shares, now, credits)
-  const quiet = (p: Pace) => p.state === 'onpace' || p.state === 'learning'
+  // A window that isn't reported has nothing to slow down for (MIP2-1609 §4).
+  const quiet = (p: Pace) => p.state === 'onpace' || p.state === 'learning' || p.state === 'absent'
   // Nothing to slow down for: no advice, and no risk line (UX review, MIP2-1500).
   const windowsCalm = (['5h', '7d'] as const).every(k => quiet(paces[k]))
   const calm = windowsCalm && extras.every(x => !x.pace || quiet(x.pace))
   const scopedRisks = extras.flatMap(x => scopedRisk(x) ?? [])
   const scopedTodos = extras.flatMap(x => scopedTodo(x, shares) ?? [])
   const sinceText = sharesSince === null ? '' : clockText(sharesSince)
-  // The shares always cover the 5h window; said so when the panel is about the week.
-  const sinceLabel = !sinceText ? '' : kind === '7d' ? ` · since the 5h window began at ${sinceText}` : ` · since ${sinceText}`
+  // Shares over 5h say so when the panel is about the week; over 7d the heading names the week (MIP2-1609 §5).
+  const sinceLabel = !sinceText ? '' : base === '7d' ? ` · ${sharesSinceText('7d', sharesSince)}` : kind === '7d' ? ` · since the 5h window began at ${sinceText}` : ` · ${sharesSinceText('5h', sharesSince)}`
+  const sinceShort = sharesSince === null ? '' : base === '7d' ? sharesSinceText('7d', sharesSince).replace(/^this week, /, '') : sharesSinceText('5h', sharesSince)
+  // With no 5-hour window: the reported limits, most severe first, 7d ahead of a scoped week on a tie, then the note (§6).
+  const lines = weekly
+    ? [{ key: '7d', text: statusLine('7d', paces['7d']), rank: severity(paces['7d']) }, ...extras.map(x => ({ key: x.key, text: extraStatusLine(x), rank: x.pace ? severity(x.pace) : 4 }))].sort((a, b) => a.rank - b.rank)
+    : [{ key: '5h', text: statusLine('5h', paces['5h']) }, { key: '7d', text: statusLine('7d', paces['7d']) }, ...extras.map(x => ({ key: x.key, text: extraStatusLine(x) }))]
   const showTips = tips?.ok === true && tips.tips.length > 0
   return (
     <div className="usage-panel" ref={ref} role="dialog" aria-label="Usage help" tabIndex={-1}>
       <div className="up-sec">
-        <p>{statusLine('5h', paces['5h'])}</p>
-        <p>{statusLine('7d', paces['7d'])}</p>
-        {extras.map(x => (
-          <p key={x.key}>{extraStatusLine(x)}</p>
+        {lines.map(l => (
+          <p key={l.key}>{l.text}</p>
         ))}
+        {weekly && <p className="up-note">{NO_FIVE_HOUR_NOTE}</p>}
       </div>
       <div className="up-sec">
         <div className="up-h">This app's sessions{sinceLabel}</div>
         {shares.length === 0 ? (
-          <p className="up-note">No session here has reported a cost in this window yet.</p>
+          <p className="up-note">{sinceShort ? `No session here has reported a cost ${sinceShort}.` : 'No session here has reported a cost in this window yet.'}</p>
         ) : (
           shares.slice(0, 5).map(s => (
             <button key={s.sessionId} type="button" className="up-row" onClick={() => (onClose(), onOpen(s.sessionId))}>
@@ -124,7 +136,7 @@ export function UsagePanel({
             </p>
           )}
           {calm ? (
-            <p>Both windows are on pace.</p>
+            <p>{calmLine((['5h', '7d'] as const).filter(k => paces[k].state !== 'absent').length + extras.filter(x => x.pace).length)}</p>
           ) : (
             <>
               {!windowsCalm && plain.risk && (

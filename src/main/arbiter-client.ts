@@ -6,7 +6,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import { z } from 'zod'
-import { ARBITER_MODEL, type Ask } from './arbiter.ts'
+import { ARBITER_MODEL, MAX_TOKENS, type Ask } from './arbiter.ts'
 import type { Summarize } from './summaries.ts'
 import type { TipsCall } from './usage-tips.ts'
 
@@ -35,7 +35,7 @@ export function createAsk(apiKey: () => string | null): Ask {
     const client = anthropicClient(key)
     const response = await client.messages.parse({
       model: ARBITER_MODEL,
-      max_tokens: 2048,
+      max_tokens: MAX_TOKENS.rank,
       system,
       messages: [{ role: 'user', content: user }],
       output_config: { effort: 'low', format: zodOutputFormat(RankingSchema) },
@@ -53,7 +53,7 @@ export function createSummarize(apiKey: () => string | null): Summarize {
     const client = anthropicClient(key)
     const response = await client.messages.parse({
       model: ARBITER_MODEL,
-      max_tokens: 256,
+      max_tokens: MAX_TOKENS.summary,
       system,
       messages: [{ role: 'user', content: user }],
       output_config: { effort: 'low', format: zodOutputFormat(SummarySchema) },
@@ -71,7 +71,7 @@ export function createTips(apiKey: () => string | null): TipsCall {
     const client = anthropicClient(key)
     const response = await client.messages.parse({
       model: ARBITER_MODEL,
-      max_tokens: 1024,
+      max_tokens: MAX_TOKENS.tips,
       system,
       messages: [{ role: 'user', content: user }],
       output_config: { effort: 'low', format: zodOutputFormat(TipsSchema) },

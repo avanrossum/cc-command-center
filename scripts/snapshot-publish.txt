@@ -30,6 +30,7 @@ scripts/fuses.mjs
 scripts/mod-hash.d.mts
 scripts/mod-hash.mjs
 scripts/release-lib.d.mts
+scripts/release-after-pack.cjs
 scripts/release-lib.mjs
 scripts/release.mjs
 scripts/snapshot-exclude.txt
@@ -57,5 +58,6 @@ docs/release-notes/v1.0.2-beta.3.md
 docs/release-notes/v1.0.2-beta.4.md
 docs/release-notes/v1.0.2-beta.5.md
 docs/release-notes/v1.1.0.md
+docs/release-notes/v1.1.1.md
 docs/release-plan.md
 test/fixtures/releases-0.24.atom

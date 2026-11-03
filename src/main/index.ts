@@ -17,6 +17,7 @@ import {
   parseVersion,
   readUsageDir,
   UsageReportReader,
+  parseUsageReport,
   removeLegacyReporterDir,
   resolveClaudeBinary,
   SelfCheck,
@@ -34,6 +35,7 @@ import {
   sharedSupervisorStart,
   awaitLoginPath,
   terminalHostOf,
+  isWholeDisk,
 } from '@ccc/coupling'
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage, screen } from 'electron'
 import { loadWindowState, placeWindow, saveWindowState, WINDOW_MIN } from './window-state.ts'
@@ -66,12 +68,13 @@ import type { SessionMeta } from '../shared/store.ts'
 import { inArchive } from '../shared/lifecycle.ts'
 import { wireHosts } from './restart.ts'
 import { RestartWatch } from './restart-watch.ts'
-import { refusals, restartPoll, runQueuedStops, StopRetries } from './restart-poll.ts'
+import { refusals, restartPoll, runQueuedStops, stopNotice, StopRetries } from './restart-poll.ts'
+import { isSessionId } from './validate.ts'
 import { DISPLAY_NAME, nameToPin } from './app-name.ts'
 import { ClearWatch } from '../shared/clear.ts'
 import { QuitControl } from './quit-control.ts'
 import { checkQuitAnswer, closable, quitNotices } from '../shared/quit.ts'
-import { clearGoneRefusal, confirmationFor, LiftedRefusals, ModStuck, NeedsConfirm } from './resume.ts'
+import { clearGoneRefusal, confirmationFor, LiftedRefusals, ModStuck, NeedsConfirm, rekeyedFor } from './resume.ts'
 import { checkModFolders, copyTo, MOD_FOLDERS_MAX, modDir, modHash, modSource, type ModHealed } from './reporter-mod.ts'
 import { backfillVersion, escalationText, pathFold, realPath, savedOptionsCheck, type Escalation } from './mod-backfill.ts'
 import { moveRequest } from './move.ts'
@@ -275,10 +278,10 @@ async function start(): Promise<void> {
     const done = hostRef
       .stop(id)
       .then(
-        () => (told && broadcast(IPC.appNotice, `Stopped a session: ${told}`), true),
+        () => (told && broadcast(IPC.appNotice, stopNotice(id, told, true, false)), true),
         err => {
           console.warn(`stopping ${id.slice(0, 8)} after its channel changed: ${String(err)}`)
-          if (told) broadcast(IPC.appNotice, `Couldn't stop a session yet, and the app keeps trying: ${told}`)
+          if (told) broadcast(IPC.appNotice, stopNotice(id, told, false, stopRetries.tracking(id)))
           return false
         },
       )
@@ -489,6 +492,9 @@ async function start(): Promise<void> {
   // Every lifecycle command's arguments, exit code and output, prompts and secrets cut (MIP2-1446). Made before the hub,
   // whose recovery books refusals through refusal.onUntrusted, which notes them here (gate pass 32, L-1).
   const commandLog = new CommandLog(join(app.getPath('userData'), 'claude-commands.log'))
+  // At quit, what the summary wrappers still hold, such as the count of unchanged /usage runs, is written (gate pass 51, L-5):
+  // awaited by the app's own Quit, and started here for a quit that doesn't go through it, as the Dock's or a log out.
+  app.on('before-quit', () => void commandLog.close())
   // Made here, once the store, the lift, the watch and the command log exist (gate pass 37, L-2). Every refusal, the restart check's or a channel tamper mark, is booked the same way before its stop: its process
   // kept refused, its start kept, and its retries scheduled (gate pass 31, M-2). A supervisor restart the verdict
   // refuses (MIP2-1512) is marked through its channel, whose onUntrusted books and stops it; a session with no channel
@@ -508,6 +514,7 @@ async function start(): Promise<void> {
     markStore: (id, why) => store.markUntrusted(id, why),
     notice: text => broadcast(IPC.appNotice, text),
     markChannel: (id, why) => hub?.markSession(id, why) ?? false,
+    markChannelless: (id, why) => hub?.restoreMarks([[id, why]]),
   })
   const markRestarted = refusal.markRestarted
   hub = new ChannelHub({
@@ -547,7 +554,9 @@ async function start(): Promise<void> {
     const cwd = join(app.getPath('userData'), 'usage-run')
     rmSync(cwd, { recursive: true, force: true })
     mkdirSync(cwd, { recursive: true, mode: 0o700 })
-    usageReport = new UsageReportReader({ run: createClaudeRunner(), cwd, log: line => console.warn(line), onRead: () => onUsageRead() })
+    // Each run goes in the command log as a summary when its outcome changes, whether a report came back, with a daily
+    // count of the runs that didn't change, so the lifecycle entries aren't pushed out (pass 20, I-5; pass 48 and 50, M-1).
+    usageReport = new UsageReportReader({ run: commandLog.wrapSummary(createClaudeRunner(), out => ({ report: parseUsageReport(out) !== null })), cwd, log: line => console.warn(line), onRead: () => onUsageRead() })
     usageReport.start()
   }
   // Detect and degrade (DECISION item 4): results per Claude Code version.
@@ -619,10 +628,9 @@ async function start(): Promise<void> {
   // below catches it after the fact (MIP2-1512).
   const hosts = wireHosts(host, sessionModVerdict, noProcess, errorFor)
   void runQueuedStops(stopsWaiting.splice(0), {
-    running: async () => new Set((await host.list()).sessions.filter(s => s.pid.value !== null).map(s => s.sessionId)),
     stop: id => untrustedStop(id),
     finish: (id, stopped) => void stopRetries.finish(id, stopped),
-    notice: (told, stopped) => broadcast(IPC.appNotice, stopped ? `Stopped a session: ${told}` : `Couldn't stop a session yet, and the app keeps trying: ${told}`),
+    notice: (id, told, stopped) => broadcast(IPC.appNotice, stopNotice(id, told, stopped, stopRetries.tracking(id))),
   })
   poller = new FleetPoller({
     host,
@@ -666,7 +674,9 @@ async function start(): Promise<void> {
   // A move from 0.24, through the move sheet or a parked session's trust step: its launch settings and source.
   const recordMoved = (from: string, to: string) => {
     const r = moveRequest(store.get().sessions[from], undefined)
-    store.recordMove(from, to, { model: r?.model, effort: r?.effort, mode: r?.permissionMode, cwd: r?.cwd, name: r?.name, ...(modPackaged ? { mod: basename(pluginDir) } : {}) })
+    // No record holds the whole disk; the move itself ran elsewhere or was refused (gate pass 55, L-3; pass 56, L-2).
+    const cwd = r?.cwd && !isWholeDisk(r.cwd) ? r.cwd : undefined
+    store.recordMove(from, to, { model: r?.model, effort: r?.effort, mode: r?.permissionMode, cwd, name: r?.name, ...(modPackaged ? { mod: basename(pluginDir) } : {}) })
   }
   const trust = new TrustRuns(
     hosts.trust,
@@ -718,8 +728,7 @@ async function start(): Promise<void> {
     metaOf: id => store.get().sessions[id],
     terminalHost: pid => terminalHostOf(pid),
     launchedHere: id => store.get().sessions[id]?.origin === 'app',
-    // The lift goes first, so it doesn't outlive the resume when saving the cleared mark throws (gate pass 43, INFO-3).
-    onRekeyed: id => (lifted.drop(id), store.clearUntrusted(id)),
+    onRekeyed: rekeyedFor({ lifted, clearUntrusted: id => store.clearUntrusted(id), notice: text => broadcast(IPC.appNotice, text) }),
     // Lifted in memory, put back if the resume fails or the mark stays (gate pass 33, L-3; pass 34, L-1; pass 35, M-1).
     onRekeying: id => lifted.lift(id),
     // A resume keeps the session's saved --plugin-dir, so one on a stuck copy is refused (pass 6, H-1).
@@ -773,7 +782,7 @@ async function start(): Promise<void> {
   // closed and the mark goes. A session still listed, with or without a process, keeps its mark.
   ipcMain.handle(IPC.clearGoneMark, async (event, id: unknown) => {
     if (!isTrustedSender(event)) return { ok: false, error: 'untrusted sender' }
-    if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/.test(id)) return { ok: false, error: 'not a session id' }
+    if (!isSessionId(id)) return { ok: false, error: 'not a session id' }
     const meta = store.get().sessions[id]
     const why = clearGoneRefusal(poller?.current()?.sessions.find(s => s.sessionId === id), meta, inArchive(meta))
     if (why) return { ok: false, error: why }
@@ -810,7 +819,8 @@ async function start(): Promise<void> {
     // A newly remembered close gets its one toast on the next launch (§6).
     remember: choice => store.updateSettings({ quitSessions: choice, ...(choice === 'close' ? { quitClosedNoticed: false } : {}) }),
     report: r => store.setLastQuit(r),
-    quit: () => app.quit(),
+    // The command log's pending count is written first, waited for at most a second (gate pass 53, L-4).
+    quit: () => void Promise.race([commandLog.close(), new Promise(r => setTimeout(r, 1_000))]).then(() => app.quit()),
     log: line => console.warn(line),
   })
   requestQuit = () => quitControl.request()
@@ -943,7 +953,12 @@ async function start(): Promise<void> {
         void commandLog.note('clear-unconfirmed', { from, to })
         continue
       }
-      store.renameSession(from, to)
+      // A save that fails never skips this poll's restart check below; the rename holds in memory (gate pass 55, L-1).
+      try {
+        store.renameSession(from, to)
+      } catch (err) {
+        void commandLog.note('clear-not-saved', { from, to, error: String(err).slice(0, 300) })
+      }
       channels.rebind(from, to)
       spendLedger?.rename(from, to)
       void commandLog.note('cleared', { from, to })

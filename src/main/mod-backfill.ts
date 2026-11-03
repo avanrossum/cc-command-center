@@ -7,12 +7,12 @@
 // L-1).
 // Pure; the file operations are passed in.
 
-import { realpathSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import type { SavedOptions } from '@ccc/coupling'
 import { isLaunchOnly, isMode, passesUnder } from './permission-modes.ts'
 import { VERSION_DIR } from './reporter-mod.ts'
-import { isWholeDisk } from './validate.ts'
+import { DATA_VOLUME, isAliasPath, isWholeDisk, wholeDiskReason, type DiskIo } from '@ccc/coupling'
 
 export interface BackfillDeps {
   /** `<data>/reporter-mod`. */
@@ -116,6 +116,8 @@ export interface DirRules {
   denied: readonly string[]
   real: (path: string) => string
   fold?: (path: string) => string
+  /** For tests: the whole-disk check's file system. By default it reads the disk, with the throwing realpath (gate pass 56, L-1). */
+  disk?: Partial<DiskIo>
 }
 
 /** What a session's saved options would add over its launch and confirmations, for Alex to confirm (D-040). */
@@ -171,10 +173,35 @@ const inside = (path: string, folder: string, fold: (p: string) => string = nfc)
   return p === f || p.startsWith(f.endsWith('/') ? f : `${f}/`)
 }
 
-/** The refusal for an added folder, or null when it's a real path for the rules to place. */
-function dirRefusal(real: string, rules: DirRules): string | null {
+/** An `--add-dir` under a macOS alias prefix, which names a folder by another path (gate pass 55, M-2). */
+const ALIAS_REFUSAL = 'its saved options add a folder by a special path (/.vol, /.nofollow or /.resolve)'
+
+/** A path under the data volume's root at its plain path (`/System/Volumes/Data/x` is `/x`); others as they are. */
+export function onDataVolume(path: string, fold: (p: string) => string = nfc): string {
+  const prefix = `${DATA_VOLUME}/`
+  return fold(path).startsWith(fold(prefix)) ? path.slice(DATA_VOLUME.length) : path
+}
+
+/**
+ * The one place an added folder is refused (gate pass 56, L-5): an alias
+ * path, typed or real, and the whole disk, with or without rules; then,
+ * with rules, the home folder and above, Claude Code's folder and the
+ * denied folders. The whole-disk check reads the disk itself, not through
+ * `rules.real`, which never throws (pass 56, L-1).
+ */
+function dirRefusal(typed: string, path: string, rules?: DirRules): string | null {
+  if (isAliasPath(typed) || isAliasPath(path)) return ALIAS_REFUSAL
+  const disk = wholeDiskReason(path, rules?.disk)
+  if (disk === 'unreadable') return "its saved options add a folder whose real path can't be read"
+  if (disk) return 'its saved options add the whole disk as a folder'
+  if (!rules) return null
   const fold = rules.fold
-  if (real === '/') return 'its saved options add the whole disk as a folder'
+  // The folders that hold the data volume, and so the home folder through it (gate pass 55, M-2).
+  const folded = fold ?? nfc
+  if (['/System', '/System/Volumes'].some(f => folded(path.replace(/\/+$/, '')) === folded(f))) return 'its saved options add your home folder or a folder above it'
+  // A folder through the data volume is the same folder at its plain path: `/System/Volumes/Data/Users/a/.claude` is
+  // `~/.claude` (gate pass 54, M-2).
+  const real = onDataVolume(path, fold)
   if (inside(rules.real(rules.home), real, fold)) return 'its saved options add your home folder or a folder above it'
   const claude = rules.real(rules.claudeDir)
   if (inside(claude, real, fold) || inside(real, claude, fold)) return "its saved options add Claude Code's own folder"
@@ -211,7 +238,7 @@ export function escalationText(e: Escalation): string {
  */
 export function savedFlagsCheck(flags: readonly string[], launch: Launch, rules?: DirRules, confirmed: Confirmed = {}): FlagsCheck {
   // By its real path too: a recorded folder that links to the disk root counts every folder as its own (gate pass 41, M-1).
-  if (rules?.cwd && (isWholeDisk(rules.cwd) || rules.real(rules.cwd) === '/')) return { refused: "the app's record of its folder is the whole disk, so its saved options can't be checked" }
+  if (rules?.cwd && (isWholeDisk(rules.cwd, rules.disk) || isWholeDisk(rules.real(rules.cwd), rules.disk))) return { refused: "the app's record of its folder is the whole disk, so its saved options can't be checked" }
   const values = new Map<string, string>()
   const rest: string[] = []
   const dirs: string[] = []
@@ -226,11 +253,13 @@ export function savedFlagsCheck(flags: readonly string[], launch: Launch, rules?
       if (v === undefined || v.startsWith('-')) return { refused: 'its saved options repeat a flag or leave out a value' }
       if (f === '--add-dir') {
         if (!v.startsWith('/') || UNPRINTABLE.test(v.normalize('NFC')) || v.length > ADD_DIR_MAX) return { refused: "its saved options add a folder that isn't a plain absolute path" }
+        // Already normal, or refused: the checks below resolve `link/..` as text, where Claude Code may follow the link
+        // first, so `<cwd>/link-to-root/..` would pass as the session's own folder (gate pass 57, H-1).
+        if ((v.replace(/\/+$/, '') || '/') !== resolve(v)) return { refused: 'its saved options add a folder written with `.` or `..`' }
         const path = real(v)
-        if (path === '/') return { refused: 'its saved options add the whole disk as a folder' }
         // The confirmation shows the real path, so it's checked too: a link can lead to a name the typed one hides (gate pass 24, M-4).
         if (UNPRINTABLE.test(path.normalize('NFC'))) return { refused: "its saved options add a folder whose real name can't be shown plainly" }
-        const why = rules ? dirRefusal(path, rules) : null
+        const why = dirRefusal(v, path, rules)
         if (why) return { refused: why }
         const own = rules?.cwd ? inside(path, rules.real(rules.cwd)) : false
         if (!own && !confirmedDirs.has(nfc(path)) && !dirs.some(d => nfc(d) === nfc(path))) dirs.push(path)
@@ -290,7 +319,7 @@ export function savedOptionsCheck(saved: SavedOptions, rec: { modRoot: string; m
   // The folder it restarts in (gate pass 19, M-2): the recorded one, or refused when the app has none.
   if (!rec.cwd) return { refused: "the app has no record of its folder, so its saved options can't be checked" }
   // Every folder would count as inside a recorded "/" (MIP2-1602 gate pass 39, M-2).
-  if (isWholeDisk(rec.cwd)) return { refused: "the app's record of its folder is the whole disk, so its saved options can't be checked" }
+  if (isWholeDisk(rec.cwd, rules?.disk)) return { refused: "the app's record of its folder is the whole disk, so its saved options can't be checked" }
   if (saved.cwd !== resolve(rec.cwd)) return { refused: 'its saved options name a folder other than the one the app launched it in' }
   if (saved.dir !== resolve(rec.modRoot, rec.mod)) return { refused: 'its saved options name a reporter mod copy other than the one the app recorded' }
   if (rec.settings === null) return { refused: "its channel is gone, so its saved settings file can't be checked" }

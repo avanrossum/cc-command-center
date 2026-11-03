@@ -12,6 +12,7 @@
 //   (MIP2-1388); launch reports that as its own error.
 
 import { realpathSync } from 'node:fs'
+import { isWholeDisk, WHOLE_DISK_MESSAGE } from './whole-disk.ts'
 import { parseAgentsJson, toSnapshot } from './agents-json.ts'
 import { supervisorState } from './supervisor-env.ts'
 import { claudeConfigDir, readJobNeeds } from './job-state.ts'
@@ -355,7 +356,10 @@ export class SupervisorHost implements SessionHost {
     sessionId = this.currentIdOf(sessionId) ?? sessionId
     if (!UUID.test(sessionId)) throw new Error('not a session id')
     const cwd = await this.cwdOf(sessionId)
-    if (!cwd) throw new Error('no folder known for the session')
+    if (!cwd) throw new NoFolderKnown()
+    // The folder the copy will run in, the one used below, is never the whole disk: the host owns the rule (gate pass 50,
+    // L-3; pass 51, I-2/L-6).
+    if (isWholeDisk(cwd)) throw new Error(WHOLE_DISK_MESSAGE)
     const copy = await this.watchingStrays(cwd, r => [r.sessionId], () => this.startCopyNow(sessionId, cwd, opts))
     return { ...copy, cwd }
   }
@@ -386,16 +390,20 @@ export class SupervisorHost implements SessionHost {
    */
   async moveIn(sessionId: string, opts: Omit<LaunchOptions, 'prompt' | 'extraArgs' | 'ultracode'>): Promise<{ sessionId: string; sameId: boolean }> {
     if (!UUID.test(sessionId)) throw new Error('not a session id')
-    return this.watchingStrays(this.cwds.get(sessionId) ?? opts.cwd, r => [r.sessionId], () => this.moveInNow(sessionId, opts))
+    // The folder it runs in is the one checked, as for a copy (gate pass 54, L-3).
+    const cwd = this.cwds.get(sessionId) ?? opts.cwd
+    if (isWholeDisk(cwd)) throw new Error(WHOLE_DISK_MESSAGE)
+    return this.watchingStrays(cwd, r => [r.sessionId], () => this.moveInNow(sessionId, opts, cwd))
   }
 
-  private async moveInNow(sessionId: string, opts: Omit<LaunchOptions, 'prompt' | 'extraArgs' | 'ultracode'>): Promise<{ sessionId: string; sameId: boolean }> {
+  /** Runs in `cwd`, the folder moveIn checked (gate pass 55, L-2). */
+  private async moveInNow(sessionId: string, opts: Omit<LaunchOptions, 'prompt' | 'extraArgs' | 'ultracode'>, cwd: string): Promise<{ sessionId: string; sameId: boolean }> {
     const { sessions } = await this.list()
     const listed = sessions.find(s => s.sessionId === sessionId)
     if (listed && listed.pid.value !== null) {
       throw new Error(listed.kind.value === 'background' ? 'it already runs in the background' : 'it is still open in CC Command Center 0.24; close it there first')
     }
-    const prepared = await this.prepareLaunch({ ...opts, cwd: this.cwds.get(sessionId) ?? opts.cwd })
+    const prepared = await this.prepareLaunch({ ...opts, cwd })
     try {
       let out: { stdout: string; stderr: string }
       try {
@@ -602,3 +610,12 @@ export class SupervisorHost implements SessionHost {
     }
   }
 }
+
+/** A copy whose session's folder the host doesn't know yet (gate pass 51, I-3/L-6). */
+export class NoFolderKnown extends Error {
+  constructor() {
+    super('no folder known for the session')
+    this.name = 'NoFolderKnown'
+  }
+}
+

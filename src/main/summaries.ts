@@ -22,7 +22,7 @@
 
 import type { AnswerPost } from '../../mod/hooks/channel-wire.ts'
 import type { TurnSummary } from '../shared/summaries.ts'
-import { costUsd, type ArbiterLog, type Usage } from './arbiter.ts'
+import { callBoundUsd, costUsd, MAX_TOKENS, type ArbiterLog, type Usage } from './arbiter.ts'
 
 /** Characters of the turn's text sent: about 1,500 tokens (cost estimate on MIP2-1422). */
 export const TURN_CHARS = 6_000
@@ -144,14 +144,28 @@ export class Summaries {
     try {
       for (let post = this.latest.get(sessionId); post; ) {
         const day = new Date(this.now()).toDateString()
-        if (this.d.log.spentOn(this.now()) >= this.d.capUsd()) {
-          if (this.cappedDay !== day) this.d.log.append({ at: this.now(), kind: 'capped', usd: 0, sessions: 1 })
-          this.cappedDay = day
-          return
-        }
+        const turn = post
         try {
-          const { summary, usage } = this.wait ? await this.d.summarize!(WAIT_SYSTEM, waitPrompt(post.text)) : await this.d.summarize!(SUMMARY_SYSTEM, summaryPrompt(post.text))
-          this.d.log.append({ at: this.now(), kind: this.wait ? 'wait' : 'summary', usd: costUsd(usage), inputTokens: usage.input_tokens, outputTokens: usage.output_tokens, sessions: 1 })
+          // Through the shared reservation with rankings and tips: a call in flight is waited for, and only real spending
+          // caps (gate pass 51, M-1, L-1).
+          const system = this.wait ? WAIT_SYSTEM : SUMMARY_SYSTEM
+          const user = this.wait ? waitPrompt(turn.text) : summaryPrompt(turn.text)
+          const r = await this.d.log.withReservation(
+            () => this.now(),
+            () => this.d.capUsd(),
+            async () => {
+              const out = await this.d.summarize!(system, user)
+              this.d.log.append({ at: this.now(), kind: this.wait ? 'wait' : 'summary', usd: costUsd(out.usage), inputTokens: out.usage.input_tokens, outputTokens: out.usage.output_tokens, sessions: 1 })
+              return out
+            },
+            callBoundUsd(system, user, MAX_TOKENS.summary),
+          )
+          if (r.capped) {
+            if (this.cappedDay !== day) this.d.log.append({ at: this.now(), kind: 'capped', usd: 0, sessions: 1 })
+            this.cappedDay = day
+            return
+          }
+          const { summary } = r.value
           const text = cleanSummary(summary)
           // Shown only if it's still the latest turn.
           if (text && this.latest.get(sessionId) === post) {

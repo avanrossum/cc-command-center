@@ -4,6 +4,8 @@
 export interface TipFacts {
   windows: { kind: '5h' | '7d'; state: string; usedPercent: number | null; projectedPercent: number | null; resetsIn: string | null; movedPoints: number | null }[]
   sessions: { name: string; model: string | null; effort: string | null; contextPercent: number | null; cacheReadShare: number | null; runningSubagents: number; working: boolean; sharePercent: number }[]
+  /** Claude Code's report has no 5-hour window, so the model doesn't invent one (MIP2-1609 §6). */
+  fiveHour?: 'not reported'
 }
 
 export interface Tip {

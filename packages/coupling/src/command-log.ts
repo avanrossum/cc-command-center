@@ -25,6 +25,20 @@ const LIFECYCLE = new Set(['--bg', '--resume', 'stop', 'respawn', 'rm', 'daemon'
 
 const SECRET_LIKE = /\b[0-9a-f]{64}\b/gi
 
+/** How often unchanged summarized runs are counted in the log. */
+const DAY_MS = 24 * 60 * 60_000
+const HOUR_MS = 60 * 60_000
+/** The most changed-outcome summaries written in an hour; the rest are counted (gate pass 51, M-1). */
+export const SUMMARY_CHANGES_PER_HOUR = 6
+
+/** Stderr with what varies by run collapsed, so the same failure reads as one outcome: ids, hex, then digits. */
+function collapse(text: string): string {
+  return text
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '<id>')
+    .replace(/\b(?:0x)?[0-9a-f]{6,}\b/gi, '<hex>')
+    .replace(/\d+/g, '#')
+}
+
 export interface CommandEntry {
   at: string
   args: string[]
@@ -53,6 +67,8 @@ function scrub(text: string, prompt: string | null): string {
 
 export class CommandLog {
   private chain: Promise<void> = Promise.resolve()
+  /** What each wrapper writes at close. */
+  private readonly closers: (() => void)[] = []
 
   constructor(
     private readonly path: string,
@@ -94,29 +110,116 @@ export class CommandLog {
    * resume's `note:` on stderr (MIP2-1453).
    */
   wrap(run: ClaudeRunner): ClaudeRunner {
-    const inner: NonNullable<ClaudeRunner['full']> = run.full ?? ((args, opts) => run(args, opts).then(stdout => ({ stdout, stderr: '' })))
-    const full: NonNullable<ClaudeRunner['full']> = async (args, opts) => {
+    return this.logged(run, r => {
       // `daemon status` is a read, not a change; only `daemon run` is logged.
-      if (!LIFECYCLE.has(args[0] ?? '') || (args[0] === 'daemon' && args[1] !== 'run')) return inner(args, opts)
-      const started = this.now()
-      const { args: shown, prompt } = redactArgs(args)
-      const entry = (code: number | null, stdout: string, stderr: string): CommandEntry => ({
-        at: new Date(started).toISOString(),
-        args: shown,
-        ...(opts?.cwd ? { cwd: opts.cwd } : {}),
-        code,
-        ms: this.now() - started,
-        stdout: scrub(stdout, prompt),
-        stderr: scrub(stderr, prompt),
-      })
+      if (!LIFECYCLE.has(r.args[0] ?? '') || (r.args[0] === 'daemon' && r.args[1] !== 'run')) return
+      const { args, prompt } = redactArgs(r.args)
+      void this.write({ at: new Date(r.started).toISOString(), args, ...(r.cwd ? { cwd: r.cwd } : {}), code: r.code, ms: r.ms, stdout: scrub(r.stdout, prompt), stderr: scrub(r.stderr, prompt) })
+    })
+  }
+
+  /**
+   * The runner, logging a summary of a command that runs every few minutes,
+   * such as `-p /usage` (gate pass 20, I-5; pass 48, M-1; pass 50, M-1; pass
+   * 51, M-1), only when its outcome changes, and at most SUMMARY_CHANGES_PER_HOUR
+   * times an hour. The outcome compared is the exit code, what `describe`
+   * reads from stdout, and stderr with its digits, hex and ids collapsed, so
+   * failure text that varies by run reads as one outcome. Runs not written
+   * are counted, and the count goes in one entry a day, and at close. A
+   * summary has the arguments, folder, exit code, time, each stream's size,
+   * the start of stderr scrubbed, and `describe`'s result, scrubbed, under
+   * `result`.
+   */
+  wrapSummary(run: ClaudeRunner, describe: (stdout: string) => Record<string, unknown>): ClaudeRunner {
+    let last: string | null = null
+    let unchanged = 0
+    let suppressed = 0
+    let countedAt: number | null = null
+    let lastShown: { args: string[]; cwd?: string; code: number | null } | null = null
+    const changesAt: number[] = []
+    const writeCount = (now: number) => {
+      if (!lastShown || (!unchanged && !suppressed)) return
+      void this.write({ at: new Date(now).toISOString(), note: 'unchanged-runs', ...lastShown, count: unchanged, ...(suppressed ? { suppressedChanges: suppressed } : {}), ...(countedAt !== null ? { since: new Date(countedAt).toISOString() } : {}) })
+      unchanged = 0
+      suppressed = 0
+      countedAt = now
+    }
+    this.closers.push(() => writeCount(this.now()))
+    return this.logged(run, r => {
+      const { args, prompt } = redactArgs(r.args)
+      // Its own try: a describe that throws is noted, scrubbed, not lost, and never fails the run (gate pass 50, L-4; 51).
+      let result: Record<string, unknown>
       try {
-        const out = await inner(args, opts)
-        void this.write(entry(0, out.stdout, out.stderr))
-        return out
+        result = Object.fromEntries(Object.entries(describe(r.stdout)).map(([k, v]) => [k, typeof v === 'string' ? scrub(v, prompt).slice(0, 500) : v]))
       } catch (err) {
-        void this.write(err instanceof ClaudeCommandError ? entry(err.code, err.stdout, err.stderr) : entry(null, '', String(err)))
+        result = { describeError: scrub(String(err), prompt).slice(0, 200) }
+      }
+      const stderr = r.stderr ? scrub(r.stderr, prompt).slice(0, 500) : ''
+      const outcome = JSON.stringify([r.code, result, collapse(stderr)])
+      const now = this.now()
+      lastShown = { args, ...(r.cwd ? { cwd: r.cwd } : {}), code: r.code }
+      countedAt ??= now
+      while (changesAt.length && now - changesAt[0]! >= HOUR_MS) changesAt.shift()
+      if (outcome === last || changesAt.length >= SUMMARY_CHANGES_PER_HOUR) {
+        // Past the write cap, `last` stays the last outcome written, so the next one that differs from it is written in
+        // full (gate pass 53, L-3).
+        if (outcome === last) unchanged++
+        else suppressed++
+        if (now - countedAt >= DAY_MS) writeCount(now)
+        return
+      }
+      last = outcome
+      changesAt.push(now)
+      void this.write({
+        at: new Date(r.started).toISOString(),
+        args,
+        ...(r.cwd ? { cwd: r.cwd } : {}),
+        code: r.code,
+        ms: r.ms,
+        stdoutBytes: Buffer.byteLength(r.stdout),
+        stderrBytes: Buffer.byteLength(r.stderr),
+        ...(stderr ? { stderr } : {}),
+        ...(unchanged ? { unchangedBefore: unchanged } : {}),
+        result,
+      })
+      unchanged = 0
+    })
+  }
+
+  /** Writes what the wrappers still hold, such as a pending count of unchanged runs; for quitting (gate pass 51, L-5). */
+  close(): Promise<void> {
+    for (const close of this.closers.splice(0)) close()
+    return this.flushed()
+  }
+
+  /**
+   * The runner, handing each run, whether it succeeded or failed, to
+   * `record`, after the command (gate pass 50, L-5; pass 51, L-2/L-3): a
+   * recorder that throws is logged to the console, never fails the command
+   * or records it twice.
+   */
+  private logged(run: ClaudeRunner, record: (r: { args: string[]; cwd?: string; started: number; ms: number; code: number | null; stdout: string; stderr: string }) => void): ClaudeRunner {
+    const inner: NonNullable<ClaudeRunner['full']> = run.full ?? ((args, opts) => run(args, opts).then(stdout => ({ stdout, stderr: '' })))
+    const safe = (r: Parameters<typeof record>[0]) => {
+      try {
+        record(r)
+      } catch (err) {
+        console.warn(`command log: ${String(err)}`)
+      }
+    }
+    const full: NonNullable<ClaudeRunner['full']> = async (args, opts) => {
+      const started = this.now()
+      const base = { args, ...(opts?.cwd ? { cwd: opts.cwd } : {}), started }
+      let out: Awaited<ReturnType<typeof inner>>
+      try {
+        out = await inner(args, opts)
+      } catch (err) {
+        const e = err instanceof ClaudeCommandError ? { code: err.code, stdout: err.stdout, stderr: err.stderr } : { code: null, stdout: '', stderr: String(err) }
+        safe({ ...base, ms: this.now() - started, ...e })
         throw err
       }
+      safe({ ...base, ms: this.now() - started, code: 0, stdout: out.stdout, stderr: out.stderr })
+      return out
     }
     const wrapped: ClaudeRunner = (args, opts) => full(args, opts).then(r => r.stdout)
     wrapped.full = full

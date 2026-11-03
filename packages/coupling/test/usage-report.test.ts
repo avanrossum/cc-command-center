@@ -1,6 +1,6 @@
 // Claude Code's `/usage` as the meter's main source (MIP2-1522), on Research's recordings (MIP2-1530, 2.1.312).
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -53,7 +53,7 @@ describe('UsageReportReader', () => {
     const calls: { args: string[]; cwd: string }[] = []
     const reader = new UsageReportReader({ run: async (args, o) => (calls.push({ args, cwd: o.cwd }), fixture('normal')), cwd: empty, now: () => 5 })
     expect(await reader.readOnce()).toBe(true)
-    expect(calls).toEqual([{ args: [...USAGE_REPORT_ARGS], cwd: empty }])
+    expect(calls).toEqual([{ args: [...USAGE_REPORT_ARGS], cwd: realpathSync(empty) }])
     expect(USAGE_REPORT_ARGS).toContain('--no-session-persistence')
     // The user's hooks, MCP servers and plugins stay out of every poll (Research, MIP2-1530 follow-up).
     expect(USAGE_REPORT_ARGS.join(' ')).toContain('--setting-sources project,local')
@@ -80,9 +80,33 @@ describe('UsageReportReader', () => {
     expect(reader.nextWaitMs()).toBe(REPORT_EVERY_MS)
   })
 
+  it('runs only in a plain folder of its own, private to this user, and in its real path (gate pass 20, L-4)', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'ccc-usage-run-'))
+    try {
+      const dir = join(base, 'run')
+      mkdirSync(dir, { mode: 0o700 })
+      expect(folderRefusal(dir)).toBeNull()
+      chmodSync(dir, 0o755)
+      expect(folderRefusal(dir)).toBe("its folder isn't private to this user")
+      chmodSync(dir, 0o700)
+      symlinkSync(dir, join(base, 'link'))
+      expect(folderRefusal(join(base, 'link'))).toBe("its folder isn't a plain folder")
+      writeFileSync(join(base, 'file'), '')
+      expect(folderRefusal(join(base, 'file'))).toBe("its folder isn't a plain folder")
+      expect(folderRefusal(dir, (process.getuid?.() ?? 0) + 1)).toBe('its folder belongs to another user')
+      const cwds: string[] = []
+      const reader = new UsageReportReader({ run: async (_a, o) => (cwds.push(o.cwd), fixture('normal')), cwd: dir })
+      await reader.readOnce()
+      expect(cwds).toEqual([realpathSync(dir)])
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
   it("runs nothing when its folder isn't empty, as a .claude folder or .mcp.json there would load (MIP2-1522)", async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ccc-usage-run-'))
     try {
+      chmodSync(dir, 0o700)
       expect(folderRefusal(dir)).toBeNull()
       writeFileSync(join(dir, '.mcp.json'), '{}')
       expect(folderRefusal(dir)).toMatch(/isn't empty \(\.mcp\.json\)/)
@@ -98,5 +122,16 @@ describe('UsageReportReader', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  it('bounds a scoped limit\'s name by character and length, keeps a family emoji whole, and drops a malformed kind (gate pass 47, M-1, L-1)', () => {
+    const row = (kind: string, display_name: string) => ({ kind, percent: 1, resets_at: '2026-11-01T00:00:00Z', scope: { model: { display_name } } })
+    const fam = '👨\u200d👩\u200d👧'
+    const line = JSON.stringify({
+      type: 'assistant',
+      usage_report: { rate_limits: { limits: [row('weekly_scoped', `a${'\u0301'.repeat(100_000)}`), row('weekly_scoped', `Fable ${fam}`), row('weekly_scoped', ''), row('Weekly-Odd\ud83d', 'x')] } },
+    })
+    const labels = parseUsageReport(line)!.extra.map(r => r.label)
+    expect(labels).toEqual([null, `Fable ${fam}`, null])
   })
 })

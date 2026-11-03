@@ -359,6 +359,7 @@ export function App() {
         counts={counts}
         usage={fleet?.usage ?? null}
         usageExtra={fleet?.usageExtra ?? null}
+        usageReported={fleet?.usageReported ?? null}
         now={now}
         railOpen={railOpen}
         onToggleRail={() => setRailOpen(o => !o)}

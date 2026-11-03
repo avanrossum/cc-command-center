@@ -32,7 +32,7 @@ export interface NotifyMemory {
    * announced, and since when it has needed nothing or been out of the
    * list. A stretch ends only after EPISODE_GAP_MS of that (MIP2-1574).
    */
-  episodes: Map<string, { requests: Set<string>; clearSince: number | null }>
+  episodes: Map<string, { requests: Set<string>; keys: Set<string>; clearSince: number | null }>
   /** When the rule first ran, and how many good agents polls it has seen: startup settles at the later of the second and 5 s. */
   firstAt: number | null
   goodPolls: number
@@ -66,24 +66,32 @@ function needsKey(s: SessionSnapshot): string | null {
 const requestIds = (s: SessionSnapshot) => (s.pendingRequests?.value ?? []).map(p => p.requestId)
 
 /**
- * Records this poll's need in the session's stretch, and says whether it's
- * news: the stretch's first need, or a request it hasn't announced.
+ * Whether this poll's need is news in the session's stretch: the stretch's
+ * first need, a request it hasn't announced, or a need it hasn't seen,
+ * such as another question with no request id (gate pass 20, L-6). `mark`
+ * records it as announced; the caller calls it once a notice went out, or
+ * when it's held back on purpose (the app in front, notifications off),
+ * but not when the 10 s gap held it back, so it's announced on the next
+ * poll instead (L-6).
  */
-function needsNews(mem: NotifyMemory, s: SessionSnapshot, now: number): boolean {
+function needsNews(mem: NotifyMemory, s: SessionSnapshot, now: number): { news: boolean; mark: () => void } {
   const ep = mem.episodes.get(s.sessionId)
-  if (!needsKey(s)) {
+  const key = needsKey(s)
+  if (!key) {
     if (ep) ep.clearSince ??= now
-    return false
+    return { news: false, mark: () => {} }
   }
   const ids = requestIds(s)
-  if (!ep) {
-    mem.episodes.set(s.sessionId, { requests: new Set(ids), clearSince: null })
-    return true
+  if (ep) ep.clearSince = null
+  const fresh = ids.filter(id => !ep?.requests.has(id))
+  const freshKey = !ids.length && !ep?.keys.has(key)
+  const mark = () => {
+    const e = mem.episodes.get(s.sessionId) ?? { requests: new Set<string>(), keys: new Set<string>(), clearSince: null }
+    mem.episodes.set(s.sessionId, e)
+    for (const id of ids) e.requests.add(id)
+    if (!ids.length) e.keys.add(key)
   }
-  ep.clearSince = null
-  const fresh = ids.filter(id => !ep.requests.has(id))
-  for (const id of fresh) ep.requests.add(id)
-  return fresh.length > 0
+  return { news: !ep || fresh.length > 0 || freshKey, mark }
 }
 
 /** Ends the stretches of sessions that have needed nothing, or been out of the list, for EPISODE_GAP_MS. */
@@ -168,7 +176,7 @@ export function decide(mem: NotifyMemory, { sessions, store, focused, now, listO
   if (!mem.settled) {
     for (const s of sessions) {
       mem.last.set(s.sessionId, { needs: needsKey(s), running: running(s) })
-      needsNews(mem, s, now)
+      needsNews(mem, s, now).mark()
     }
     endEpisodes(mem, sessions, now)
     if (mem.goodPolls < 2 || now - mem.firstAt < SETTLE_MS) return out
@@ -185,18 +193,30 @@ export function decide(mem: NotifyMemory, { sessions, store, focused, now, listO
     const needs = needsKey(s)
     const run = running(s)
     mem.last.set(s.sessionId, { needs, running: run })
-    const news = needsNews(mem, s, now)
-    if (focused || !s0.notifyEnabled) continue
+    const { news, mark } = needsNews(mem, s, now)
+    // Held back on purpose, it counts as announced, so it doesn't appear later.
+    if (focused || !s0.notifyEnabled) {
+      mark()
+      continue
+    }
     const meta = store.sessions[s.sessionId]
     // Archived sessions stay quiet; a contractor that needs Alex still asks (MIP2-1393 §4.4).
-    if (quiet(store, s.sessionId)) continue
+    if (quiet(store, s.sessionId)) {
+      mark()
+      continue
+    }
     let cls: NotifyClass | null = null
-    // Once per stretch of needing Alex, and again for each new request in it. A session first seen after startup that's
-    // already waiting is announced once.
+    // Once per stretch of needing Alex, and again for each new request or need in it. A session first seen after startup
+    // that's already waiting is announced once.
     if (news) cls = classOn(store, s.sessionId, 'needs') ? 'needs' : null
     else if (prev && !needs && prev.running && !run && !meta?.contractor) cls = classOn(store, s.sessionId, 'turn') ? 'turn' : null
-    if (!cls) continue
+    if (!cls) {
+      mark()
+      continue
+    }
+    // Held back by the gap: not announced yet, so the next poll tries again (gate pass 20, L-6).
     if (now - (mem.sentAt.get(s.sessionId) ?? 0) < NOTIFY_GAP_MS) continue
+    mark()
     mem.sentAt.set(s.sessionId, now)
     out.push(
       cls === 'needs'

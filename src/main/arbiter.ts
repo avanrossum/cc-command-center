@@ -178,9 +178,77 @@ export function checkRanking(r: Ranking | null, items: readonly WaitingItem[]): 
   return { order, start }
 }
 
+/** What a paid call is assumed to cost when its bound isn't given (gate pass 50, L-2). */
+export const CALL_RESERVE_USD = 0.02
+
+/** Each call's output ceiling, the `max_tokens` arbiter-client.ts sends (gate pass 53, L-2). */
+export const MAX_TOKENS = { rank: 2048, summary: 256, tips: 1024 } as const
+/** Tokens a call adds beyond its prompts: the structured-output schema and the message framing, generously. */
+const CALL_OVERHEAD_TOKENS = 1_000
+
+/**
+ * The most a call can cost (gate pass 53, L-2): its prompts at one token per
+ * UTF-8 byte, which a byte-level tokenizer can't exceed (gate pass 54, L-1),
+ * plus the overhead, at the input price, and its `max_tokens` at the output
+ * price. Reserving this bound
+ * keeps concurrent calls from overshooting the cap together.
+ */
+export function callBoundUsd(system: string, user: string, maxTokens: number): number {
+  return ((Buffer.byteLength(system) + Buffer.byteLength(user) + CALL_OVERHEAD_TOKENS) * PRICE.input + maxTokens * PRICE.output) / 1_000_000
+}
+
 /** The log (D-014): one JSON line per call, skip or error, in the app's data folder. */
 export class ArbiterLog {
+  /** Costs reserved for paid calls in flight, counted with what's spent (gate pass 50, L-2). */
+  private reserved = 0
+  /** Callers waiting for a reservation in flight to settle (gate pass 51, L-1). */
+  private waiters: (() => void)[] = []
+
   constructor(private readonly path: string) {}
+
+  /**
+   * Reserves a paid call's bound against the day's cap: null when what's
+   * spent, what's reserved and this bound together would pass it (gate pass
+   * 53, L-2), else how to release the reservation once the call's real cost
+   * is logged. Callers use withReservation, so two calls never pass the cap
+   * check together.
+   */
+  reserve(now: number, capUsd: number, usd = CALL_RESERVE_USD): (() => void) | null {
+    if (this.spentOn(now) + this.reserved + usd > capUsd) return null
+    this.reserved += usd
+    let held = true
+    return () => {
+      if (!held) return
+      this.reserved -= usd
+      held = false
+      for (const wake of this.waiters.splice(0)) wake()
+    }
+  }
+
+  /**
+   * Every paid Arbiter call goes through here (gate pass 51, M-1): rankings,
+   * tips, card summaries and Needs-you lines. It reserves the most the call
+   * can cost (`boundUsd`, from callBoundUsd) against the day's cap and
+   * releases it once the call is done, after its real cost is logged, so
+   * calls in flight together can't overshoot the cap (gate pass 53, L-2). A cap reached only by calls in
+   * flight isn't a cap: it waits for them to settle and checks again (L-1).
+   * `capped` when, with nothing in flight, what's spent and this call's bound
+   * would pass the cap: a call that could overshoot isn't made.
+   */
+  async withReservation<T>(now: () => number, capUsd: () => number, call: () => Promise<T>, boundUsd = CALL_RESERVE_USD): Promise<{ capped: true } | { capped: false; value: T }> {
+    for (;;) {
+      const release = this.reserve(now(), capUsd(), boundUsd)
+      if (release) {
+        try {
+          return { capped: false, value: await call() }
+        } finally {
+          release()
+        }
+      }
+      if (this.reserved === 0 || this.spentOn(now()) + boundUsd > capUsd()) return { capped: true }
+      await new Promise<void>(resolve => this.waiters.push(resolve))
+    }
+  }
 
   append(entry: { at: number; kind: 'call' | 'summary' | 'wait' | 'tips' | 'capped' | 'error'; usd?: number; inputTokens?: number; outputTokens?: number; sessions?: number; start?: string | null; error?: string }): void {
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 })
@@ -255,26 +323,30 @@ export class Arbiter {
     }
     const key = changeKey(items)
     if (key === this.lastKey || this.busy) return null
-    const spent = this.d.log.spentOn(this.now())
-    const cap = this.d.capUsd()
-    if (spent >= cap) {
-      if (this.state.status !== 'capped') this.d.log.append({ at: this.now(), kind: 'capped', usd: 0, sessions: items.length })
-      this.lastKey = key
-      return (this.state = { ...this.base('capped'), order: items.map(i => ({ sessionId: i.sessionId })) })
-    }
+    // Through the shared reservation: a call in flight is waited for, and only real spending caps (gate pass 51, M-1, L-1).
     this.busy = true
     this.lastKey = key
     try {
-      const { ranking, usage } = await this.d.ask(SYSTEM_PROMPT, userPrompt(items, this.now()))
-      const usd = costUsd(usage)
-      const checked = checkRanking(ranking, items)
-      this.d.log.append({ at: this.now(), kind: 'call', usd, inputTokens: usage.input_tokens, outputTokens: usage.output_tokens, sessions: items.length, start: checked.start?.name ?? null })
-      return (this.state = { ...this.base('ranked'), ...checked })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      this.d.log.append({ at: this.now(), kind: 'error', error: message.slice(0, 300), sessions: items.length })
-      // Try again on the next change, not on every poll.
-      return (this.state = { ...this.base('error', message.slice(0, 200)), order: items.map(i => ({ sessionId: i.sessionId })) })
+      const prompt = userPrompt(items, this.now())
+      const r = await this.d.log.withReservation(() => this.now(), () => this.d.capUsd(), async () => {
+        try {
+          const { ranking, usage } = await this.d.ask!(SYSTEM_PROMPT, prompt)
+          const usd = costUsd(usage)
+          const checked = checkRanking(ranking, items)
+          this.d.log.append({ at: this.now(), kind: 'call', usd, inputTokens: usage.input_tokens, outputTokens: usage.output_tokens, sessions: items.length, start: checked.start?.name ?? null })
+          return { ...this.base('ranked'), ...checked } as ArbiterState
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          this.d.log.append({ at: this.now(), kind: 'error', error: message.slice(0, 300), sessions: items.length })
+          // Try again on the next change, not on every poll.
+          return { ...this.base('error', message.slice(0, 200)), order: items.map(i => ({ sessionId: i.sessionId })) } as ArbiterState
+        }
+      }, callBoundUsd(SYSTEM_PROMPT, prompt, MAX_TOKENS.rank))
+      if (r.capped) {
+        if (this.state.status !== 'capped') this.d.log.append({ at: this.now(), kind: 'capped', usd: 0, sessions: items.length })
+        return (this.state = { ...this.base('capped'), order: items.map(i => ({ sessionId: i.sessionId })) })
+      }
+      return (this.state = r.value)
     } finally {
       this.busy = false
     }

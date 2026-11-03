@@ -127,6 +127,24 @@ describe('decide', () => {
     expect(decide(mem, { sessions: [waiting], store: store(), focused: false, now: T + 50_000 + EPISODE_GAP_MS })).toHaveLength(1)
   })
 
+  it('announces a new need with no request id, such as another question, but not one seen in this stretch (gate pass 20, L-6)', () => {
+    const mem = settled([snap()])
+    const q = (detail: string) => snap({ activity: 'waiting', needs: { kind: 'question', detail } })
+    expect(decide(mem, { sessions: [q('Which branch?')], store: store(), focused: false, now: T + 20_000 })).toHaveLength(1)
+    expect(decide(mem, { sessions: [q('Which branch?')], store: store(), focused: false, now: T + 40_000 })).toEqual([])
+    expect(decide(mem, { sessions: [q('Deploy now?')], store: store(), focused: false, now: T + 60_000 })).toMatchObject([{ body: 'Deploy now?' }])
+    expect(decide(mem, { sessions: [q('Which branch?')], store: store(), focused: false, now: T + 80_000 })).toEqual([])
+  })
+
+  it('announces a request the 10 s gap held back on the next poll, not never (gate pass 20, L-6)', () => {
+    const mem = settled([snap()])
+    const ask = (...ids: string[]) => snap({ needs: { kind: 'permission', detail: null }, pending: ids.map(id => ({ requestId: id, tool: 'Bash', summary: id, questions: null })) })
+    expect(decide(mem, { sessions: [ask('r1')], store: store(), focused: false, now: T + 1 })).toHaveLength(1)
+    expect(decide(mem, { sessions: [ask('r1', 'r2')], store: store(), focused: false, now: T + NOTIFY_GAP_MS - 1 })).toEqual([])
+    expect(decide(mem, { sessions: [ask('r1', 'r2')], store: store(), focused: false, now: T + NOTIFY_GAP_MS + 1 })).toHaveLength(1)
+    expect(decide(mem, { sessions: [ask('r1', 'r2')], store: store(), focused: false, now: T + 3 * NOTIFY_GAP_MS })).toEqual([])
+  })
+
   it('announces once a session first seen after startup that is already waiting', () => {
     const mem = settled([])
     const late = snap({ needs: { kind: 'permission', detail: 'x' }, pending: [{ requestId: 'r9', tool: 'Edit', summary: 'a.ts', questions: null }] })

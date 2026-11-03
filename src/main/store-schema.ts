@@ -6,7 +6,8 @@
 // dropped; a bad optional field is dropped alone.
 
 import { emptyStore, SIDEBAR_WIDTH, SWITCHER_PINS_MAX, SWITCHER_RECENT_MAX, type AppSettings, type AppStore, type Category, type SessionMeta } from '../shared/store.ts'
-import { checkImportedSettings, FONT_NAME, isCategoryId, isSessionId, isWholeDisk } from './validate.ts'
+import { wholeDiskPath as isWholeDisk } from '@ccc/coupling'
+import { checkImportedSettings, FONT_NAME, isCategoryId, isSessionId } from './validate.ts'
 import { CONFIRMABLE_MODES, isMode } from './permission-modes.ts'
 
 type Obj = Record<string, unknown>
@@ -163,7 +164,8 @@ function repairCategoryIds(raw: Obj): void {
  * first record that isn't "/". With none, it keeps "/", which the restart
  * check refuses. It never takes the folder the copy itself reports. A
  * source that moved since the copy started makes the check refuse, which
- * fails closed.
+ * fails closed. By the folders' paths as written: loading the store never
+ * touches the file system (gate pass 54, M-3).
  */
 function migrateCopyFolders(sessions: Record<string, SessionMeta>): void {
   const recorded = (id: string, seen: Set<string>): string | undefined => {

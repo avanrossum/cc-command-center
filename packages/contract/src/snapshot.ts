@@ -300,6 +300,12 @@ export interface FleetSnapshot {
   usage: Field<RateLimits> | null
   /** Other limits from Claude Code's `/usage` (MIP2-1522); absent when it isn't read. */
   usageExtra?: Field<UsageLimit[]>
+  /**
+   * Which windows Claude Code's own `/usage` listed in its last good reading,
+   * stale once that reading is old (MIP2-1613): the positive sign that an
+   * account has no 5-hour window. Absent when it hasn't been read.
+   */
+  usageReported?: Field<{ fiveHour: boolean; sevenDay: boolean }>
   /** The health of each source, so the UI can say why fields are stale. */
   sources: SourceHealth[]
   /** Null until the self-check has read the version. */

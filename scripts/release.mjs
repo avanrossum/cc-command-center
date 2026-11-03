@@ -50,6 +50,7 @@ import {
   updateFileRefusal,
   versionRefusal,
   windowRefusal,
+  embeddedModHash,
   modPackRefusal,
 } from './release-lib.mjs'
 import { modHashOf } from './mod-hash.mjs'
@@ -173,8 +174,10 @@ const files = readdirSync(out)
 
 // 5. Checks on what was built.
 run('node', ['scripts/check-fuses.mjs', app], { stdio: 'inherit' })
-// The mod that's packaged must be the one the build hashed, or the app won't start (MIP2-1560).
-const modRefused = modPackRefusal(modHashOf(join(ROOT, 'dist', 'mod')), modHashOf(join(app, 'Contents', 'Resources', 'app.asar.unpacked', 'dist', 'mod')))
+// The mod that's packaged must be the one the packaged app checks for, or the app won't start (MIP2-1560). The
+// afterPack hook checked it before signing; this checks the finished app (gate pass 20, L-5).
+const resources = join(app, 'Contents', 'Resources')
+const modRefused = modPackRefusal(embeddedModHash(readFileSync(join(resources, 'app.asar'), 'latin1')), modHashOf(join(resources, 'app.asar.unpacked', 'dist', 'mod')))
 if (modRefused) fail(modRefused)
 // Never a dry-run test build (pass 9, M-1): the production identity, and no local test feed.
 const idRefused = bundleIdRefusal(run('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleIdentifier', join(app, 'Contents', 'Info.plist')]).trim())

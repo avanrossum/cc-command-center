@@ -278,3 +278,22 @@ export class LiftedRefusals {
     return this.ids.has(sessionId)
   }
 }
+
+/**
+ * A resume from the app re-keyed the session and cleared its channel's mark
+ * (gate pass 43, INFO-3; pass 44, L-2, INFO-2). The lift goes first, so it
+ * never outlives the resume. A store that fails to save is reported and
+ * logged, not thrown: the resume succeeded, and the mark saved on disk only
+ * comes back at the next start, which is the safe direction.
+ */
+export function rekeyedFor(d: { lifted: Pick<LiftedRefusals, 'drop'>; clearUntrusted: (sessionId: string) => void; notice: (text: string) => void }): (sessionId: string) => void {
+  return id => {
+    d.lifted.drop(id)
+    try {
+      d.clearUntrusted(id)
+    } catch (err) {
+      console.warn(`clearing the mark of ${id.slice(0, 8)} after its resume: ${String(err)}`)
+      d.notice(`A session resumed, but the app couldn't save that its alert is cleared, so the alert may come back when the app next starts: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+}

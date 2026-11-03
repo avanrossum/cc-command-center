@@ -24,8 +24,8 @@
 //   report still comes; `--strict-mcp-config` guards MCP as well (Research,
 //   MIP2-1530 follow-up).
 
-import { readdirSync } from 'node:fs'
-import { field, type Field, type RateLimits, type RateLimitWindow, type UsageLimit } from '@ccc/contract'
+import { lstatSync, readdirSync, realpathSync, type Stats } from 'node:fs'
+import { cutGraphemes, field, type Field, type RateLimits, type RateLimitWindow, type UsageLimit } from '@ccc/contract'
 
 export const USAGE_REPORT_ARGS = ['-p', '/usage', '--output-format', 'stream-json', '--verbose', '--no-session-persistence', '--setting-sources', 'project,local', '--strict-mcp-config'] as const
 
@@ -87,19 +87,37 @@ function limitsOf(v: unknown): { rateLimits: RateLimits | null; extra: UsageRow[
     else if (l.kind === 'weekly_all') sevenDay = { usedPercent: l.percent, resetsAt }
     else {
       const model = isObj(l.scope) && isObj(l.scope.model) && typeof l.scope.model.display_name === 'string' ? l.scope.model.display_name : null
-      extra.push({ kind: l.kind.slice(0, 64), label: model?.slice(0, 64) ?? null, usedPercent: l.percent, resetsAt })
+      // A kind is a known shape or the row is left out; the name is cut by character and length, and an empty one is
+      // no name (gate pass 45, L-3; pass 46, L-3; pass 47, M-1, L-1).
+      if (!KIND.test(l.kind)) continue
+      extra.push({ kind: l.kind, label: model ? cutGraphemes(model, 64) || null : null, usedPercent: l.percent, resetsAt })
     }
   }
   return { rateLimits: fiveHour || sevenDay ? { fiveHour, sevenDay } : null, extra }
 }
+
+/** A limit's kind as /usage names them, such as `weekly_scoped`. */
+const KIND = /^[a-z0-9_]{1,64}$/
 
 function creditsOf(v: unknown): UsageCredits | null {
   if (!isObj(v) || typeof v.is_enabled !== 'boolean' || !finite(v.used_credits) || typeof v.currency !== 'string') return null
   return { enabled: v.is_enabled, used: v.used_credits, limit: finite(v.monthly_limit) ? v.monthly_limit : null, currency: v.currency.slice(0, 8) }
 }
 
-/** Why the run folder can't be used: missing, or not empty. Null when it's an empty folder. */
-export function folderRefusal(dir: string): string | null {
+/**
+ * Why the run folder can't be used, or null (gate pass 20, L-4): it must be
+ * a folder itself, not a link, owned by this user, private (0700) and empty.
+ */
+export function folderRefusal(dir: string, uid: number | null = process.getuid?.() ?? null): string | null {
+  let st: Stats
+  try {
+    st = lstatSync(dir)
+  } catch {
+    return 'its folder is missing'
+  }
+  if (st.isSymbolicLink() || !st.isDirectory()) return "its folder isn't a plain folder"
+  if (uid !== null && st.uid !== uid) return "its folder belongs to another user"
+  if ((st.mode & 0o777) !== 0o700) return "its folder isn't private to this user"
   let names: string[]
   try {
     names = readdirSync(dir)
@@ -112,6 +130,8 @@ export function folderRefusal(dir: string): string | null {
 /** How often it reads, and the longest it waits after readings that came back empty. */
 export const REPORT_EVERY_MS = 3 * 60_000
 export const REPORT_BACKOFF_MAX_MS = 30 * 60_000
+/** How long a good reading counts as what the report says now: past the longest wait and one more read (MIP2-1613). */
+export const REPORT_FRESH_MS = REPORT_BACKOFF_MAX_MS + REPORT_EVERY_MS
 
 export interface UsageReportReaderOptions {
   /** Runs `claude` with these arguments in `cwd`, resolving to stdout. */
@@ -184,7 +204,8 @@ export class UsageReportReader {
       return false
     }
     try {
-      report = parseUsageReport(await this.opts.run([...USAGE_REPORT_ARGS], { cwd: this.opts.cwd, timeoutMs: 30_000 }))
+      // Run in the folder's real path, the one just checked (gate pass 20, L-4).
+      report = parseUsageReport(await this.opts.run([...USAGE_REPORT_ARGS], { cwd: realpathSync(this.opts.cwd), timeoutMs: 30_000 }))
     } catch (err) {
       this.opts.log?.(`usage report: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`)
     }

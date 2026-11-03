@@ -138,6 +138,32 @@ class SessionChannel {
 const ORPHANED_AFTER_MS = 40_000
 /** Where the channel folder records the session it serves, once bound. */
 const SESSION_FILE = 'session'
+
+/**
+ * A channel's session file, written beside it with `wx` and renamed over it,
+ * so a link left at its name is replaced, not written through (gate pass 20,
+ * L-3). Best effort, as before: the session id is kept in memory too.
+ */
+async function writeSessionFile(dir: string, sessionId: string): Promise<void> {
+  // One write at a time per channel, in the order asked, so a later id is never overwritten by an earlier one (gate pass
+  // 48, L-4).
+  const prev = sessionWrites.get(dir) ?? Promise.resolve()
+  const next = prev.then(async () => {
+    const tmp = join(dir, `${SESSION_FILE}.${randomBytes(6).toString('hex')}`)
+    try {
+      await writeFile(tmp, sessionId, { mode: 0o600, flag: 'wx' })
+      await rename(tmp, join(dir, SESSION_FILE))
+    } catch {
+      await rm(tmp, { force: true }).catch(() => {})
+    }
+  })
+  sessionWrites.set(dir, next)
+  await next
+  if (sessionWrites.get(dir) === next) sessionWrites.delete(dir)
+}
+
+/** Each channel folder's latest session-file write, for writeSessionFile's order. */
+const sessionWrites = new Map<string, Promise<void>>()
 /**
  * The version of what settingsFor() writes (MIP2-1444; pass 6, M-2). 1: the
  * channel root and the mod folders denied. 2: the app's data folder too
@@ -337,24 +363,46 @@ export class ChannelHub {
   async prepareLaunch(opts: { isolation?: 'none' | 'worktree'; ultracode?: boolean } = {}): Promise<ChannelLaunch> {
     if (this.launchBlock) throw new Error(`Launching is paused: ${this.launchBlock}`)
     await this.ensureRoot()
-    const id = randomBytes(4).toString('hex')
+    // An id no channel has and no folder uses, so a failure below rolls back only what this call made (gate pass 48, L-1).
+    let id = ''
+    for (let i = 0; i < 16 && !id; i++) {
+      const next = randomBytes(4).toString('hex')
+      const taken = this.channels.has(next) || (await lstat(join(this.root, next)).then(() => true, () => false))
+      if (!taken) id = next
+    }
+    if (!id) throw new Error('no free channel id after 16 tries')
     const dir = join(this.root, id)
     const socketPath = join(dir, SOCKET_FILE)
     if (Buffer.byteLength(socketPath) > SOCKET_PATH_LIMIT) {
       throw new Error(`socket path is ${Buffer.byteLength(socketPath)} bytes, over ${SOCKET_PATH_LIMIT}`)
     }
-    // Kept first, so a key the app couldn't keep leaves nothing behind.
+    // Kept first, so a key the app couldn't keep leaves nothing behind; and removed again, with the folder and its
+    // version, if the channel can't be made after it (gate pass 20, L-1).
     const replyKey = this.newKeyFor(id)
-    await mkdir(dir, { mode: 0o700 })
-    const ch = new SessionChannel(id, dir, newSecret(), this.now(), true)
-    ch.replyKey = replyKey
     const settingsPath = join(dir, SETTINGS_FILE)
-    // `wx`: never write through a file or link already there.
-    const text = JSON.stringify(this.settingsFor(ch, socketPath, opts.isolation ?? 'none', opts.ultracode === true), null, 2)
-    await writeFile(settingsPath, text, { mode: 0o600, flag: 'wx' })
-    ch.settingsSeen = { hash: sha256(text), ...(await statOf(settingsPath)) }
-    this.versions.set(id, SETTINGS_VERSION)
-    await this.start(ch, socketPath)
+    let made = false
+    try {
+      await mkdir(dir, { mode: 0o700 })
+      made = true
+      const ch = new SessionChannel(id, dir, newSecret(), this.now(), true)
+      ch.replyKey = replyKey
+      // `wx`: never write through a file or link already there.
+      const text = JSON.stringify(this.settingsFor(ch, socketPath, opts.isolation ?? 'none', opts.ultracode === true), null, 2)
+      await writeFile(settingsPath, text, { mode: 0o600, flag: 'wx' })
+      ch.settingsSeen = { hash: sha256(text), ...(await statOf(settingsPath)) }
+      this.versions.set(id, SETTINGS_VERSION)
+      await this.start(ch, socketPath)
+    } catch (err) {
+      this.channels.delete(id)
+      this.versions.delete(id)
+      try {
+        this.replyKeys.delete(id)
+      } catch (e) {
+        this.log(`channel ${id}: couldn't remove the reply key of a channel that failed to start: ${e instanceof Error ? e.message : String(e)}`)
+      }
+      if (made) await rm(dir, { recursive: true, force: true }).catch(() => {})
+      throw err
+    }
     return { channelId: id, settingsPath, args: ['--plugin-dir', this.modDir, '--settings', settingsPath] }
   }
 
@@ -489,7 +537,7 @@ export class ChannelHub {
     const ch = this.channels.get(channelId)
     if (!ch || ch.sessionId) return
     ch.sessionId = sessionId
-    void writeFile(join(ch.dir, SESSION_FILE), sessionId, { mode: 0o600 }).catch(() => {})
+    void writeSessionFile(ch.dir, sessionId)
     // A swap before the session was known is reported now, so its session is stopped (gate run 3, M-2). A transient
     // reply-key mark isn't one (gate pass 30, H-1).
     if (ch.untrusted && !ch.untrustedTransient) {
@@ -691,7 +739,7 @@ export class ChannelHub {
     ch.launchId = from
     if (ch.sessionId !== to) {
       ch.sessionId = to
-      void writeFile(join(ch.dir, SESSION_FILE), to, { mode: 0o600 }).catch(() => {})
+      void writeSessionFile(ch.dir, to)
     }
     const mark = this.untrustedSessions.get(from)
     if (mark !== undefined) (this.untrustedSessions.delete(from), this.untrustedSessions.set(to, mark))
@@ -1077,7 +1125,7 @@ export class ChannelHub {
           if (ch.sessionId && ch.launchId === file.sessionId) file = { ...file, sessionId: ch.sessionId }
           if (ch.sessionId && ch.sessionId !== file.sessionId) throw new Error('report for another session')
           const first = !ch.sessionId
-          if (first) void writeFile(join(ch.dir, SESSION_FILE), file.sessionId, { mode: 0o600 }).catch(() => {})
+          if (first) void writeSessionFile(ch.dir, file.sessionId)
           ch.sessionId = file.sessionId
           // A transient mark stays transient: the first report neither stops the session nor saves the mark (gate pass 27, L-2).
           if (first && ch.untrusted && !ch.untrustedTransient) {

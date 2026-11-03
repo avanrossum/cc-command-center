@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ClaudeCommandError } from '../src/claude-cli.ts'
-import { CommandLog, COMMAND_LOG_STREAM_BYTES, redactArgs } from '../src/command-log.ts'
+import { CommandLog, COMMAND_LOG_MAX_BYTES, COMMAND_LOG_STREAM_BYTES, redactArgs } from '../src/command-log.ts'
+import { parseUsageReport, USAGE_REPORT_ARGS } from '../src/usage-report.ts'
 
 let dir: string
 let path: string
@@ -27,6 +28,127 @@ describe('CommandLog', () => {
     await log.flushed()
     const [e] = entries()
     expect(e).toMatchObject({ args: ['--resume', 'c0ffee01-0000-4000-8000-000000000001', '--bg'], cwd: '/w', code: 0, stdout: out })
+  })
+
+  it('logs a /usage run as a summary: its arguments, folder, sizes, scrubbed stderr and whether a report came back (gate pass 48, M-1)', async () => {
+    const log = new CommandLog(path)
+    const report = `${JSON.stringify({ type: 'assistant', usage_report: { rate_limits: { limits: [{ kind: 'weekly_all', percent: 3 }] } } })}\n`
+    const run = log.wrapSummary(async () => report, out => ({ report: parseUsageReport(out) !== null }))
+    expect(await run([...USAGE_REPORT_ARGS], { cwd: '/runs/usage-run' })).toBe(report)
+    const failing = log.wrapSummary(async () => {
+      throw new ClaudeCommandError('failed', 1, '', `offline ${SECRET}`)
+    }, out => ({ report: parseUsageReport(out) !== null }))
+    await expect(failing([...USAGE_REPORT_ARGS], { cwd: '/runs/usage-run' })).rejects.toThrow()
+    await log.flushed()
+    const [ok, bad] = entries()
+    expect(ok).toMatchObject({ args: [...USAGE_REPORT_ARGS], cwd: '/runs/usage-run', code: 0, stdoutBytes: Buffer.byteLength(report), stderrBytes: 0, result: { report: true } })
+    expect(ok).not.toHaveProperty('stdout')
+    expect(bad).toMatchObject({ code: 1, result: { report: false }, stderr: 'offline <secret-like>' })
+  })
+
+  it('logs a /usage run only when its outcome changes, counts the rest once a day, and keeps a week of lifecycle entries (gate pass 50, M-1)', async () => {
+    let now = 1_793_000_000_000
+    const log = new CommandLog(path, () => now)
+    const lifecycle = log.wrap(async () => 'stopped c0ffee01\n')
+    await lifecycle(['stop', 'c0ffee01'])
+    let report = true
+    const usage = log.wrapSummary(async () => (report ? 'report' : ''), out => ({ report: out === 'report' }))
+    // A week of runs every 3 minutes, all with the same outcome but one.
+    for (let i = 0; i < 7 * 480; i++) {
+      now += 3 * 60_000
+      report = i !== 1000
+      await usage([...USAGE_REPORT_ARGS], { cwd: '/runs/usage-run' })
+    }
+    await log.flushed()
+    const all = entries()
+    expect(all[0]).toMatchObject({ args: ['stop', 'c0ffee01'] })
+    const runs = all.filter(e => Array.isArray(e.args) && e.args[0] === '-p' && !e.note)
+    // The first run, the change, and the change back.
+    expect(runs.map(e => e.result.report)).toEqual([true, false, true])
+    expect(runs[1]!.unchangedBefore).toBeGreaterThan(0)
+    expect(runs[2]).not.toHaveProperty('unchangedBefore')
+    const counts = all.filter(e => e.note === 'unchanged-runs')
+    expect(counts.length).toBeGreaterThanOrEqual(5)
+    expect(counts.length).toBeLessThanOrEqual(7)
+    expect(statSync(path).size).toBeLessThan(10_000)
+  })
+
+  it('keeps a week of lifecycle entries though each run fails with different stderr, or the outcome flips every run (gate pass 51, M-1)', async () => {
+    for (const mode of ['varying', 'alternating'] as const) {
+      rmSync(path, { force: true })
+      let now = 1_793_000_000_000
+      const log = new CommandLog(path, () => now)
+      await log.wrap(async () => 'stopped c0ffee01\n')(['stop', 'c0ffee01'])
+      let i = 0
+      const usage = log.wrapSummary(async () => {
+        if (mode === 'varying') throw new ClaudeCommandError('failed', 1, '', `request ${i} to 0x${(i * 7919).toString(16).padStart(8, '0')} timed out after ${i % 60}s (id c0ffee0${i % 9}-0000-4000-8000-000000000000)`)
+        return i % 2 ? 'report' : ''
+      }, out => ({ report: out === 'report' }))
+      for (; i < 7 * 480; i++) {
+        now += 3 * 60_000
+        await usage([...USAGE_REPORT_ARGS], { cwd: '/runs/usage-run' }).catch(() => {})
+      }
+      await log.close()
+      const all = entries()
+      expect(all[0]).toMatchObject({ args: ['stop', 'c0ffee01'] })
+      // At most 6 changed summaries an hour, and in practice far fewer; the rest are counted.
+      const summaries = all.filter(e => Array.isArray(e.args) && e.args[0] === '-p' && !e.note)
+      expect(summaries.length).toBeLessThanOrEqual(7 * 24 * 6)
+      if (mode === 'varying') expect(summaries).toHaveLength(1)
+      const counts = all.filter(e => e.note === 'unchanged-runs')
+      expect(counts.at(-1)).toMatchObject({ args: [...USAGE_REPORT_ARGS], cwd: '/runs/usage-run' })
+      // Every run is a summary, or counted in a count entry or in the next summary's unchangedBefore (gate pass 53, L-3).
+      expect(counts.reduce((n, e) => n + e.count + (e.suppressedChanges ?? 0), 0) + summaries.reduce((n, e) => n + 1 + (e.unchangedBefore ?? 0), 0)).toBe(7 * 480)
+      expect(statSync(path).size).toBeLessThan(COMMAND_LOG_MAX_BYTES / 2)
+    }
+  })
+
+  it('writes the next outcome that differs from the last written one once the hourly cap lifts (gate pass 53, L-3)', async () => {
+    let now = 1_793_000_000_000
+    const log = new CommandLog(path, () => now)
+    let out = 'a'
+    const run = log.wrapSummary(async () => out, o => ({ out: o }))
+    // Seven changes in an hour: six written, the seventh counted.
+    for (const o of ['a', 'b', 'a', 'b', 'a', 'b', 'c']) {
+      out = o
+      now += 60_000
+      await run(['-p', '/usage'])
+    }
+    // An hour on, the outcome is c again: it differs from the last one written (b), so it's written.
+    now += 60 * 60_000
+    await run(['-p', '/usage'])
+    await log.flushed()
+    expect(entries().filter(e => !e.note).map(e => e.result.out)).toEqual(['a', 'b', 'a', 'b', 'a', 'b', 'c'])
+  })
+
+  it('never fails a good command, or logs it twice, when the recorder throws (gate pass 51, L-2/L-3)', async () => {
+    const log = new CommandLog(path)
+    let calls = 0
+    const run = log.wrapSummary(async () => (calls++, 'out'), () => ({ get boom(): never { throw new Error('getter') } }))
+    expect(await run(['-p', '/usage'])).toBe('out')
+    expect(calls).toBe(1)
+  })
+
+  it('scrubs strings that describe returns, and its error (gate pass 51, L-4/L-3)', async () => {
+    const log = new CommandLog(path)
+    await log.wrapSummary(async () => 'out', () => ({ note: `key ${SECRET}` }))(['-p', '/usage'])
+    await log.wrapSummary(async () => 'out', () => {
+      throw new Error(`bad ${SECRET}`)
+    })(['-p', '/usage'])
+    await log.flushed()
+    const [a, b] = entries()
+    expect(a!.result).toEqual({ note: 'key <secret-like>' })
+    expect(b!.result).toEqual({ describeError: 'Error: bad <secret-like>' })
+  })
+
+  it('notes a describe that throws under its own key, and still runs (gate pass 50, L-4)', async () => {
+    const log = new CommandLog(path)
+    const run = log.wrapSummary(async () => 'out', () => {
+      throw new Error('bad shape')
+    })
+    expect(await run(['-p', '/usage'])).toBe('out')
+    await log.flushed()
+    expect(entries()[0]).toMatchObject({ code: 0, result: { describeError: 'Error: bad shape' } })
   })
 
   it('logs a failure with its exit code and both streams, and rethrows it', async () => {

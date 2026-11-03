@@ -3,8 +3,8 @@
 // "Arbiter is off" form.
 
 import { useRef } from 'react'
-import type { Field, RateLimits, SessionSnapshot, UsageLimit } from '@ccc/contract'
-import { noteBaselines, pacedLimit, sharesOf, type Baselines, type ExtraLimit } from '../model/usage-help.ts'
+import { cutGraphemes, type Field, type RateLimits, type SessionSnapshot, type UsageLimit } from '@ccc/contract'
+import { barRows, baseWindow, noteBaselines, pacedLimit, sharesOf, weeklyOnly, type Baselines, type ExtraLimit, type Reported } from '../model/usage-help.ts'
 import { UsagePanel } from './UsagePanel.tsx'
 import { SpendIndicator } from './Spend.tsx'
 import type { SpendState } from '../../shared/spend.ts'
@@ -116,16 +116,26 @@ export function useExtraPaces(extra: Field<UsageLimit[]> | null | undefined, now
   return out
 }
 
-/** One meter row (§4.3): the bar keeps its used-color; the dot shows where the rate is heading. */
-function Meter({ kind, p, now }: { kind: WindowKind; p: Pace; now: number }) {
+/** The longest row label shown whole; a longer one is cut, with the full label on hover (MIP2-1609 §3). */
+const LABEL_MAX = 6
+
+/**
+ * One meter row (§4.3): the bar keeps its used-color; the dot shows where the
+ * rate is heading. `kind` is the pace rules it takes, `label` what it's
+ * called: a scoped week reads as its model on the 7d rules (MIP2-1609 §3).
+ */
+function Meter({ kind, label = kind, p, now }: { kind: WindowKind; label?: string; p: Pace; now: number }) {
   const used = p.used ?? 0
   const heat = used >= 85 ? 'hot' : used >= 65 ? 'warm' : ''
   const empty = p.state === 'reset' || p.state === 'never' || p.state === 'absent'
   const words = paceWords(kind, p, now)
-  const hover = paceHover(kind, p)
+  const hover = paceHover(kind, p, label)
+  // Cut by character and length, so no character is split (gate pass 45, L-3; pass 46, L-3; pass 47, L-3).
+  const cut = cutGraphemes(label, LABEL_MAX) !== label
+  const shown = cut ? `${cutGraphemes(label, LABEL_MAX - 1)}…` : label
   return (
     <>
-      <span title={hover}>{kind}</span>
+      <span title={cut ? `${label}. ${hover}` : hover}>{shown}</span>
       <i className={`${heat}${empty ? ' empty' : ''}`} title={hover}>
         {!empty && <b style={{ width: `${Math.min(100, used)}%` }} />}
       </i>
@@ -167,8 +177,11 @@ export function TopBar({
   onSpendSetUp = () => {},
   claudeVersion = null,
   usageExtra = null,
+  usageReported = null,
 }: {
-  /** Limits beside 5h and 7d from Claude Code's /usage (MIP2-1498 §9.2): in the help panel, never a bar row. */
+  /** Which windows Claude Code's own /usage listed (MIP2-1613): the sign that there's no 5-hour window. */
+  usageReported?: Reported | null
+  /** Limits beside 5h and 7d from Claude Code's /usage (MIP2-1498 §9.2): in the help panel, and the scoped week in the bar when there's no 5-hour window (MIP2-1609 §3). */
   usageExtra?: Field<UsageLimit[]> | null
   /** The installed Claude Code, for the simulated spend's price note (MIP2-1498 §5.2). */
   claudeVersion?: string | null
@@ -193,10 +206,11 @@ export function TopBar({
 }) {
   const { count: needsCount, rest } = splitAttention(line)
   const { paces: pace, lists } = usePace(usage, now)
-  // Each session's cost when the 5h window began, for its share (MIP2-1498 §4.5); kept across launches.
+  // Each session's cost when each window began, for its share (MIP2-1498 §4.5); kept across launches. The week's is
+  // the shares' base when there's no 5-hour window (MIP2-1609 §5).
   const baselines = useRef<Baselines | null>(null)
   baselines.current ??= loadBaselines()
-  const noted = noteBaselines(baselines.current, '5h', pace['5h'].resetsAt, sessions, now)
+  const noted = noteBaselines(noteBaselines(baselines.current, '5h', pace['5h'].resetsAt, sessions, now), '7d', pace['7d'].resetsAt, sessions, now)
   if (noted !== baselines.current) {
     baselines.current = noted
     try {
@@ -206,6 +220,10 @@ export function TopBar({
     }
   }
   const extras = useExtraPaces(usageExtra, now)
+  const weekly = weeklyOnly(pace, usageReported)
+  const rows = barRows(pace, extras, weekly)
+  const base = baseWindow(weekly)
+  const baseline = pace[base].resetsAt === null ? undefined : baselines.current[`${base}:${pace[base].resetsAt}`]
   // The ? button takes the worst state across 5h, 7d and every extra limit (§9.2).
   const states = [pace['5h'].state, pace['7d'].state, ...extras.flatMap(x => (x.pace ? [x.pace.state] : []))]
   const worst = ['out', 'over', 'tight'].find(s => states.includes(s as PaceState)) ?? ''
@@ -239,8 +257,9 @@ export function TopBar({
       {/* Always shown: an old reading is marked, not hidden (MIP2-1498 §4.4). */}
       <div className="usage-wrap">
         <div className="usage">
-          <Meter kind="5h" p={pace['5h']} now={now} />
-          <Meter kind="7d" p={pace['7d']} now={now} />
+          {rows.map(r => (
+            <Meter key={r.key} kind={r.kind} label={r.label} p={r.pace} now={now} />
+          ))}
         </div>
         <button
           type="button"
@@ -257,8 +276,10 @@ export function TopBar({
             lists={lists}
             extras={extras}
             credits={spend?.credits ?? null}
-            shares={sharesOf(sessions, names, pace['5h'].resetsAt === null ? undefined : baselines.current[`5h:${pace['5h'].resetsAt}`]?.costs)}
-            sharesSince={pace['5h'].resetsAt === null ? null : (baselines.current[`5h:${pace['5h'].resetsAt}`]?.since ?? null)}
+            shares={sharesOf(sessions, names, baseline?.costs)}
+            sharesSince={baseline?.since ?? null}
+            base={base}
+            weekly={weekly}
             arbiterOn={arbiterOn}
             now={now}
             onOpen={onOpen}

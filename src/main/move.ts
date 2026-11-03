@@ -6,7 +6,7 @@
 import type { SessionSnapshot } from '@ccc/contract'
 import type { LaunchRequest } from '../shared/ipc.ts'
 import type { SessionMeta } from '../shared/store.ts'
-import { checkLaunch } from './validate.ts'
+import { launchShape } from './validate.ts'
 
 export function moveRequest(meta: SessionMeta | undefined, listedCwd: string | undefined): LaunchRequest | null {
   const cwd = listedCwd ?? meta?.cwd
@@ -17,7 +17,8 @@ export function moveRequest(meta: SessionMeta | undefined, listedCwd: string | u
   const model = f.model ? (f.context === '1m' && !f.model.endsWith('[1m]') ? `${f.model}[1m]` : f.model) : undefined
   const full = { cwd, name: meta?.name, model, effort, permissionMode: f.mode }
   // A saved value the app doesn't accept is dropped, not sent; the session then runs with Claude Code's default for it.
-  return checkLaunch(full) ?? checkLaunch({ cwd, name: meta?.name }) ?? checkLaunch({ cwd })
+  // The whole disk is refused by the move itself, with its own message (gate pass 54, L-3).
+  return launchShape(full) ?? launchShape({ cwd, name: meta?.name }) ?? launchShape({ cwd })
 }
 
 /**

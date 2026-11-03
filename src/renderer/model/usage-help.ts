@@ -7,7 +7,7 @@ import type { SessionSnapshot, UsageLimit } from '@ccc/contract'
 import { creditsMoney, type CreditsSpend } from '../../shared/spend.ts'
 import { modelName } from './format.ts'
 import type { TipFacts } from '../../shared/usage.ts'
-import { PACE_LABEL, resetText, span, TRAILING_MS, WINDOW_MS, type Pace, type Reading, type WindowKind } from './pace.ts'
+import { clock, dayClock, PACE_LABEL, resetText, span, TRAILING_MS, WINDOW_MS, type Pace, type Reading, type WindowKind } from './pace.ts'
 
 /**
  * Each session's cost when the window began, by window (`kind:resetsAt`),
@@ -118,8 +118,8 @@ export interface ExtraLimit {
 
 /** Its name: the model or scope Claude Code gives, plus `week` for a scoped week; `Other limit` with none (§9.2). */
 export function limitLabel(l: UsageLimit): string {
-  if (l.kind === 'weekly_scoped') return `${l.label ?? 'Model'} week`
-  return l.label ?? 'Other limit'
+  if (l.kind === 'weekly_scoped') return `${l.label || 'Model'} week`
+  return l.label || 'Other limit'
 }
 
 /** Whether a limit's pace takes the 7d rules. */
@@ -134,7 +134,8 @@ export function extraStatusLine(x: ExtraLimit): string {
   const head = limitLabel(l)
   if (p && (p.state === 'tight' || p.state === 'over') && p.projected !== null && resets) return `${head} · ${PACE_LABEL[p.state]} · ${used}% used · ~${Math.round(Math.min(p.projected, 999))}% by ${resets}`
   if (p && p.state === 'out') return `${head} · Out · ${used}% used${resets ? ` · resets ${resets}` : ''}`
-  return `${head} · ${used}% used${resets ? ` · resets ${resets}` : ''}`
+  // A limit with a pace says its state, as 5h and 7d do (MIP2-1610 UX review); one without says percent and reset.
+  return `${head}${p ? ` · ${PACE_LABEL[p.state]}` : ''} · ${used}% used${resets ? ` · resets ${resets}` : ''}`
 }
 
 const ALARM = ['tight', 'over', 'out']
@@ -192,9 +193,12 @@ export function plainHelp(
   return { why, risk, todo }
 }
 
-export function tipFacts(paces: Record<WindowKind, Pace>, lists: Record<WindowKind, readonly Reading[]>, shares: readonly SessionShare[], now: number): TipFacts {
+export function tipFacts(paces: Record<WindowKind, Pace>, lists: Record<WindowKind, readonly Reading[]>, shares: readonly SessionShare[], now: number, weekly = false): TipFacts {
+  // With no 5-hour window, the week only, and 5h said not to be reported (MIP2-1609 §6; only on /usage's word, gate pass 45, M-1).
+  const kinds = weekly ? (['7d'] as const) : (['5h', '7d'] as const)
   return {
-    windows: (['5h', '7d'] as const).map(kind => {
+    ...(weekly ? { fiveHour: 'not reported' as const } : {}),
+    windows: kinds.map(kind => {
       const p = paces[kind]
       return {
         kind,
@@ -217,3 +221,61 @@ export function tipFacts(paces: Record<WindowKind, Pace>, lists: Record<WindowKi
     })),
   }
 }
+
+/** Which windows Claude Code's own `/usage` listed in its last good reading (FleetSnapshot.usageReported). */
+export type Reported = { value: { fiveHour: boolean; sevenDay: boolean }; stale: boolean }
+
+/**
+ * Claude Code's usage report shows no 5-hour window (MIP2-1609 §2; the
+ * panel says what the report shows now, gate pass 46, M-1, with Research's
+ * wording from MIP2-1614): only on a positive sign, a fresh `/usage` reading that
+ * lists the week and no 5-hour window, with no 5h shown from any source
+ * (gate pass 45, M-1). A 5h missing for any other reason, such as a
+ * statusline reading without its reset or `/usage` not read, stays the
+ * neutral "Not reported" of MIP2-1590.
+ */
+export const weeklyOnly = (paces: Record<WindowKind, Pace>, reported: Reported | null | undefined): boolean =>
+  !!reported && !reported.stale && reported.value.sevenDay && !reported.value.fiveHour && paces['5h'].state === 'absent' && paces['7d'].state !== 'absent'
+
+const SEVERE = ['out', 'over', 'tight']
+/** Lower is more severe: Out, Over, Tight, then everything else. */
+export const severity = (p: Pace) => (SEVERE.includes(p.state) ? SEVERE.indexOf(p.state) : SEVERE.length)
+
+/** One row of the top bar's meter: its label, the pace rules it takes, and its pace. */
+export interface BarRow {
+  key: string
+  label: string
+  kind: WindowKind
+  pace: Pace
+}
+
+/**
+ * The bar's rows (MIP2-1609 §3): 5h and 7d, or, with no 5-hour window, 7d
+ * and the most severe scoped weekly limit by the label Claude Code gives it,
+ * on the 7d rules. The first of equals wins. With no scoped limit, 7d alone.
+ */
+export function barRows(paces: Record<WindowKind, Pace>, extras: readonly ExtraLimit[], weekly: boolean): BarRow[] {
+  const row = (kind: WindowKind): BarRow => ({ key: kind, label: kind, kind, pace: paces[kind] })
+  if (!weekly) return [row('5h'), row('7d')]
+  let top: (ExtraLimit & { pace: Pace }) | null = null
+  for (const x of extras) if (x.limit.kind === 'weekly_scoped' && x.pace && (!top || severity(x.pace) < severity(top.pace))) top = x as ExtraLimit & { pace: Pace }
+  return [row('7d'), ...(top ? [{ key: top.key, label: top.limit.label || 'Model', kind: '7d' as const, pace: top.pace }] : [])]
+}
+
+/** The window the panel's shares are counted over (MIP2-1609 §5): 5h when reported, otherwise this week. */
+export const baseWindow = (weekly: boolean): WindowKind => (weekly ? '7d' : '5h')
+
+/** The shares heading's tail (MIP2-1609 §5): `since 10:45 AM` over 5h, `this week, since Tue 9:14 AM` over 7d. */
+export function sharesSinceText(base: WindowKind, since: number | null): string {
+  if (since === null) return ''
+  return base === '5h' ? `since ${clock(since)}` : `this week, since ${dayClock(since)}`
+}
+
+/** The calm line, by how many windows have a pace (MIP2-1610 UX review): the week alone, both, or all. */
+export function calmLine(windows: number): string {
+  if (windows === 0) return "Claude Code isn't reporting any usage limits right now."
+  return windows === 1 ? 'The week is on pace.' : windows === 2 ? 'Both windows are on pace.' : 'All windows are on pace.'
+}
+
+/** The note after the status lines when there's no 5-hour window (MIP2-1609 §6). */
+export const NO_FIVE_HOUR_NOTE = "Claude Code's usage report shows no 5-hour window right now. Verified Ultra accounts don't have one."

@@ -1,7 +1,7 @@
 // The release script's checks (docs/release-plan.md §2–§5).
 
 import { describe, expect, it } from 'vitest'
-import { assetRefusal, branchRefusal, builderConfig, comparePrerelease, installEnv, prereleaseRefusal, PUBLIC_REPO, bundleIdRefusal, identityRefusal, latestFalseRefusal, remoteTagRefusal, targetRefusal, testFeedRefusal, untrackedRefusal, newerThan, releaseArgs, teamOf, teamRefusal, updateConfigRefusal, updateFileRefusal, versionRefusal, windowRefusal, modPackRefusal } from '../scripts/release-lib.mjs'
+import { assetRefusal, branchRefusal, builderConfig, comparePrerelease, installEnv, prereleaseRefusal, PUBLIC_REPO, bundleIdRefusal, identityRefusal, latestFalseRefusal, remoteTagRefusal, targetRefusal, testFeedRefusal, untrackedRefusal, newerThan, releaseArgs, teamOf, teamRefusal, updateConfigRefusal, updateFileRefusal, versionRefusal, windowRefusal, modPackRefusal, embeddedModHash } from '../scripts/release-lib.mjs'
 
 describe('the beta window (§3)', () => {
   const open = { tombstone: 'v0.24.3', closed: false }
@@ -197,6 +197,13 @@ describe('the packaged reporter mod (MIP2-1560)', () => {
   it('passes when the packaged mod hashes as the build did, and refuses otherwise, as the app would at start', () => {
     expect(modPackRefusal('f00345a778f77507', 'f00345a778f77507')).toBeNull()
     expect(modPackRefusal('c7134c5bb9710d40', 'f00345a778f77507')).toMatch(/the app would refuse to start/)
+    // The hash the packaged main.cjs carries, read from app.asar's text (gate pass 20, L-5).
+    expect(embeddedModHash('…var BUILT_MOD_HASH = true ? "f00345a778f77507" : null;…')).toBe('f00345a778f77507')
+    expect(embeddedModHash('BUILT_MOD_HASH = "f00345a778f77507"')).toBe('f00345a778f77507')
+    expect(embeddedModHash('no hash here')).toBe('no hash in main.cjs')
+    expect(embeddedModHash('BUILT_MOD_HASH = "f00345a778f77507" BUILT_MOD_HASH = "c7134c5bb9710d40"')).toMatch(/more than one hash/)
+    expect(modPackRefusal(embeddedModHash('no hash here'), 'f00345a778f77507')).toMatch(/can't be hashed/)
+    expect(builderConfig({ identity: 'Someone (ABCDE12345)', adhoc: false, repo: null })).toContain('-c.afterPack=scripts/release-after-pack.cjs')
     expect(modPackRefusal('refused: x is a symlink', 'f00345a778f77507')).toMatch(/can't be hashed/)
   })
 })
