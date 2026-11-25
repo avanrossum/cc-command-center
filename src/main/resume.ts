@@ -116,9 +116,16 @@ export const RESUME_REPEAT_MS = 15_000
 /**
  * Resumes one session at a time, once (MIP2-1467). A resume already under
  * way is joined, not run again; one that finished in the last 15 s counts
- * as done. Seen live: two opens of an ended session 1.6 s apart ran two
- * `--resume`s; the first woke it, and the second, finding it running,
- * started a copy. The fleet poll had not yet shown it running.
+ * as done while the session still runs. Seen live: two opens of an ended
+ * session 1.6 s apart ran two `--resume`s; the first woke it, and the
+ * second, finding it running, started a copy. The fleet poll had not yet
+ * shown it running.
+ *
+ * A session stopped since its resume isn't done (MIP2-1632): a stop or
+ * refusal from the app ends the repeat window (`ended`), and so does a
+ * session list read after the resume finished that shows no process for it
+ * (`observe`). A resume returns only once the process is listed, so a list
+ * read after it that shows none means the session stopped.
  */
 export class ResumeGate {
   private readonly inFlight = new Map<string, Promise<void>>()
@@ -126,15 +133,30 @@ export class ResumeGate {
 
   constructor(private readonly now: () => number = Date.now) {}
 
+  /** The app stopped or refused the session: its next resume runs. */
+  ended(sessionId: string): void {
+    this.doneAt.delete(sessionId)
+  }
+
+  /** A session list read at `listedAt`: a session resumed before it and listed with no process has stopped. */
+  observe(listedAt: number, sessions: readonly { sessionId: string; running: boolean }[]): void {
+    const running = new Map(sessions.map(s => [s.sessionId, s.running]))
+    for (const [id, at] of this.doneAt) if (listedAt > at && running.get(id) !== true) this.doneAt.delete(id)
+  }
+
   /** `fresh`: a confirmed resume, which restarts on the settings just recorded, so a recent resume doesn't count (gate pass 30, L-2). */
   run(sessionId: string, resume: () => Promise<void>, { fresh = false } = {}): Promise<void> {
     const running = this.inFlight.get(sessionId)
     if (running) return running
     const done = this.doneAt.get(sessionId)
     if (!fresh && done !== undefined && this.now() - done < RESUME_REPEAT_MS) return Promise.resolve()
-    const p = resume().then(() => void this.doneAt.set(sessionId, this.now()))
+    // Out of the in-flight map before its callers go on, so a resume asked for right after it isn't joined to it.
+    const p: Promise<void> = resume()
+      .then(() => void this.doneAt.set(sessionId, this.now()))
+      .finally(() => {
+        if (this.inFlight.get(sessionId) === p) this.inFlight.delete(sessionId)
+      })
     this.inFlight.set(sessionId, p)
-    void p.catch(() => {}).finally(() => this.inFlight.delete(sessionId))
     return p
   }
 }

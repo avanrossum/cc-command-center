@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AppStoreService } from '../src/main/app-store.ts'
+import { ClearConfirm } from '../src/shared/clear.ts'
 import { A, B, C, makeRegistry } from './registry-fixture.ts'
 
 const HOME = '/Users/x'
@@ -228,6 +229,39 @@ describe('AppStoreService', () => {
       expect(s.get().sessions[D]?.removedAt).toBeUndefined()
       expect(s.observe([], true, T + 2).removed).toEqual([D])
       expect(s.get().sessions[E]?.removedAt).toBe(T + 2)
+    })
+
+    it('neither removes nor toasts an old id held while its /clear waits (gate pass 63, L-1)', () => {
+      const s = open()
+      s.touch(D, T, 'app')
+      s.observe([snap(D)], true, T)
+      expect(s.observe([], true, T + 2, new Set([D])).removed).toEqual([])
+      expect(s.get().sessions[D]?.removedAt).toBeUndefined()
+    })
+
+    it('follows a merged /clear chain A to B to C through the store: B joins the former ids and its stub goes (gate pass 64, M-1)', () => {
+      const s = open()
+      const c = new ClearConfirm()
+      s.touch(D, T, 'app')
+      s.observe([snap(D)], true, T)
+      let said = false
+      const step = (found: { from: string; to: string }[], listed: string[], at: number) => {
+        const r = c.step(found, at, () => said, (from, to) => listed.includes(to) && !listed.includes(from))
+        s.observe(listed.map(id => snap(id)), true, at, c.holding())
+        for (const m of r.move) s.renameSession(m.from, m.to, m.via)
+      }
+      step([{ from: D, to: E }], [E], T + 1)
+      // The poll made a stub for E, the middle id.
+      expect(s.get().sessions[E]).toBeDefined()
+      expect(c.pendingTo(D)).toBe(E)
+      step([{ from: E, to: F }], [F], T + 2)
+      expect([c.pendingTo(D), c.pendingTo(E)]).toEqual([F, F])
+      said = true
+      step([], [F], T + 3)
+      expect(s.get().sessions[F]?.formerIds).toEqual([D, E])
+      expect(s.get().sessions[E]).toBeUndefined()
+      expect(s.get().sessions[D]).toBeUndefined()
+      expect([s.currentIdOf(D), s.currentIdOf(E)]).toEqual([F, F])
     })
 
     it('resurrects with the clock reset, and never-roll-off holds until cleared', () => {

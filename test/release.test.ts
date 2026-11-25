@@ -1,7 +1,7 @@
 // The release script's checks (docs/release-plan.md §2–§5).
 
 import { describe, expect, it } from 'vitest'
-import { assetRefusal, branchRefusal, builderConfig, comparePrerelease, installEnv, prereleaseRefusal, PUBLIC_REPO, bundleIdRefusal, identityRefusal, latestFalseRefusal, remoteTagRefusal, targetRefusal, testFeedRefusal, untrackedRefusal, newerThan, releaseArgs, teamOf, teamRefusal, updateConfigRefusal, updateFileRefusal, versionRefusal, windowRefusal, modPackRefusal, embeddedModHash } from '../scripts/release-lib.mjs'
+import { assetRefusal, branchRefusal, builderConfig, comparePrerelease, installEnv, prereleaseRefusal, PUBLIC_REPO, bundleIdRefusal, identityRefusal, latestFlag, latestRefusal, newestRefusal, remoteTagRefusal, targetRefusal, testFeedRefusal, untrackedRefusal, newerThan, releaseArgs, teamOf, teamRefusal, updateConfigRefusal, updateFileRefusal, versionRefusal, windowRefusal, modPackRefusal, embeddedModHash } from '../scripts/release-lib.mjs'
 
 describe('the beta window (§3)', () => {
   const open = { tombstone: 'v0.24.3', closed: false }
@@ -42,17 +42,33 @@ describe('gh release create (§3)', () => {
     expect(real.slice(real.indexOf('--target'), real.indexOf('--target') + 2)).toEqual(['--target', 'a'.repeat(40)])
     expect(releaseArgs({ ...base, draft: true })).not.toContain('--target')
   })
-  it('always passes --latest=false, and a draft for a dry run', () => {
+  it('marks a full release latest, and a dry run\'s draft not (D-052)', () => {
     const base = { tag: 'v0.1.0', repo: 'o/r', title: 't', notesFile: 'n.md', files: ['a.dmg', 'ccc-mac.yml'] }
     const real = releaseArgs({ ...base, draft: false })
-    expect(real).toContain('--latest=false')
+    expect(real).toContain('--latest')
+    expect(real).not.toContain('--latest=false')
     expect(real).not.toContain('--draft')
-    expect(latestFalseRefusal(real)).toBeNull()
-    expect(releaseArgs({ ...base, draft: true })).toContain('--draft')
+    expect(latestRefusal(real)).toBeNull()
+    const draft = releaseArgs({ ...base, draft: true })
+    expect(draft).toContain('--draft')
+    expect(draft).toContain('--latest=false')
+    expect(latestRefusal(draft)).toBeNull()
+    expect([latestFlag({ prerelease: false, draft: false }), latestFlag({ prerelease: true, draft: false }), latestFlag({ prerelease: false, draft: true })]).toEqual(['--latest', '--latest=false', '--latest=false'])
   })
-  it('refuses arguments without --latest=false, or with --latest', () => {
-    expect(latestFalseRefusal(['release', 'create', 'v1'])).toMatch(/--latest=false/)
-    expect(latestFalseRefusal(['release', 'create', 'v1', '--latest=false', '--latest'])).toMatch(/--latest=false/)
+  it('refuses a full release when a newer full release is tagged, so latest never moves backward (gate pass 63, L-5)', () => {
+    const refs = ['refs/tags/v1.0.6', 'refs/tags/v1.1.1', 'refs/tags/v1.2.0-beta.1', 'refs/tags/v0.25.0']
+    expect(newestRefusal('v1.1.2', refs)).toBeNull()
+    expect(newestRefusal('v1.1.1', refs)).toBeNull()
+    expect(newestRefusal('v1.0.7', refs)).toMatch(/^the tag v1\.1\.1 is newer than v1\.0\.7/)
+    expect(newestRefusal('v1.0.7', [...refs, 'refs/tags/v1.1.10'])).toMatch(/^the tag v1\.1\.10 is newer/)
+  })
+  it('refuses a full release not marked latest, a prerelease or draft marked latest, and two latest flags', () => {
+    expect(latestRefusal(['release', 'create', 'v1'])).toMatch(/full release must be created with --latest/)
+    expect(latestRefusal(['release', 'create', 'v1', '--latest=false'])).toMatch(/full release/)
+    expect(latestRefusal(['release', 'create', 'v1', '--latest', '--latest=false'])).toMatch(/full release/)
+    expect(latestRefusal(['release', 'create', 'v1', '--latest=true'])).toMatch(/full release/)
+    expect(latestRefusal(['release', 'create', 'v1-beta.1', '--prerelease', '--latest'])).toMatch(/prerelease or a draft must be created with --latest=false/)
+    expect(latestRefusal(['release', 'create', 'v1', '--draft', '--latest'])).toMatch(/prerelease or a draft/)
   })
 })
 
@@ -169,7 +185,8 @@ describe('betas (MIP2-1497)', () => {
     const args = releaseArgs({ tag: 'v1.0.1-beta.1', repo: 'o/r', title: 't', notesFile: 'n.md', files: ['a.dmg'], draft: false, target: 'a'.repeat(40), prerelease: true })
     expect(args).toContain('--prerelease')
     expect(args).toContain('--latest=false')
-    expect(latestFalseRefusal(args)).toBeNull()
+    expect(args).not.toContain('--latest')
+    expect(latestRefusal(args)).toBeNull()
     expect(releaseArgs({ tag: 'v1.0.1', repo: 'o/r', title: 't', notesFile: 'n.md', files: [], draft: false })).not.toContain('--prerelease')
   })
   it('match their mode: --prerelease takes X.Y.Z-beta.N only, and a release takes no prerelease', () => {

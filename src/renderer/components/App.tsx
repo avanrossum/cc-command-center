@@ -9,6 +9,7 @@ import type { ArbiterState } from '../../shared/arbiter-state.ts'
 import type { TurnSummary } from '../../shared/summaries.ts'
 import type { AppStore } from '../../shared/store.ts'
 import { attentionLine, catFilter, categoryRef, countFleet, groupFleet, nameOf, shownEntries, summaryFor, type CatRef, type Entry, type FilterId } from '../model/fleet.ts'
+import { notificationOpen } from '../model/notification-open.ts'
 import { NO_SELECTION, type Selection } from '../model/selection.ts'
 import { age } from '../model/format.ts'
 import { History } from '../model/history.ts'
@@ -104,8 +105,10 @@ export function App() {
     const offStore = window.ccc.onStore(setStore)
     const offNotice = window.ccc.onNotice(text => setNotice(text))
     void window.ccc.startupNotices().then(all => all.length && setNotice(all.join(' ')))
-    const offOpen = window.ccc.onOpenSession(id => openRef.current(id))
+    const offOpen = window.ccc.onOpenSession((id, how) => (how?.fromNotification ? fromNotificationRef.current(id) : openRef.current(id)))
     const offNeeds = window.ccc.onOpenNeeds(() => (setFocused(null), setFilter('needs')))
+    // A /clear gave the session in Focus a new id: Focus follows it, rather than finding the old one gone (MIP2-2072).
+    const offMoved = window.ccc.onSessionMoved((from, to) => setFocused(f => (f === from ? to : f)))
     const offQuit = window.ccc.onQuitAsk(rows => setQuitRows(rows))
     // A window opened to ask (none was open on ⌘Q) reads the rows it missed (MIP2-1528).
     void window.ccc.quitPending().then(rows => rows && setQuitRows(rows))
@@ -118,7 +121,7 @@ export function App() {
     const offSpend = window.ccc.onSpend(setSpend)
     void window.ccc.getWaits().then(setWaits)
     const offWaits = window.ccc.onWaits(setWaits)
-    return () => (offStore(), offNotice(), offOpen(), offArbiter(), offSummaries(), offWaits(), offSpend(), offNeeds(), offSettings(), offQuit())
+    return () => (offStore(), offNotice(), offOpen(), offArbiter(), offSummaries(), offWaits(), offSpend(), offNeeds(), offMoved(), offSettings(), offQuit())
   }, [])
 
   useEffect(() => {
@@ -256,6 +259,18 @@ export function App() {
   }
   const openRef = useRef((_id: string) => {})
   openRef.current = id => void open(id)
+  // A notification's click never starts an agent: Focus only for a session with a live process, and otherwise its name
+  // with Resume to press (gate pass 63, M-2; pass 64, H-1).
+  const fromNotificationRef = useRef((_id: string) => {})
+  fromNotificationRef.current = id => {
+    const e = entries.find(x => x.session.sessionId === id)
+    const how = notificationOpen(e)
+    if (how.kind === 'gone') return void (setFocused(null), setNotice('That session is no longer listed.'))
+    if (how.kind === 'offer') return void (setFocused(null), setNotice(how.text, { label: 'Resume', run: () => void open(id) }))
+    setSheet(null)
+    setFocused(id)
+    void window.ccc.markSeen(id)
+  }
   // ⌘⇧T: the most recently ended session, then the one before it (spec §4a).
   const reopened = useRef<string[]>([])
   const reopenRef = useRef(() => {})

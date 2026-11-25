@@ -94,6 +94,8 @@ export const IPC = {
   openSession: 'app:open-session',
   /** Main → renderer: show Fleet filtered to Needs you (the startup summary was clicked). */
   openNeeds: 'app:open-needs',
+  /** A /clear gave a session a new id (MIP2-2072): from, to. */
+  sessionMoved: 'app:session-moved',
   /** The app menu's Settings… item (MIP2-1459). */
   openSettings: 'app:open-settings',
   /** The app's own Quit (MIP2-1528): main → renderer to ask, its progress; renderer → main to answer. */
@@ -204,8 +206,8 @@ export interface CccApi {
   stop(sessionId: string): Promise<Result>
   answer(requestId: string, answer: AnswerRequest): Promise<Result>
   sendPrompt(sessionId: string, text: string): Promise<Result>
-  /** The macOS open panel for a folder; null when canceled. */
-  chooseFolder(): Promise<string | null>
+  /** The macOS open panel for a folder, opening at `start` when given (MIP2-2073); null when canceled. */
+  chooseFolder(start?: string): Promise<string | null>
   /** Writes text to the system clipboard. */
   copyText(text: string): void
   /** Opens a link clicked in a terminal view in the default browser: http and https only (MIP2-1471). `text` is an OSC 8 link's visible text, `atEdge` whether it touches the terminal's edge; main asks first when either hides where it goes. */
@@ -305,8 +307,11 @@ export interface CccApi {
   quitAnswer(answer: QuitAnswer): Promise<Result>
   /** Clears the untrusted mark of a session that no longer exists: its channel is closed (MIP2-1518). Refused while it's listed. */
   clearGoneMark(sessionId: string): Promise<Result>
-  onOpenSession(listener: (sessionId: string) => void): () => void
+  /** `how.fromNotification`: a notification's click, which opens the session and never resumes it (gate pass 63, M-2). */
+  onOpenSession(listener: (sessionId: string, how?: { fromNotification?: boolean }) => void): () => void
   onOpenNeeds(listener: () => void): () => void
+  /** A /clear gave a session a new id: Focus and the lists follow it (MIP2-2072). */
+  onSessionMoved(listener: (from: string, to: string) => void): () => void
   /** The app menu's Settings… (⌘,) was chosen (MIP2-1459), or Check for Updates…, which opens on About (MIP2-1517). */
   onOpenSettings(listener: (section: 'About' | null) => void): () => void
   /** Out of the archive, as Ended with its clock reset; `keep` also sets Never roll off. Resolves to how many. */

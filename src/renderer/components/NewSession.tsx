@@ -192,7 +192,7 @@ export function NewSession({
           <span className="row">
             <input ref={first} value={cwd} onChange={e => setCwd(e.target.value)} placeholder="/Users/…/project" spellCheck={false} readOnly={copy} />
             {!copy && (
-              <button type="button" className="fchip" onClick={async () => setCwd((await window.ccc.chooseFolder()) ?? cwd)}>
+              <button type="button" className="fchip" onClick={async () => setCwd((await window.ccc.chooseFolder(cwd || undefined)) ?? cwd)}>
                 Choose…
               </button>
             )}

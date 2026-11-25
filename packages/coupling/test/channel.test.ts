@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { channelCall, channelFrom, channelHello, channelSend, type Channel, type ChannelEngine } from '../../../mod/hooks/channel.ts'
 import { ANSWER_CHARS, CHANNEL_PATHS, HEADER, requestText, type PermissionAsk } from '../../../mod/hooks/channel-wire.ts'
-import { ChannelHub, memoryReplyKeys, memoryVersions, type ReplyKeys } from '../src/channel/hub.ts'
+import { CHANNEL_FORMER_IDS_MAX, ChannelHub, memoryReplyKeys, memoryVersions, type ReplyKeys } from '../src/channel/hub.ts'
 import { importReplyKey, newReplyKey, newSecret, sign } from '../src/channel/crypto.ts'
 import { ChannelServer } from '../src/channel/server.ts'
 
@@ -355,6 +355,107 @@ describe('ChannelHub', () => {
     expect(hub.reportedClear(NEW)).toBe(true)
     // Prompts go to it by its new id.
     expect(() => hub.relayPrompt(NEW, 'hi')).not.toThrow()
+  })
+
+  it('keeps taking reports, cards and needs-you through three /clears, a session restart and an app restart (MIP2-2082)', async () => {
+    const { ch } = await launch()
+    const ids = ['b55a99a6-0000-4000-8000-000000000011', 'b55a99a6-0000-4000-8000-000000000012', 'b55a99a6-0000-4000-8000-000000000013']
+    let at = Date.now()
+    // The mod sends its whole window of events each time, so a clear stays in later reports (gate pass 66, M1).
+    const window: unknown[] = []
+    const report = (sessionId: string, clear: boolean) => {
+      if (clear) window.push({ seq: 1000 + at, at: ++at, agentId: null, type: 'session.end', reason: 'clear' })
+      return { ...JSON.parse(A_TEXT), sessionId, events: [...JSON.parse(A_TEXT).events, ...window] }
+    }
+    const accepted = async (h: ChannelHub, sessionId: string, current: string) => {
+      expect((await channelCall($, ch, 'POST', CHANNEL_PATHS.report, report(sessionId, false)))?.status).toBe(204)
+      expect(h.readReporter().files.get(current)?.file.sessionId).toBe(current)
+    }
+    const card = async (h: ChannelHub, current: string) => {
+      const ask = { ...ASK, requestId: crypto.randomUUID() }
+      const poll = channelCall($, ch, 'POST', CHANNEL_PATHS.permission, ask)
+      for (let i = 0; i < 50 && !h.pendingRequests().get(current); i++) await new Promise(r => setTimeout(r, 10))
+      expect(h.pendingRequests().get(current)?.map(p => p.requestId)).toContain(ask.requestId)
+      expect(h.answer(ask.requestId, { verdict: 'allow' })).toBe(true)
+      await poll
+    }
+    await channelCall($, ch, 'POST', CHANNEL_PATHS.report, report(A_ID, false))
+
+    // Clear 1: the mod says so under its launch id; the move uses that clear.
+    await channelCall($, ch, 'POST', CHANNEL_PATHS.report, report(A_ID, true))
+    expect(hub.reportedClear(A_ID)).toBe(true)
+    hub.rebind(A_ID, ids[0]!)
+    expect(hub.reportedClear(ids[0]!)).toBe(false)
+    await accepted(hub, A_ID, ids[0]!)
+    await card(hub, ids[0]!)
+
+    // Clear 2: before MIP2-2082 the launch id's reports were refused from here on.
+    await channelCall($, ch, 'POST', CHANNEL_PATHS.report, report(A_ID, true))
+    expect(hub.reportedClear(ids[0]!)).toBe(true)
+    hub.rebind(ids[0]!, ids[1]!)
+    await accepted(hub, A_ID, ids[1]!)
+    await card(hub, ids[1]!)
+
+    // The session restarts: its mod registers under the id it has now, ids[1], and reports under it.
+    await accepted(hub, ids[1]!, ids[1]!)
+
+    // Clear 3, reported under ids[1].
+    await channelCall($, ch, 'POST', CHANNEL_PATHS.report, report(ids[1]!, true))
+    expect(hub.reportedClear(ids[1]!)).toBe(true)
+    hub.rebind(ids[1]!, ids[2]!)
+    for (const sid of [A_ID, ids[0]!, ids[1]!]) await accepted(hub, sid, ids[2]!)
+    await card(hub, ids[2]!)
+    // Another session's id is still refused.
+    expect((await channelCall($, ch, 'POST', CHANNEL_PATHS.report, report('c0ffee09-0000-4000-8000-000000000009', false)))?.status).not.toBe(204)
+
+    // The app restarts: restoring every id the store kept, with the time of the last move, the launch id's reports are
+    // accepted again, and the clear already used, still in the mod's window, doesn't confirm a new move (gate pass 66, M1).
+    const movedAt = at
+    await hub.closeAll()
+    const again = new ChannelHub({ modDir: '/mod', root: hub.root, longPollMs: 300, log: () => {}, replyKeys: keys })
+    await again.recover()
+    again.restoreFormerIds(ids[2]!, [A_ID, ids[0]!, ids[1]!], movedAt)
+    await accepted(again, A_ID, ids[2]!)
+    expect(again.reportedClear(ids[2]!)).toBe(false)
+    await card(again, ids[2]!)
+    // A /clear after the restart is new, and confirms.
+    await channelCall($, ch, 'POST', CHANNEL_PATHS.report, report(A_ID, true))
+    expect(again.reportedClear(ids[2]!)).toBe(true)
+    await again.closeAll()
+  })
+
+  it('restores former ids at start without taking another session\'s channel, and keeps them per channel (gate pass 66, M2, L1, L3)', async () => {
+    const one = await launch()
+    const two = await launch()
+    const S2 = 'b55a99a6-0000-4000-8000-000000000022'
+    const S1 = 'b55a99a6-0000-4000-8000-000000000021'
+    await channelCall($, one.ch, 'POST', CHANNEL_PATHS.report, JSON.parse(A_TEXT))
+    await channelCall($, two.ch, 'POST', CHANNEL_PATHS.report, { ...JSON.parse(A_TEXT), sessionId: S2 })
+    hub.rebind(A_ID, S1)
+    // A store entry for S1 naming S2, another live session's id: S2's channel stays S2's.
+    hub.restoreFormerIds(S1, [S2])
+    expect(hub.channelOf(S2)).not.toBeNull()
+    expect((await channelCall($, two.ch, 'POST', CHANNEL_PATHS.report, { ...JSON.parse(A_TEXT), sessionId: S2 }))?.status).toBe(204)
+    expect(hub.readReporter().files.get(S2)?.file.sessionId).toBe(S2)
+    // Channel two refuses a report under channel one's former id.
+    expect((await channelCall($, two.ch, 'POST', CHANNEL_PATHS.report, JSON.parse(A_TEXT)))?.status).not.toBe(204)
+    // The channel with the id now answers for it, before one that had it.
+    expect(hub.reportedClear(S2)).toBe(false)
+  })
+
+  it('caps a channel\'s former ids, but never drops the one its mod reports under (gate pass 66, L2)', async () => {
+    const { ch } = await launch()
+    await channelCall($, ch, 'POST', CHANNEL_PATHS.report, JSON.parse(A_TEXT))
+    let from = A_ID
+    for (let i = 0; i < CHANNEL_FORMER_IDS_MAX + 5; i++) {
+      const to = `b55a99a6-0000-4000-8000-${String(100 + i).padStart(12, '0')}`
+      hub.rebind(from, to)
+      // The mod reports under its launch id throughout.
+      await channelCall($, ch, 'POST', CHANNEL_PATHS.report, JSON.parse(A_TEXT))
+      from = to
+    }
+    expect(hub.readReporter().files.get(from)?.file.sessionId).toBe(from)
+    expect(hub.reportingIds()).toEqual([[from, A_ID]])
   })
 
   it('writes the session file in the order asked, so the last rebind wins (gate pass 48, L-4)', async () => {

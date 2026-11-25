@@ -34,6 +34,9 @@ export interface Category {
 /** How a session got its category: by Alex's hand, by the 0.24 import, or by auto-assign. */
 export type Placement = 'hand' | 'import' | 'auto'
 
+/** How many ids a session keeps from before its /clears (gate pass 63, L-2). */
+export const FORMER_IDS_MAX = 16
+
 export interface SessionMeta {
   categoryId: string | null
   placedBy: Placement | null
@@ -83,6 +86,12 @@ export interface SessionMeta {
   parkedHidden?: boolean
   /** Why its channel stopped being trustworthy, until a resume from the app re-keys it: the app's copy of the channel folder's mark (pass 4, M-2). */
   untrusted?: string
+  /** The ids it had before its /clears, oldest first, at most FORMER_IDS_MAX (gate pass 63, L-2). */
+  formerIds?: string[]
+  /** When its last /clear move was made (Unix ms): a clear event at or before it is spent after an app restart (gate pass 66, M1). */
+  clearedAt?: number
+  /** The id its mod reports under, when that isn't the current one; kept apart from the capped formerIds (gate pass 66, L2). */
+  reportingId?: string
   /** The settings it was launched with here, for Launch settings… and Start a session from this one (MIP2-1387 §2.3). */
   /** `mod`: the reporter mod version (its folder's hash) a packaged app launched it with (gate run 2, L-1). */
   /** What the app launched the session with; `cwd` and `name` are checked against Claude Code's saved options on every restart (gate pass 19). */
@@ -117,6 +126,8 @@ export interface SessionMeta {
 export interface AppSettings {
   recentFolders: string[]
   lastFolder?: string
+  /** The last folder chosen in the folder picker, where the next one opens (MIP2-2073; gate pass 63, L-4). */
+  lastPickerFolder?: string
   lastModel?: string
   lastEffort?: string
   lastMode?: string

@@ -3,7 +3,9 @@ export function parseVersion(tag: string): [number, number, number, string | nul
 export function newerThan(a: string, b: string): boolean
 export function windowRefusal(tag: string, window: { tombstone: string | null; closed: boolean } | null): string | null
 export function releaseArgs(o: { tag: string; repo: string; title: string; notesFile: string; files: string[]; draft: boolean; target?: string | null; prerelease?: boolean }): string[]
-export function latestFalseRefusal(args: string[]): string | null
+export function latestFlag(o: { prerelease: boolean; draft: boolean }): '--latest' | '--latest=false'
+export function latestRefusal(args: string[]): string | null
+export function newestRefusal(tag: string, refs: string[]): string | null
 export function updateFileRefusal(files: string[]): string | null
 export function embeddedModHash(asarText: string): string
 export function modPackRefusal(built: string, packaged: string): string | null

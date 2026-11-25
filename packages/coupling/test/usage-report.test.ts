@@ -50,10 +50,11 @@ describe('UsageReportReader', () => {
   const empty = mkdtempSync(join(tmpdir(), 'ccc-usage-run-'))
 
   it('runs /usage without a transcript, in its own folder', async () => {
-    const calls: { args: string[]; cwd: string }[] = []
-    const reader = new UsageReportReader({ run: async (args, o) => (calls.push({ args, cwd: o.cwd }), fixture('normal')), cwd: empty, now: () => 5 })
+    const calls: { args: string[]; cwd: string; noStdin?: boolean }[] = []
+    const reader = new UsageReportReader({ run: async (args, o) => (calls.push({ args, cwd: o.cwd, noStdin: o.noStdin }), fixture('normal')), cwd: empty, now: () => 5 })
     expect(await reader.readOnce()).toBe(true)
-    expect(calls).toEqual([{ args: [...USAGE_REPORT_ARGS], cwd: realpathSync(empty) }])
+    // With stdin ended at once: `-p` otherwise waits 3 s for input on every run (MIP2-1639).
+    expect(calls).toEqual([{ args: [...USAGE_REPORT_ARGS], cwd: realpathSync(empty), noStdin: true }])
     expect(USAGE_REPORT_ARGS).toContain('--no-session-persistence')
     // The user's hooks, MCP servers and plugins stay out of every poll (Research, MIP2-1530 follow-up).
     expect(USAGE_REPORT_ARGS.join(' ')).toContain('--setting-sources project,local')

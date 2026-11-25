@@ -96,3 +96,62 @@ describe('paste helpers', () => {
     ['/tmp/$(rm -rf ~)', `'/tmp/$(rm -rf ~)'`],
   ])('quotes %s', (p, q) => expect(quotePath(p)).toBe(q))
 })
+
+describe('AttachPool.rename after a /clear (MIP2-2072)', () => {
+  it('keeps the attach under the new id, its data and exit reported under it, and the old id let go', async () => {
+    const data: [string, string][] = []
+    const exits: [string, number][] = []
+    let onData: (d: string) => void = () => {}
+    let onExit: (e: { exitCode: number }) => void = () => {}
+    const written: string[] = []
+    const resized: number[][] = []
+    let spawned = 0
+    const pool = new AttachPool(
+      { attach: async () => ({ file: '/bin/claude', args: ['attach', 'x'], cwd: '/' }) },
+      { data: (sid, d) => void data.push([sid, d]), exit: (sid, code) => void exits.push([sid, code]) },
+      () => (
+        spawned++,
+        {
+          write: d => void written.push(d),
+          resize: (c, r) => void resized.push([c, r]),
+          kill: () => onExit({ exitCode: 0 }),
+          onData: cb => void (onData = cb),
+          onExit: cb => void (onExit = cb),
+        }
+      ),
+    )
+    await pool.open(id(1), 80, 24)
+    pool.rename(id(1), id(2))
+    onData('after')
+    expect(data).toEqual([[id(2), 'after']])
+    // Focus's pane for the old id unmounts and leaves it: nothing happens to the attach.
+    pool.leave(id(1))
+    expect(written).toEqual([])
+    // The pane for the new id finds the attach there.
+    await pool.open(id(2), 100, 30)
+    expect([spawned, resized.at(-1)]).toEqual([1, [100, 30]])
+    onExit({ exitCode: 0 })
+    expect(exits).toEqual([[id(2), 0]])
+    expect(pool.has(id(2))).toBe(false)
+  })
+
+  it('leaves the old attach when one already runs under the new id, and moves one that is leaving (gate pass 63, L-6)', async () => {
+    vi.useFakeTimers()
+    const { pool, procs } = makePool()
+    await pool.open(id(1), 80, 24)
+    await pool.open(id(2), 80, 24)
+    pool.rename(id(1), id(2))
+    expect(procs.get('00000001')!.written).toEqual(['\x1a'])
+    expect(procs.get('00000002')!.written).toEqual([])
+    await pool.open(id(3), 80, 24)
+    pool.leave(id(3))
+    pool.rename(id(3), id(4))
+    expect(pool.has(id(4))).toBe(true)
+    // Its leave still ends it, under the new id.
+    vi.advanceTimersByTime(1000)
+    expect(procs.get('00000003')!.signals).toEqual(['SIGTERM'])
+    expect(pool.has(id(4))).toBe(false)
+    vi.useRealTimers()
+  })
+})
+

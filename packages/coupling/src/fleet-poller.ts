@@ -266,16 +266,21 @@ export class FleetPoller {
     if (this.usageFileOnly) return this.usageFile
     const now = this.now()
     const fresh = (f: Field<RateLimits> | null | undefined): f is Field<RateLimits> => !!f && !f.stale
-    const sources = [this.readReport(), this.usageFile].filter(fresh)
+    const report = this.readReport()
+    const sources = [report, this.usageFile].filter(fresh)
     const mods = sessions.map(s => s.rateLimits).filter(fresh)
+    // Claude Code's own /usage, read fresh, listing no 5-hour window: a 5h past its reset from an old file or an earlier
+    // reading isn't shown, so the meter can say the window isn't reported (MIP2-1639). A current reading still is.
+    const reportFresh = !!report && !report.stale && this.now() - report.observedAt <= REPORT_FRESH_MS
     for (const key of ['fiveHour', 'sevenDay'] as const) {
+      const reportLacks = reportFresh && !report!.value[key]
       const at = (f: Field<RateLimits>) => f.value[key]?.observedAt ?? f.observedAt
       const newest = (list: Field<RateLimits>[]) => list.sort((a, b) => at(b) - at(a))[0] ?? null
       const inWindow = (f: Field<RateLimits>) => (f.value[key]?.resetsAt ?? 0) * 1000 > now
       const pick =
         newest(sources.filter(f => f.value[key] && (f.value[key]!.resetsAt === null || inWindow(f)))) ??
         newest(mods.filter(inWindow)) ??
-        newest(sources.filter(f => f.value[key]))
+        (reportLacks ? null : newest(sources.filter(f => f.value[key])))
       const last = this.lastWindow[key]
       // A file's reading replaces a mod's whatever their times, since the two times measure different things. A held
       // window that has reset gives way to a reading still in its own window, or, with none, goes (gate pass 25,

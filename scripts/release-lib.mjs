@@ -69,13 +69,15 @@ export function versionRefusal(tag, tombstone) {
 }
 
 /**
- * The `gh release create` arguments. Every release is made with
- * `--latest=false`, so GitHub's "latest", which stable 0.24 builds follow,
- * stays on the tombstone (§3). A dry run is always a draft.
+ * The `gh release create` arguments. A full release is made with `--latest`,
+ * so `releases/latest` is the newest 1.x (D-052, replacing D-046's rule that
+ * kept "latest" on 0.24's tombstone). A prerelease and a dry run's draft are
+ * made with `--latest=false`, and never become latest. A dry run is always a
+ * draft.
  */
 export function releaseArgs({ tag, repo, title, notesFile, files, draft, target = null, prerelease = false }) {
-  const args = ['release', 'create', tag, '--repo', repo, '--title', title, '--notes-file', notesFile, '--latest=false']
-  // A beta is a GitHub prerelease, and like every release never "latest" (MIP2-1497).
+  const args = ['release', 'create', tag, '--repo', repo, '--title', title, '--notes-file', notesFile, latestFlag({ prerelease, draft })]
+  // A beta is a GitHub prerelease, and never "latest" (MIP2-1497; D-052).
   if (prerelease) args.push('--prerelease')
   // The tag is made on the public snapshot commit that holds this source, not on the remote's default branch (pass 9, M-2).
   if (target) args.push('--target', target)
@@ -83,9 +85,33 @@ export function releaseArgs({ tag, repo, title, notesFile, files, draft, target 
   return [...args, ...files]
 }
 
-/** Refuses release arguments without `--latest=false` (§3). */
-export function latestFalseRefusal(args) {
-  return args.includes('--latest=false') && !args.some(a => a === '--latest' || a === '--latest=true') ? null : 'every release must be created with --latest=false'
+/**
+ * Refuses a full release, which is marked latest, when the repository holds
+ * a newer full release (gate pass 63, L-5): a backport would move
+ * `releases/latest` backward. `refs` are the repository's tag refs or names.
+ */
+export function newestRefusal(tag, refs) {
+  const newer = refs.map(r => r.replace(/^refs\/tags\//, '')).filter(t => parseVersion(t)?.[3] === null && newerThan(t, tag))
+  if (!newer.length) return null
+  const newest = newer.reduce((a, b) => (newerThan(b, a) ? b : a))
+  return `the tag ${newest} is newer than ${tag}; a full release is marked latest, so it must be the newest (a tag left by an aborted run counts too: delete it first)`
+}
+
+/** The latest flag a release takes (D-052): `--latest` for a full release, `--latest=false` for a prerelease or a draft. */
+export function latestFlag({ prerelease, draft }) {
+  return prerelease || draft ? '--latest=false' : '--latest'
+}
+
+/**
+ * Refuses release arguments whose latest flag isn't the one latestFlag
+ * gives (D-052): a full release must be marked latest, and a prerelease or
+ * a draft must not. Exactly one latest flag, in its plain form.
+ */
+export function latestRefusal(args) {
+  const flags = args.filter(a => a === '--latest' || a.startsWith('--latest='))
+  const want = latestFlag({ prerelease: args.includes('--prerelease'), draft: args.includes('--draft') })
+  if (flags.length !== 1 || flags[0] !== want) return want === '--latest' ? 'a full release must be created with --latest, and only that' : 'a prerelease or a draft must be created with --latest=false, and only that'
+  return null
 }
 
 /**

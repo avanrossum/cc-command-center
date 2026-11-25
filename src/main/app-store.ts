@@ -9,7 +9,7 @@ import type { SessionSnapshot } from '@ccc/contract'
 import { autoAssign, folderKeyOf } from '../shared/auto-assign.ts'
 import { AMBIGUOUS, classify, inArchive, lastActivityOf, lifeOf, parentsOf } from '../shared/lifecycle.ts'
 import type { ImportParts, ImportSummary } from '../shared/ipc.ts'
-import { emptyStore, PICKABLE_COLORS, type AppStore, type Category, type SessionMeta } from '../shared/store.ts'
+import { FORMER_IDS_MAX, emptyStore, PICKABLE_COLORS, type AppStore, type Category, type SessionMeta } from '../shared/store.ts'
 import type { QuitReport } from '../shared/quit.ts'
 import { importRegistry } from './registry-import.ts'
 import { checkStore, REFUSED_STARTS_MAX, uniqueCategoryId } from './store-schema.ts'
@@ -109,7 +109,7 @@ export class AppStoreService {
    * launched here as background sessions), and Alex's sessions just
    * removed outside the app, for a one-time toast.
    */
-  observe(sessions: readonly SessionSnapshot[], listOk: boolean, now: number): { stop: string[]; removed: string[] } {
+  observe(sessions: readonly SessionSnapshot[], listOk: boolean, now: number, holding: ReadonlySet<string> = new Set()): { stop: string[]; removed: string[] } {
     const d = this.data
     const rollOffDays = d.settings.rollOffDays ?? 7
     const parents = parentsOf(sessions)
@@ -139,7 +139,8 @@ export class AppStoreService {
 
     if (listOk) {
       for (const [id, m] of Object.entries(d.sessions)) {
-        if (!m.listed || m.removedAt || listed.has(id)) continue
+        // A /clear's old id waiting for its mod's word isn't removed: its record moves to the new id (gate pass 63, L-1).
+        if (!m.listed || m.removedAt || listed.has(id) || holding.has(id)) continue
         m.removedAt = now
         changed = true
         // One toast for Alex's own: launched here, from 0.24, or kept by hand. Not for anything that came and went unseen.
@@ -289,11 +290,19 @@ export class AppStoreService {
    * every list that names it follows. Nothing is lost or left behind under
    * the old id.
    */
-  renameSession(from: string, to: string): void {
+  renameSession(from: string, to: string, via: readonly string[] = [], at = Date.now()): void {
     const old = this.data.sessions[from]
     if (!old || from === to) return
-    const { tie: _tie, ...meta } = old
-    this.data.sessions[to] = { ...(this.data.sessions[to] ?? {}), ...meta, launchSessionId: old.launchSessionId ?? from }
+    // A removal the old id took while the move waited doesn't follow it; the ids it had are kept, for a notification
+    // shown under one (gate pass 63, L-1, L-2).
+    const { tie: _tie, removedAt: _removed, ...meta } = old
+    const formerIds = [...(old.formerIds ?? []), from, ...via].slice(-FORMER_IDS_MAX)
+    // An id a merged /clear chain passed through held only a stub the poll made for it: it goes (gate pass 64, M-1).
+    for (const id of via) {
+      const stub = this.data.sessions[id]
+      if (stub && !stub.launch && !stub.origin) delete this.data.sessions[id]
+    }
+    this.data.sessions[to] = { ...(this.data.sessions[to] ?? {}), ...meta, launchSessionId: old.launchSessionId ?? from, formerIds, clearedAt: at }
     delete this.data.sessions[from]
     for (const m of Object.values(this.data.sessions)) {
       if (m.copyOf === from) m.copyOf = to
@@ -305,6 +314,20 @@ export class AppStoreService {
     s.switcherPins = swap(s.switcherPins)
     s.switcherRecent = swap(s.switcherRecent)
     this.save()
+  }
+
+  /** The id the session's mod reports under, when it isn't its current id (gate pass 66, L2). */
+  setReportingId(sessionId: string, reportingId: string): void {
+    const m = this.data.sessions[sessionId]
+    if (!m || m.reportingId === reportingId || reportingId === sessionId) return
+    m.reportingId = reportingId
+    this.save()
+  }
+
+  /** The session's id now: `id` itself, or the record that had it before a /clear, as its launch id or a former one (gate pass 63, L-2). */
+  currentIdOf(id: string): string | undefined {
+    if (this.data.sessions[id]) return id
+    return Object.entries(this.data.sessions).find(([, m]) => m.launchSessionId === id || m.formerIds?.includes(id))?.[0]
   }
 
   /** Each session's id and the one it was launched under, where a /clear changed it (MIP2-1557). */
@@ -642,6 +665,13 @@ export class AppStoreService {
     this.data.categories = [...this.data.categories]
       .sort((a, b) => (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity) || a.sort - b.sort)
       .map((c, i) => ({ ...c, sort: i }))
+    this.save()
+  }
+
+  /** A folder chosen in the folder picker, where the next one opens; New Session's default stays the last launch's (gate pass 63, L-4). */
+  rememberPickerFolder(folder: string): void {
+    if (this.data.settings.lastPickerFolder === folder) return
+    this.data.settings.lastPickerFolder = folder
     this.save()
   }
 

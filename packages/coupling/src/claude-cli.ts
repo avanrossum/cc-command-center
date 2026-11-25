@@ -8,7 +8,8 @@ import { delimiter, join } from 'node:path'
 
 /** Runs `claude` with arguments and resolves to stdout. Swapped out in tests. */
 /** `session`: the command starts or restarts a session, so it carries SESSION_SWITCHES (MIP2-1463). */
-export type RunOptions = { timeoutMs?: number; cwd?: string; session?: boolean }
+/** `noStdin`: the command reads nothing, so its stdin ends at once; `-p` otherwise waits 3 s for input (MIP2-1639). */
+export type RunOptions = { timeoutMs?: number; cwd?: string; session?: boolean; noStdin?: boolean }
 
 export type ClaudeRunner = ((args: string[], opts?: RunOptions) => Promise<string>) & {
   /**
@@ -233,7 +234,7 @@ export function createClaudeRunner(binary = resolveClaudeBinary()): ClaudeRunner
   const full: NonNullable<ClaudeRunner['full']> = async (args, opts = {}) => {
     await pathReady
     return new Promise((resolve, reject) => {
-      execFile(
+      const child = execFile(
         binary,
         args,
         { timeout: opts.timeoutMs ?? 10_000, maxBuffer: 16 * 1024 * 1024, env: opts.session ? sessionEnv() : claudeEnv(), cwd: opts.cwd },
@@ -247,6 +248,7 @@ export function createClaudeRunner(binary = resolveClaudeBinary()): ClaudeRunner
           }
         },
       )
+      if (opts.noStdin) child.stdin?.end()
     })
   }
   const run: ClaudeRunner = (args, opts) => full(args, opts).then(r => r.stdout)

@@ -184,6 +184,32 @@ describe('ResumeGate (gate pass 30, L-2)', () => {
     expect(runs).toBe(2)
   })
 
+  it('runs a resume within 15 s of another once the session stopped since (MIP2-1632)', async () => {
+    let t = 1_000
+    const gate = new ResumeGate(() => t)
+    let runs = 0
+    const run = () => gate.run(SID, async () => void runs++)
+    await run()
+    // A list read before the resume finished doesn't count; one after it showing the process keeps the repeat window.
+    gate.observe(900, [{ sessionId: SID, running: false }])
+    gate.observe(1_500, [{ sessionId: SID, running: true }])
+    t = 2_000
+    await run()
+    expect(runs).toBe(1)
+    // Stopped outside the app: a list read after the resume shows no process, or doesn't list it.
+    gate.observe(2_500, [{ sessionId: SID, running: false }])
+    await run()
+    expect(runs).toBe(2)
+    t = 3_000
+    gate.observe(3_500, [])
+    await run()
+    expect(runs).toBe(3)
+    // Stopped or refused by the app.
+    gate.ended(SID)
+    await run()
+    expect(runs).toBe(4)
+  })
+
   it('joins a resume in flight, a confirmed one too (gate pass 31, L-4)', async () => {
     const gate = new ResumeGate(() => 0)
     let runs = 0

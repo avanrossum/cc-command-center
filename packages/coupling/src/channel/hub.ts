@@ -115,11 +115,18 @@ class SessionChannel {
   /** The reply key was replaced at recovery; cleared by the first report, which the mod sends only after a reply verified. */
   keyPending = false
   /**
-   * The id the session had before a /clear (MIP2-1557). Claude Code gives the
-   * same job a new sessionId, while its mod goes on reporting the id it
-   * started with, so a report under this id is the same session's.
+   * Every id the session had before its /clears (MIP2-1557; MIP2-2082).
+   * Claude Code gives the same job a new sessionId, while its mod goes on
+   * reporting the id it registered under: the launch id, or after a restart
+   * the id it had then. A report under any of these is the same session's.
+   * Before MIP2-2082 only the last id was kept, so from the second /clear on
+   * the mod's reports were refused.
    */
-  launchId: string | null = null
+  readonly formerIds = new Set<string>()
+  /** The id the mod's reports last came under, when it isn't the current one: never trimmed from formerIds (gate pass 66, L2). */
+  reportsAs: string | null = null
+  /** When the clear event the last move used was made (its `at`); a later move needs a newer one (MIP2-2082). */
+  clearAt = 0
   readonly createdAt: number
 
   constructor(
@@ -297,6 +304,28 @@ export interface LaunchOptions {
   ultracode?: boolean
 }
 
+
+
+/** How many former ids a channel keeps, as the store does (FORMER_IDS_MAX); the id its mod reports under is never trimmed. */
+export const CHANNEL_FORMER_IDS_MAX = 16
+
+/** Adds `id` to the channel's former ids (never its current one), trimming the oldest past the cap but never the id its mod reports under. */
+function addFormer(ch: SessionChannel, id: string, current: string): void {
+  if (id === current) return
+  ch.formerIds.delete(id)
+  ch.formerIds.add(id)
+  ch.formerIds.delete(current)
+  for (const old of [...ch.formerIds]) {
+    if (ch.formerIds.size <= CHANNEL_FORMER_IDS_MAX) break
+    if (old !== ch.reportsAs) ch.formerIds.delete(old)
+  }
+}
+/** When the newest `session.end` with reason `clear` in the channel's latest report was made; 0 with none. */
+function latestClearAt(ch: SessionChannel): number {
+  let at = 0
+  for (const e of ch.file?.events ?? []) if (e.type === 'session.end' && e.reason === 'clear' && e.at > at) at = e.at
+  return at
+}
 export class ChannelHub {
   readonly root: string
   private modDir: string
@@ -583,7 +612,9 @@ export class ChannelHub {
     const launch = this.launchOf(sessionId) ?? (await launchOptionsIn(settingsPath))
     const ch = new SessionChannel(old.id, old.dir, newSecret(), this.now(), true)
     ch.sessionId = sessionId
-    ch.launchId = old.launchId
+    for (const id of old.formerIds) ch.formerIds.add(id)
+    ch.reportsAs = old.reportsAs
+    ch.clearAt = old.clearAt
     // A new reply key with the new secret (MIP2-1436 item 1).
     ch.replyKey = newReplyKey()
     const text = JSON.stringify(this.settingsFor(ch, socketPath, launch.isolation ?? 'none', launch.ultracode === true), null, 2)
@@ -718,13 +749,15 @@ export class ChannelHub {
 
   /**
    * Whether this session's mod said its conversation was cleared: a
-   * `session.end` with reason `clear` in its latest report (MIP2-1557).
-   * Main moves a session to its new id only with this and `agents --json`
-   * agreeing.
+   * `session.end` with reason `clear` in its latest report, newer than the
+   * one the last move used (MIP2-1557; MIP2-2082). Main moves a session to
+   * its new id only with this and `agents --json` agreeing.
    */
   reportedClear(sessionId: string): boolean {
-    const ch = [...this.channels.values()].find(c => c.sessionId === sessionId || c.launchId === sessionId)
-    return ch?.file?.events.some(e => e.type === 'session.end' && e.reason === 'clear') ?? false
+    // The channel that has the id now, before one that had it (gate pass 66, L1).
+    const all = [...this.channels.values()]
+    const ch = all.find(c => c.sessionId === sessionId) ?? all.find(c => c.formerIds.has(sessionId))
+    return ch ? latestClearAt(ch) > ch.clearAt : false
   }
 
   /**
@@ -734,15 +767,47 @@ export class ChannelHub {
    * Called again at start, from the store, for channels recovered.
    */
   rebind(from: string, to: string): void {
-    const ch = [...this.channels.values()].find(c => c.sessionId === from || (c.sessionId === to && c.launchId === null))
+    if (from === to) return
+    const ch = [...this.channels.values()].find(c => c.sessionId === from) ?? [...this.channels.values()].find(c => c.sessionId === to)
     if (!ch) return
-    ch.launchId = from
+    // Every id it had stays its own, and the clear this move used is spent (MIP2-2082).
+    addFormer(ch, from, to)
+    ch.clearAt = Math.max(ch.clearAt, latestClearAt(ch))
     if (ch.sessionId !== to) {
       ch.sessionId = to
       void writeSessionFile(ch.dir, to)
     }
     const mark = this.untrustedSessions.get(from)
     if (mark !== undefined) (this.untrustedSessions.delete(from), this.untrustedSessions.set(to, mark))
+  }
+
+  /**
+   * At app start, from the store (gate pass 66, M2): the ids session
+   * `current` had before its /clears, and when its last move was made.
+   * Unlike rebind it never takes another session's channel: it finds the
+   * channel by `current`, or else one still under one of `ids` (a session
+   * file the last move didn't get to write), and only adds to it. Main
+   * passes only ids that are no other record's. A clear event made at or
+   * before `clearedAt` is spent (M1).
+   */
+  restoreFormerIds(current: string, ids: readonly string[], clearedAt = 0): void {
+    const all = [...this.channels.values()]
+    const ch = all.find(c => c.sessionId === current) ?? all.find(c => c.sessionId !== null && ids.includes(c.sessionId))
+    if (!ch) return
+    if (ch.sessionId !== current) {
+      const was = ch.sessionId!
+      ch.sessionId = current
+      void writeSessionFile(ch.dir, current)
+      const mark = this.untrustedSessions.get(was)
+      if (mark !== undefined) (this.untrustedSessions.delete(was), this.untrustedSessions.set(current, mark))
+    }
+    for (const id of ids) addFormer(ch, id, current)
+    ch.clearAt = Math.max(ch.clearAt, clearedAt)
+  }
+
+  /** The id each channel's mod reports under, where it isn't the session's current id, for the store to keep (gate pass 66, L2). */
+  reportingIds(): [current: string, reportsAs: string][] {
+    return [...this.channels.values()].flatMap(c => (c.sessionId && c.reportsAs && c.reportsAs !== c.sessionId ? [[c.sessionId, c.reportsAs] as [string, string]] : []))
   }
 
   /** Prompts waiting for an answer, by session. */
@@ -1122,7 +1187,8 @@ export class ChannelHub {
         report: file => {
           // The first report binds the channel to its session; another sessionId is refused, except the id it had
           // before a /clear (MIP2-1557), which is stored under the current one.
-          if (ch.sessionId && ch.launchId === file.sessionId) file = { ...file, sessionId: ch.sessionId }
+          if (ch.sessionId && ch.formerIds.has(file.sessionId)) (ch.reportsAs = file.sessionId), (file = { ...file, sessionId: ch.sessionId })
+          else if (ch.sessionId && ch.sessionId === file.sessionId) ch.reportsAs = null
           if (ch.sessionId && ch.sessionId !== file.sessionId) throw new Error('report for another session')
           const first = !ch.sessionId
           if (first) void writeSessionFile(ch.dir, file.sessionId)

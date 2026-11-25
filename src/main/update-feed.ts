@@ -1,9 +1,10 @@
 // Which release the app updates to (MIP2-1469; release plan §3). Stock
-// electron-updater reads GitHub's "latest" release, and that stays on 0.24's
-// tombstone, since every release of this app is published with
-// --latest=false. So the app reads the public releases.atom itself and takes
-// the newest semver tag above its own version whose release carries
-// ccc-mac.yml. Kept free of Electron so it's tested against recorded feeds.
+// electron-updater reads GitHub's "latest" release. Until D-052 that was 0.24's
+// tombstone; since D-052 a full release of this app is latest and a prerelease
+// never is, so "latest" can't offer a beta. The app reads the public
+// releases.atom itself and takes the newest semver tag above its own version
+// whose release carries ccc-mac.yml, betas included when the beta setting is
+// on. Kept free of Electron so it's tested against recorded feeds.
 
 /** The public repository the app updates from. */
 export const UPDATE_REPO = 'https://github.com/avanrossum/cc-command-center'

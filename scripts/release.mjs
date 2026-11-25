@@ -6,7 +6,7 @@
 //   the farewell release's copy of the new app's disk image, MIP2-61):
 //     node scripts/release.mjs --build-only           (any version; --prerelease is ignored)
 //   A beta (MIP2-1497): the same as a real release, for an X.Y.Z-beta.N version, published as a
-//   GitHub prerelease and never "latest"; add --prerelease to the real-release command.
+//   GitHub prerelease and never "latest" (D-052); add --prerelease to the real-release command.
 //   A real release, only with the maintainer's go, from main, after this commit's snapshot is pushed to the
 //   public main (scripts/snapshot.mjs):
 //     node scripts/release.mjs --repo avanrossum/cc-command-center --notes <file> --target <public sha> --go
@@ -19,8 +19,8 @@
 //
 // Like 0.24's scripts/publish.mjs, electron-builder builds with --publish never and a single
 // `gh release create` uploads every asset, since electron-builder's own uploader raced on new
-// releases. Every release is created with --latest=false, so GitHub's "latest" stays on 0.24's
-// tombstone (§3).
+// releases. A full release is created with --latest, so GitHub's "latest" is the newest 1.x; a
+// prerelease or a dry run's draft with --latest=false (D-052, replacing D-046).
 //
 // The app always updates from the public repository (src/main/update-feed.ts, UPDATE_REPO); the
 // owner and repository in app-update.yml aren't read. A dry run is never promoted to a real
@@ -37,7 +37,8 @@ import {
   identityRefusal,
   prereleaseRefusal,
   installEnv,
-  latestFalseRefusal,
+  latestRefusal,
+  newestRefusal,
   PUBLIC_REPO,
   releaseArgs,
   remoteTagRefusal,
@@ -138,6 +139,13 @@ if (!dryRun && !buildOnly) {
   if (targetRefused) fail(targetRefused)
   const tagRefused = remoteTagRefusal(remoteTags(), tag, target)
   if (tagRefused) fail(tagRefused)
+  // A full release is marked latest, so it must be the newest full release (gate pass 63, L-5).
+  if (!prerelease) {
+    const all = ghText(['api', '--paginate', `repos/${repo}/git/matching-refs/tags/v`, '-q', '.[].ref'])
+    if (all === null) fail(`couldn't read ${repo}'s tags; not marking a release latest blind`)
+    const newestRefused = newestRefusal(tag, all.split('\n').filter(Boolean))
+    if (newestRefused) fail(newestRefused)
+  }
 }
 
 // 3. Signing and notarization.
@@ -227,12 +235,12 @@ if (buildOnly) {
   process.exit(0)
 }
 
-// 6. Publish: one `gh release create`, --latest=false always; a dry run as a draft.
+// 6. Publish: one `gh release create`, --latest for a full release and --latest=false otherwise (D-052); a dry run as a draft.
 const assets = files.filter(f => /\.(dmg|zip|blockmap)$/.test(f) || f === 'ccc-mac.yml').map(f => join(out, f))
 const assetRefused = assetRefusal(assets.map(a => a.slice(out.length + 1)), version)
 if (assetRefused) fail(assetRefused)
 const args = releaseArgs({ tag, repo, title: `CC Command Center ${version}`, notesFile: notes, files: assets, draft: dryRun, target, prerelease })
-const latestRefused = latestFalseRefusal(args)
+const latestRefused = latestRefusal(args)
 if (latestRefused) fail(latestRefused)
 // Once more right before the tag is made: the build took minutes, and gh reuses a tag that
 // appeared meanwhile whatever --target says (pass 10, L-2).

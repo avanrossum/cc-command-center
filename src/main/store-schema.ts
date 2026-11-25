@@ -5,7 +5,7 @@
 // the window sends. A category or session that fails its core fields is
 // dropped; a bad optional field is dropped alone.
 
-import { emptyStore, SIDEBAR_WIDTH, SWITCHER_PINS_MAX, SWITCHER_RECENT_MAX, type AppSettings, type AppStore, type Category, type SessionMeta } from '../shared/store.ts'
+import { emptyStore, FORMER_IDS_MAX, SIDEBAR_WIDTH, SWITCHER_PINS_MAX, SWITCHER_RECENT_MAX, type AppSettings, type AppStore, type Category, type SessionMeta } from '../shared/store.ts'
 import { wholeDiskPath as isWholeDisk } from '@ccc/coupling'
 import { checkImportedSettings, FONT_NAME, isCategoryId, isSessionId } from './validate.ts'
 import { CONFIRMABLE_MODES, isMode } from './permission-modes.ts'
@@ -56,10 +56,14 @@ function session(v: unknown): SessionMeta | null {
   const placedBy = oneOf(v.placedBy, ['hand', 'import', 'auto'] as const) ? v.placedBy : null
   const m: SessionMeta = { categoryId, placedBy: categoryId ? placedBy : null }
   for (const k of ['autoSeen', 'neverRollOff', 'headlessChild', 'contractor', 'listed', 'parkedHidden', 'refuseNextProcess'] as const) if (bool(v[k])) m[k] = v[k]
-  for (const k of ['archivedAt', 'rolledOffAt', 'activityAt', 'movedAt', 'removedAt', 'verifiedStartedAt'] as const) if (num(v[k])) m[k] = v[k]
+  for (const k of ['archivedAt', 'rolledOffAt', 'activityAt', 'movedAt', 'removedAt', 'verifiedStartedAt', 'clearedAt'] as const) if (num(v[k])) m[k] = v[k]
   for (const k of ['cwd', 'folderKey'] as const) if (absPath(v[k])) m[k] = v[k]
   for (const [k, max] of [['name', 80], ['alias', 120], ['theme', 64], ['untrusted', 300]] as const) if (str(v[k], max)) m[k] = v[k]
-  for (const k of ['parentId', 'copyOf', 'fromSession', 'launchSessionId'] as const) if (isSessionId(v[k])) m[k] = v[k]
+  for (const k of ['parentId', 'copyOf', 'fromSession', 'launchSessionId', 'reportingId'] as const) if (isSessionId(v[k])) m[k] = v[k]
+  if (Array.isArray(v.formerIds)) {
+    const ids = v.formerIds.filter(isSessionId).slice(-FORMER_IDS_MAX)
+    if (ids.length) m.formerIds = ids
+  }
   // 1.0.2-beta.5 saved this flag as `legacyMark` (gate pass 35, L-3).
   if (v.refuseNextProcess === undefined && v.legacyMark === true) m.refuseNextProcess = true
   if (Array.isArray(v.refusedStarts)) m.refusedStarts = v.refusedStarts.filter(num).slice(-REFUSED_STARTS_MAX)
@@ -94,6 +98,7 @@ function settings(v: unknown): AppSettings {
   const base = emptyStore().settings
   if (!isObj(v)) return base
   const out: AppSettings = { ...base, recentFolders: paths(v.recentFolders, 8) }
+  if (typeof v.lastPickerFolder === 'string' && v.lastPickerFolder.startsWith('/') && v.lastPickerFolder.length <= 4096 && !v.lastPickerFolder.includes('\0')) out.lastPickerFolder = v.lastPickerFolder
   Object.assign(
     out,
     checkImportedSettings({

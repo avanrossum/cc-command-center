@@ -37,3 +37,63 @@ export class ClearWatch {
     return moved
   }
 }
+
+/** How long a /clear waits for its session's mod to say so before the app gives it up (MIP2-2072). */
+export const CLEAR_CONFIRM_MS = 2 * 60_000
+
+/**
+ * The /clears waiting for their mod's word (MIP2-2072). ClearWatch reports a
+ * move once, on the poll that sees the new id; the mod's `session.end` can
+ * reach its channel a poll or two later. Seen live on 2026-11-20: the move
+ * was skipped as unconfirmed and the session lost. A move waits here and is
+ * tried each poll while the new id is still listed and the old one isn't,
+ * until its mod confirms it or CLEAR_CONFIRM_MS passes.
+ */
+export class ClearConfirm {
+  private readonly waiting = new Map<string, { to: string; since: number; via: string[] }>()
+
+  /**
+   * This poll's moves and the ones still waiting: `move` the confirmed ones,
+   * `gaveUp` the ones past CLEAR_CONFIRM_MS or no longer in place, and
+   * `waiting` the rest, which are tried again next poll. `fresh` holds the
+   * ones first seen this poll.
+   */
+  step(
+    found: readonly { from: string; to: string }[],
+    now: number,
+    confirmed: (from: string) => boolean,
+    inPlace: (from: string, to: string) => boolean,
+  ): { move: { from: string; to: string; via: string[] }[]; gaveUp: { from: string; to: string }[]; fresh: { from: string; to: string }[] } {
+    const fresh: { from: string; to: string }[] = []
+    for (const m of found) {
+      if (this.waiting.has(m.from)) continue
+      // A second /clear while the first waits (A to B, then B to C): one move, A to C, judged by A's mod and timed from
+      // A's wait, since B never held the record or the channel (gate pass 63, M-1).
+      const earlier = [...this.waiting].find(([, w]) => w.to === m.from)
+      // The id passed through goes with the move, for the record's former ids and to drop its stub (gate pass 64, M-1).
+      if (earlier) (earlier[1].via.push(m.from), (earlier[1].to = m.to))
+      else (this.waiting.set(m.from, { to: m.to, since: now, via: [] }), fresh.push(m))
+    }
+    const move: { from: string; to: string; via: string[] }[] = []
+    const gaveUp: { from: string; to: string }[] = []
+    for (const [from, w] of this.waiting) {
+      const m = { from, to: w.to }
+      if (!inPlace(from, w.to)) (gaveUp.push(m), this.waiting.delete(from))
+      else if (confirmed(from)) (move.push({ ...m, via: w.via }), this.waiting.delete(from))
+      else if (now - w.since > CLEAR_CONFIRM_MS) (gaveUp.push(m), this.waiting.delete(from))
+    }
+    return { move, gaveUp, fresh: fresh.filter(m => this.waiting.has(m.from)) }
+  }
+
+  /** Where a held old id, or an id it passed through, is moving to; undefined for any other (gate pass 64, L-2). */
+  pendingTo(id: string): string | undefined {
+    for (const [from, w] of this.waiting) if (from === id || w.via.includes(id)) return w.to
+    return undefined
+  }
+
+  /** The old ids waiting for their mod's word: their records aren't removed meanwhile (gate pass 63, L-1). */
+  holding(): ReadonlySet<string> {
+    return new Set(this.waiting.keys())
+  }
+}
+

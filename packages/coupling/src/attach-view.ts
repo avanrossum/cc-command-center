@@ -56,6 +56,8 @@ export function quotePath(path: string): string {
 }
 
 interface View {
+  /** The session's id now: a /clear gives it a new one while the attach runs (MIP2-2072). */
+  id: string
   process: AttachProcess
   leaving: boolean
   usedAt: number
@@ -90,14 +92,29 @@ export class AttachPool {
     }
     const cmd = await this.host.attach(sessionId)
     const process = this.spawn(cmd, cols, rows)
-    const view: View = { process, leaving: false, usedAt: this.now() }
+    const view: View = { id: sessionId, process, leaving: false, usedAt: this.now() }
     this.views.set(sessionId, view)
-    process.onData(d => this.events.data(sessionId, d))
+    // Under the view's id at the time, which follows a /clear (MIP2-2072).
+    process.onData(d => this.events.data(view.id, d))
     process.onExit(({ exitCode }) => {
-      if (this.views.get(sessionId) === view) this.views.delete(sessionId)
-      this.events.exit(sessionId, exitCode)
+      if (this.views.get(view.id) === view) this.views.delete(view.id)
+      this.events.exit(view.id, exitCode)
     })
     this.evict()
+  }
+
+  /**
+   * A /clear gave the session a new id (MIP2-2072): its attach goes on under
+   * the new one, so Focus keeps its terminal. A view already under the new id
+   * is kept, and the old one left.
+   */
+  rename(from: string, to: string): void {
+    const v = this.views.get(from)
+    if (!v || from === to) return
+    if (this.views.has(to)) return this.leave(from)
+    this.views.delete(from)
+    v.id = to
+    this.views.set(to, v)
   }
 
   write(sessionId: string, data: string): void {
@@ -120,7 +137,7 @@ export class AttachPool {
     v.leaving = true
     v.process.write('\x1a')
     setTimeout(() => {
-      if (this.views.get(sessionId) === v) v.process.kill('SIGTERM')
+      if (this.views.get(v.id) === v) v.process.kill('SIGTERM')
     }, LEAVE_GRACE_MS).unref?.()
   }
 

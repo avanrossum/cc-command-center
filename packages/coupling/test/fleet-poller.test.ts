@@ -175,6 +175,25 @@ describe('FleetPoller', () => {
       expect(await none.pollOnce()).not.toHaveProperty('usageReported')
     })
 
+    it("doesn't show an old 5h past its reset when a fresh /usage lists none, as on Alex's 1.1.1 (MIP2-1639)", async () => {
+      const { host } = hostWith([FIXTURE])
+      const t = 1_800_000_000_000
+      const report = { value: { fiveHour: null, sevenDay: { usedPercent: 31, resetsAt: t / 1000 + 86_400 } }, source: 'usage-report', observedAt: t, stale: false }
+      // The governor's files: an old mod's 5h, reset days ago, beside the week.
+      const files = { value: { fiveHour: { usedPercent: 12, resetsAt: t / 1000 - 93 * 3600, observedAt: t - 93 * 3600_000 }, sevenDay: { usedPercent: 31, resetsAt: t / 1000 + 86_400, observedAt: t } }, source: 'statusline', observedAt: t, stale: false }
+      const p = new FleetPoller({ host, readUsage: async () => files as never, readReport: () => report as never, now: () => t })
+      const snap = await p.pollOnce()
+      expect(snap.usage?.value.fiveHour).toBeNull()
+      expect(snap.usage?.value.sevenDay?.usedPercent).toBe(31)
+      expect(snap.usageReported?.value).toEqual({ fiveHour: false, sevenDay: true })
+      // A current 5h from a file still shows, and with no report the old one can still say the window reset.
+      const current = { ...files, value: { ...files.value, fiveHour: { usedPercent: 12, resetsAt: t / 1000 + 3600, observedAt: t } } }
+      const q = new FleetPoller({ host, readUsage: async () => current as never, readReport: () => report as never, now: () => t })
+      expect((await q.pollOnce()).usage?.value.fiveHour?.usedPercent).toBe(12)
+      const noReport = new FleetPoller({ host, readUsage: async () => files as never, now: () => t })
+      expect((await noReport.pollOnce()).usage?.value.fiveHour?.usedPercent).toBe(12)
+    })
+
     it('shows a window as not reported once its last reading has reset and no source carries it (MIP2-1590)', async () => {
       const { host } = hostWith([FIXTURE])
       let t = 1_800_000_000_000

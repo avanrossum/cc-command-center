@@ -22,6 +22,9 @@ import { copyRefusal, movePreflight, terminalMessage } from './move.ts'
 import { ModStuck, NeedsConfirm, ResumeGate, resumeConfirmed, resumeFromApp, stuckError, type Confirmation, type RefusalError } from './resume.ts'
 import { IPC, type LaunchRequest, type Result } from '../shared/ipc.ts'
 import { lookup as dnsLookup } from 'node:dns/promises'
+import { homedir } from 'node:os'
+import { pickerStart } from './folder-start.ts'
+
 import { openTerminalLink, type LinkResult } from './policy.ts'
 import { isTrustedSender } from './security.ts'
 import { checkAnswer, checkCopy, droppedPaths, parseLaunch, isSessionId, isSize, isText } from './validate.ts'
@@ -85,6 +88,12 @@ export interface ControlDeps {
   terminalHost?: (pid: number) => Promise<string | null>
   /** A resume from the app started a copy (Claude Code's note says so): kept visible and alerted on (MIP2-1467). */
   onResumedAsCopy?: (sessionId: string, copyShortId: string) => void
+  /** The one resume gate, shared with main, which tells it of stops and of each session list (MIP2-1632). */
+  resumes?: ResumeGate
+  /** Where the folder picker opens when the sheet shows none: the last folder chosen in it, then the last launched in (MIP2-2073). */
+  lastFolder?: () => (string | undefined)[]
+  /** A folder chosen in the picker, remembered for the next one. */
+  onFolderChosen?: (folder: string) => void
 }
 
 export function registerControl({
@@ -111,10 +120,12 @@ export function registerControl({
   errorFor = stuckError,
   confirmSettings = { begin: () => 'there are no saved settings to confirm', commit: () => {}, abort: () => {} },
   onResumedAsCopy = () => {},
+  resumes = new ResumeGate(),
+  lastFolder = () => [],
+  onFolderChosen = () => {},
   terminalHost = async () => null,
 }: ControlDeps): void {
   // One resume per session at a time, and none again right after one (MIP2-1467).
-  const resumes = new ResumeGate()
   const invoke = <A extends unknown[], R>(channel: string, fn: (...args: A) => Promise<R>, refused: R) =>
     ipcMain.handle(channel, async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
       if (!isTrustedSender(event)) return refused
@@ -216,7 +227,8 @@ export function registerControl({
 
   for (const [channel, act] of [
     [IPC.resume, resume],
-    [IPC.stop, (id: string) => host.stop(id)],
+    // A stop ends a resume's repeat window, so the next resume runs (MIP2-1632).
+    [IPC.stop, (id: string) => (resumes.ended(id), host.stop(id))],
   ] as const) {
     invoke(channel, async (given: unknown) => {
       if (!isSessionId(given)) return { ok: false, error: 'not a session id' }
@@ -248,11 +260,16 @@ export function registerControl({
     }
   }, untrusted)
 
-  invoke(IPC.chooseFolder, async () => {
+  // Opens at the folder the sheet shows, else the last folder chosen here or launched in, else home, and remembers the
+  // folder chosen for the next picker only; New Session's default stays the folder last launched in (MIP2-2073; gate
+  // pass 63, L-4).
+  invoke(IPC.chooseFolder, async (start: unknown) => {
     const win = BrowserWindow.getFocusedWindow()
-    const opts = { properties: ['openDirectory' as const, 'createDirectory' as const] }
+    const opts = { properties: ['openDirectory' as const, 'createDirectory' as const], defaultPath: await pickerStart([start, ...lastFolder()], homedir()) }
     const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
-    return r.canceled ? null : (r.filePaths[0] ?? null)
+    const chosen = r.canceled ? null : (r.filePaths[0] ?? null)
+    if (chosen) onFolderChosen(chosen)
+    return chosen
   }, null)
 
   invoke(IPC.focusOpen, async (id: unknown, cols: unknown, rows: unknown) => {

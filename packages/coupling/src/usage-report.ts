@@ -135,7 +135,7 @@ export const REPORT_FRESH_MS = REPORT_BACKOFF_MAX_MS + REPORT_EVERY_MS
 
 export interface UsageReportReaderOptions {
   /** Runs `claude` with these arguments in `cwd`, resolving to stdout. */
-  run: (args: string[], opts: { cwd: string; timeoutMs: number }) => Promise<string>
+  run: (args: string[], opts: { cwd: string; timeoutMs: number; noStdin?: boolean }) => Promise<string>
   /** An empty folder the app owns. */
   cwd: string
   now?: () => number
@@ -205,7 +205,7 @@ export class UsageReportReader {
     }
     try {
       // Run in the folder's real path, the one just checked (gate pass 20, L-4).
-      report = parseUsageReport(await this.opts.run([...USAGE_REPORT_ARGS], { cwd: realpathSync(this.opts.cwd), timeoutMs: 30_000 }))
+      report = parseUsageReport(await this.opts.run([...USAGE_REPORT_ARGS], { cwd: realpathSync(this.opts.cwd), timeoutMs: 30_000, noStdin: true }))
     } catch (err) {
       this.opts.log?.(`usage report: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`)
     }

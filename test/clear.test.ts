@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AppStoreService } from '../src/main/app-store.ts'
-import { ClearWatch } from '../src/shared/clear.ts'
+import { CLEAR_CONFIRM_MS, ClearConfirm, ClearWatch } from '../src/shared/clear.ts'
 import { RestartWatch } from '../src/main/restart-watch.ts'
 import { LiftedRefusals } from '../src/main/resume.ts'
 
@@ -41,10 +41,84 @@ describe('ClearWatch', () => {
   })
 })
 
+describe('ClearConfirm (MIP2-2072)', () => {
+  const A = 'c0ffee01-0000-4000-8000-000000000001'
+  const B = 'c0ffee02-0000-4000-8000-000000000002'
+  const m = { from: A, to: B }
+  const inPlace = () => true
+
+  it('moves a /clear whose mod says so a poll or two later, as on 2026-11-20', () => {
+    const c = new ClearConfirm()
+    let said = false
+    expect(c.step([m], 0, () => said, inPlace)).toEqual({ move: [], gaveUp: [], fresh: [m] })
+    // The next poll: ClearWatch reports nothing new, the move still waits.
+    expect(c.step([], 2_000, () => said, inPlace)).toEqual({ move: [], gaveUp: [], fresh: [] })
+    said = true
+    expect(c.step([], 4_000, () => said, inPlace)).toEqual({ move: [{ ...m, via: [] }], gaveUp: [], fresh: [] })
+    expect(c.step([], 6_000, () => said, inPlace).move).toEqual([])
+  })
+
+  it('moves at once when the mod said so, or the session has no mod', () => {
+    expect(new ClearConfirm().step([m], 0, () => true, inPlace)).toEqual({ move: [{ ...m, via: [] }], gaveUp: [], fresh: [] })
+  })
+
+  it('gives a move up after CLEAR_CONFIRM_MS, or once it is no longer in place', () => {
+    const c = new ClearConfirm()
+    c.step([m], 0, () => false, inPlace)
+    expect(c.step([], CLEAR_CONFIRM_MS + 1, () => false, inPlace).gaveUp).toEqual([m])
+    const d = new ClearConfirm()
+    d.step([m], 0, () => false, inPlace)
+    // The old id is listed again, or the new one left: it wasn't a /clear.
+    expect(d.step([], 2_000, () => true, () => false)).toEqual({ move: [], gaveUp: [m], fresh: [] })
+  })
+
+  it('makes a second /clear while the first waits one move, judged by the first id\'s mod (gate pass 63, M-1)', () => {
+    const C = 'c0ffee03-0000-4000-8000-000000000003'
+    const c = new ClearConfirm()
+    let said = false
+    // The mod is A's: B never had a channel, so it can't count as "no mod".
+    const confirmed = (from: string) => from === A && said
+    c.step([m], 0, confirmed, inPlace)
+    expect(c.holding()).toEqual(new Set([A]))
+    const r = c.step([{ from: B, to: C }], 30_000, confirmed, (from, to) => from === A && to === C)
+    expect(r).toEqual({ move: [], gaveUp: [], fresh: [] })
+    said = true
+    expect(c.step([], 32_000, confirmed, (from, to) => from === A && to === C).move).toEqual([{ from: A, to: C, via: [B] }])
+    // Timed from A's wait.
+    const t = new ClearConfirm()
+    t.step([m], 0, () => false, inPlace)
+    t.step([{ from: B, to: C }], 60_000, () => false, inPlace)
+    expect(t.step([], CLEAR_CONFIRM_MS + 1, () => false, inPlace).gaveUp).toEqual([{ from: A, to: C }])
+  })
+})
+
 describe('AppStoreService.renameSession', () => {
   let dir: string
   beforeEach(() => (dir = mkdtempSync(join(tmpdir(), 'ccc-clear-'))))
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('drops a removal the old id took while the move waited, keeps the ids it had, and finds the session by any of them (gate pass 63, L-1, L-2)', () => {
+    const store = new AppStoreService(join(dir, 'store.json'), '/Users/x', () => false)
+    store.recordLaunch(OLD, { cwd: '/w' }, {}, 1)
+    const C = 'c0ffee0c-0000-4000-8000-00000000000c'
+    store.renameSession(OLD, NEW)
+    store.renameSession(NEW, C)
+    const m = store.get().sessions[C]
+    expect(m?.formerIds).toEqual([OLD, NEW])
+    expect(m?.removedAt).toBeUndefined()
+    expect([store.currentIdOf(OLD), store.currentIdOf(NEW), store.currentIdOf(C), store.currentIdOf(OTHER)]).toEqual([C, C, C, undefined])
+    expect(new AppStoreService(join(dir, 'store.json'), '/Users/x', () => false).get().sessions[C]?.formerIds).toEqual([OLD, NEW])
+  })
+
+  it('keeps when the last move was made, and the id the mod reports under, across app starts (gate pass 66, M1, L2)', () => {
+    const store = new AppStoreService(join(dir, 'store.json'), '/Users/x', () => false)
+    store.recordLaunch(OLD, { cwd: '/w' }, {}, 1)
+    store.renameSession(OLD, NEW, [], 5_000)
+    store.setReportingId(NEW, OLD)
+    store.setReportingId(NEW, NEW)
+    const again = new AppStoreService(join(dir, 'store.json'), '/Users/x', () => false).get().sessions[NEW]
+    expect([again?.clearedAt, again?.reportingId]).toEqual([5_000, OLD])
+  })
 
   it('keeps the start of each process that passed the restart check (gate pass 20, M-1)', () => {
     const store = new AppStoreService(join(dir, 'store.json'), '/Users/x', () => false)

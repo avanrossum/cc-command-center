@@ -71,10 +71,11 @@ import { RestartWatch } from './restart-watch.ts'
 import { refusals, restartPoll, runQueuedStops, stopNotice, StopRetries } from './restart-poll.ts'
 import { isSessionId } from './validate.ts'
 import { DISPLAY_NAME, nameToPin } from './app-name.ts'
-import { ClearWatch } from '../shared/clear.ts'
+import { ClearConfirm, ClearWatch } from '../shared/clear.ts'
+import { NotificationKeeper, notificationId } from './notification-click.ts'
 import { QuitControl } from './quit-control.ts'
 import { checkQuitAnswer, closable, quitNotices } from '../shared/quit.ts'
-import { clearGoneRefusal, confirmationFor, LiftedRefusals, ModStuck, NeedsConfirm, rekeyedFor } from './resume.ts'
+import { clearGoneRefusal, confirmationFor, LiftedRefusals, ModStuck, NeedsConfirm, rekeyedFor, ResumeGate } from './resume.ts'
 import { checkModFolders, copyTo, MOD_FOLDERS_MAX, modDir, modHash, modSource, type ModHealed } from './reporter-mod.ts'
 import { backfillVersion, escalationText, pathFold, realPath, savedOptionsCheck, type Escalation } from './mod-backfill.ts'
 import { moveRequest } from './move.ts'
@@ -273,7 +274,10 @@ async function start(): Promise<void> {
   // With `told`, the notice that said "Stopping…" is followed by whether it stopped (gate pass 27, M-2). A retry of a
   // refused process still listed re-keys only until a re-key has finished (pass 28, L-2; pass 29, L-2). Resolves to
   // whether it stopped.
+  // One resume gate for the app; a stop or refusal ends a resume's repeat window (MIP2-1632).
+  const resumeGate = new ResumeGate()
   const untrustedStop = (id: string, told?: string, { rekey = true } = {}): Promise<boolean> => {
+    resumeGate.ended(id)
     if (!hostRef) return (stopsWaiting.push({ id, told }), Promise.resolve(false))
     const done = hostRef
       .stop(id)
@@ -540,8 +544,16 @@ async function start(): Promise<void> {
   })
   // Refuses a channel folder, or its parent, that other users can open (D-005).
   await hub.recover()
-  // Channels of sessions a /clear moved: their mods still report the launch id (MIP2-1557).
-  for (const [current, launch] of store.launchIds()) hub.rebind(launch, current)
+  // Channels of sessions a /clear moved: their mods still report the id they registered under, the launch id or an
+  // earlier one, so every id the session had is its channel's (MIP2-1557; MIP2-2082). Only ids that are no other record's,
+  // and never by moving another session's channel; a clear made before the last move is spent (gate pass 66, M1, M2).
+  for (const [current, launch] of store.launchIds()) {
+    const meta = store.get().sessions[current]
+    const ids = [...new Set([launch, ...(meta?.formerIds ?? []), ...(meta?.reportingId ? [meta.reportingId] : [])])].filter(id => id !== current)
+    const others = ids.filter(id => store.get().sessions[id])
+    if (others.length) void commandLog.note('former-ids-skipped', { sessionId: current, ids: others })
+    hub.restoreFormerIds(current, ids.filter(id => !store.get().sessions[id]), meta?.clearedAt ?? 0)
+  }
   // The store's copy of each mark covers a lost folder mark; same-user code can write the store too (pass 5, M-3).
   hub.restoreMarks(store.untrustedMarks())
   await removeLegacyReporterDir()
@@ -594,14 +606,16 @@ async function start(): Promise<void> {
   const startDaemon = sharedSupervisorStart(() => spawnClaude(['daemon', 'run']))
   if (legacyMarks) void commandLog.note('legacy-marks', { flagged: legacyMarks })
   /** A session's current id, for the id it was launched under before a /clear (MIP2-1557). */
-  const currentOfLaunch = (launchId: string) => store.launchIds().find(([, launch]) => launch === launchId)?.[0]
+  // The one resolver of a session's id now, through its launch id and every former id (gate pass 64, L-3).
+  const currentIdOf = (id: string) => store.currentIdOf(id)
   /** No process runs the session, as the last poll saw it: an attach to it restarts it (MIP2-1565). */
   const noProcess = (id: string) => {
-    const current = currentOfLaunch(id) ?? id
+    const current = currentIdOf(id) ?? id
     const s = poller?.current()?.sessions.find(x => x.sessionId === current)
     return !s || s.pid.value === null || s.pid.stale
   }
   const clearWatch = new ClearWatch()
+  const clearConfirm = new ClearConfirm()
   const host = new SupervisorHost({
     run,
     binary,
@@ -610,7 +624,7 @@ async function start(): Promise<void> {
     // A session command ran with its reload switch in its settings file only (MIP2-1463).
     onSwitchUnconfirmed: () => selfCheck.noteSwitchUnconfirmed(Date.now()),
     // A /clear's two ids for one session, from the store (MIP2-1557).
-    currentIdOf: launchId => currentOfLaunch(launchId),
+    currentIdOf: id => currentIdOf(id),
     launchIdOf: id => store.get().sessions[id]?.launchSessionId,
     // A state, status or wait the app doesn't know, raw, for the record (MIP2-1447).
     onUnknown: raw => void commandLog.note('unknown-state', raw),
@@ -706,7 +720,16 @@ async function start(): Promise<void> {
     commandLog.wrapTrust(spawnAttach),
   )
   registerControl({
-    currentIdOf: currentOfLaunch,
+    resumes: resumeGate,
+    lastFolder: () => [store.get().settings.lastPickerFolder, store.get().settings.lastFolder],
+    onFolderChosen: folder => {
+      try {
+        store.rememberPickerFolder(folder)
+      } catch (err) {
+        console.warn(`remembering the folder chosen: ${String(err)}`)
+      }
+    },
+    currentIdOf,
     host: hosts.control,
     hub: channels,
     pool,
@@ -784,7 +807,8 @@ async function start(): Promise<void> {
     if (!isTrustedSender(event)) return { ok: false, error: 'untrusted sender' }
     if (!isSessionId(id)) return { ok: false, error: 'not a session id' }
     const meta = store.get().sessions[id]
-    const why = clearGoneRefusal(poller?.current()?.sessions.find(s => s.sessionId === id), meta, inArchive(meta))
+    // A /clear's old id waiting for its mod's word isn't gone: its record moves to the new id (gate pass 63, L-1).
+    const why = clearConfirm.holding().has(id) ? 'the session was just cleared, and the app is still following it to its new id' : clearGoneRefusal(poller?.current()?.sessions.find(s => s.sessionId === id), meta, inArchive(meta))
     if (why) return { ok: false, error: why }
     await hub?.closeFor(id)
     store.clearUntrusted(id)
@@ -918,49 +942,77 @@ async function start(): Promise<void> {
     return poller?.current() ?? null
   })
 
-  // Notifications (MIP2-1412): Needs you and Your turn, never while the app is in front.
+  // Notifications (MIP2-1412): Needs you and Your turn, never while the app is in front. Each is held until it's clicked
+  // or closed, so its click arrives, and its id names what it opens (MIP2-2074).
   const notifyMemory = newMemory()
+  const notifications = new NotificationKeeper(target => {
+    const win = BrowserWindow.getAllWindows()[0] ?? createWindow()
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.focus()
+    // The startup summary opens Fleet on Needs you; the rest open their session, under its id now after a /clear.
+    // A /clear still waiting for its mod's word: the session it's moving to (gate pass 64, L-2).
+    if ('sessionId' in target) broadcast(IPC.openSession, clearConfirm.pendingTo(target.sessionId) ?? currentIdOf(target.sessionId) ?? target.sessionId, { fromNotification: true })
+    else broadcast(IPC.openNeeds)
+  })
+  let notificationCount = 0
+  // Notifications from before this start, still in Notification Center: their clicks open what they name too.
+  if (process.platform === 'darwin')
+    void Notification.getHistory()
+      .then(list => list.forEach(n => notifications.restore(n)))
+      .catch(err => console.warn(`reading delivered notifications: ${String(err)}`))
   const notify = (sessions: Parameters<typeof decide>[1]['sessions'], listOk: boolean) => {
     const focused = BrowserWindow.getFocusedWindow() !== null
     for (const n of decide(notifyMemory, { sessions, store: store.get(), focused, now: Date.now(), listOk })) {
       if (!Notification.isSupported()) break
-      const shown = new Notification({ title: n.title, subtitle: n.subtitle, body: n.body, silent: n.cls === 'turn' })
-      shown.on('click', () => {
-        const win = BrowserWindow.getAllWindows()[0] ?? createWindow()
-        if (win.isMinimized()) win.restore()
-        win.show()
-        win.focus()
-        // The startup summary opens Fleet on Needs you; the rest open their session.
-        if (n.sessionId) broadcast(IPC.openSession, n.sessionId)
-        else broadcast(IPC.openNeeds)
-      })
+      const id = notificationId(n.sessionId ? { sessionId: n.sessionId } : { needs: true }, `${Date.now()}-${++notificationCount}`)
+      const shown = new Notification({ id, title: n.title, subtitle: n.subtitle, body: n.body, silent: n.cls === 'turn' })
+      notifications.keep(shown)
       shown.show()
     }
   }
   /** The last name each session had, for the toast once it has left the list. */
   const lastNames = new Map<string, string>()
   poller.subscribe(snapshot => {
+    // A session resumed before this list was read and listed with no process has stopped: its next resume runs, from
+    // a good list only (MIP2-1632).
+    if (snapshot.sources.find(s => s.source === 'agents-json')?.ok === true)
+      resumeGate.observe(snapshot.listedAt ?? snapshot.at, snapshot.sessions.map(s => ({ sessionId: s.sessionId, running: !s.pid.stale && s.pid.value !== null })))
+    // The id each session's mod reports under, kept for the next app start (gate pass 66, L2).
+    for (const [current, reportsAs] of channels.reportingIds())
+      try {
+        store.setReportingId(current, reportsAs)
+      } catch (err) {
+        void commandLog.note('reporting-id-not-saved', { sessionId: current, error: String(err).slice(0, 300) })
+      }
     // A /clear: the same job and process under a new sessionId (MIP2-1557). Moved only when the session's mod said it
     // was cleared too, where it has one; first, so the new id takes the old record rather than a new one.
-    for (const { from, to } of clearWatch.observe(snapshot.sessions.flatMap(s => (s.shortId.value ? [{ sessionId: s.sessionId, shortId: s.shortId.value, pid: s.pid.stale ? null : s.pid.value }] : [])))) {
-      // A session the app launched under that id is the job's own id, not a /clear's new one (MIP2-1570).
-      if (store.get().sessions[to]?.launch) {
-        void commandLog.note('clear-ignored', { from, to })
-        continue
-      }
-      const withMod = channels.channelOf(from) !== null
-      if (withMod && !channels.reportedClear(from)) {
-        void commandLog.note('clear-unconfirmed', { from, to })
-        continue
-      }
+    // A move whose mod hasn't said so yet waits, and is tried again each poll for CLEAR_CONFIRM_MS (MIP2-2072).
+    const listedNow = new Set(snapshot.sessions.map(s => s.sessionId))
+    const found = clearWatch.observe(snapshot.sessions.flatMap(s => (s.shortId.value ? [{ sessionId: s.sessionId, shortId: s.shortId.value, pid: s.pid.stale ? null : s.pid.value }] : [])))
+    // A session the app launched under that id is the job's own id, not a /clear's new one (MIP2-1570).
+    const ignored = found.filter(m => store.get().sessions[m.to]?.launch)
+    for (const m of ignored) void commandLog.note('clear-ignored', m)
+    const clears = clearConfirm.step(
+      found.filter(m => !ignored.includes(m)),
+      Date.now(),
+      from => channels.channelOf(from) === null || channels.reportedClear(from),
+      (from, to) => listedNow.has(to) && !listedNow.has(from),
+    )
+    for (const m of clears.fresh) void commandLog.note('clear-waiting', m)
+    for (const m of clears.gaveUp) void commandLog.note('clear-unconfirmed', m)
+    for (const { from, to, via } of clears.move) {
       // A save that fails never skips this poll's restart check below; the rename holds in memory (gate pass 55, L-1).
       try {
-        store.renameSession(from, to)
+        store.renameSession(from, to, via)
       } catch (err) {
         void commandLog.note('clear-not-saved', { from, to, error: String(err).slice(0, 300) })
       }
       channels.rebind(from, to)
       spendLedger?.rename(from, to)
+      // Focus keeps its terminal: the attach follows the new id, and the window is told (MIP2-2072).
+      pool?.rename(from, to)
+      broadcast(IPC.sessionMoved, from, to)
       void commandLog.note('cleared', { from, to })
     }
     // A process the app didn't start, on a background session it launched: the supervisor's own restart, checked as
@@ -987,7 +1039,7 @@ async function start(): Promise<void> {
     store.assignNew(seen())
     // The lifecycle (MIP2-1410): roll-off, removal, contractor links. A failed list removes nothing.
     const listOk = snapshot.sources.find(s => s.source === 'agents-json')?.ok === true
-    const life = store.observe(snapshot.sessions, listOk, Date.now())
+    const life = store.observe(snapshot.sessions, listOk, Date.now(), clearConfirm.holding())
     for (const id of life.stop) void host.stop(id).catch(err => console.warn(`roll-off stop ${id.slice(0, 8)}: ${err}`))
     // Named as everywhere else: Claude Code's name, 0.24's, then the folder. Never an id.
     const displayName = (id: string, claudeName: string | null, cwd: string | undefined) => {
@@ -1001,6 +1053,11 @@ async function start(): Promise<void> {
     notify(snapshot.sessions, listOk)
     void arbiter.consider(waitingItems(snapshot.sessions, store.get())).then(s => s && broadcast(IPC.arbiterUpdate, s))
     if (listOk) summaries?.forget(new Set(snapshot.sessions.map(s => s.sessionId)))
+    // Notifications from earlier runs for sessions no longer listed are closed, once (gate pass 63, M-2).
+    if (listOk) {
+      const listedIds = new Set(snapshot.sessions.map(s => s.sessionId))
+      notifications.closeGone(id => listedIds.has(clearConfirm.pendingTo(id) ?? currentIdOf(id) ?? id))
+    }
     if (listOk) waits?.forget(new Set(snapshot.sessions.map(s => s.sessionId)))
     const blocked = snapshot.sessions.filter(blockedOnAlex).map(s => s.sessionId)
     for (const id of blocked) void waits?.wanted(id)
